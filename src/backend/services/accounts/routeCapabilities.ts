@@ -50,6 +50,7 @@ export const ROUTE_CAPABILITIES = Object.freeze({
   '/api/diagnostics/report': 'workspace',
   '/api/edit-locks': 'workspace', // "Anna is editing" notes on shared items (#575)
   '/api/encryption/secure': 'workspace',
+  '/api/encryption/system-key': 'admin', // the recovery key opens every workspace of the installation
   '/api/env': 'workspace',
   '/api/factory-observatory': 'admin', // installation-wide FACTORY connection
   '/api/flow': 'workspace',

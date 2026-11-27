@@ -29,6 +29,11 @@ import { useI18n } from '@/frontend/contexts/I18nContext';
 import CredentialMigrationRecovery from './CredentialMigrationRecovery';
 import { getSelectedWorkspace, withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import type { TranslationKey } from '@/frontend/i18n';
+import { parseSystemKeyStatus, STORE_NAME_KEYS, type SystemKeyStatus } from './Settings/SystemKeySettings';
+import { useInterval } from '@/frontend/hooks/timing';
+
+/** While the system key store does not answer, look again this often so the dialog closes once FLUJO got the key. */
+const SYSTEM_KEY_RECHECK_MS = 10_000;
 
 export default function EncryptionAuthDialog() {
   const { verifyKey } = useStorage();
@@ -41,6 +46,7 @@ export default function EncryptionAuthDialog() {
   const [migrationPending, setMigrationPending] = useState(false);
   const [password, setPassword] = useState('');
   const [operatorUnavailable, setOperatorUnavailable] = useState(false);
+  const [systemKey, setSystemKey] = useState<SystemKeyStatus | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<TranslationKey | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -67,10 +73,13 @@ export default function EncryptionAuthDialog() {
           setIsAuthenticated(false); setIsOpen(true); setIsCheckingStatus(false); return;
         }
         if (typeof status.initialized !== 'boolean' || typeof status.locked !== 'boolean'
-            || !['uninitialized', 'legacy-default', 'passphrase', 'operator-file'].includes(status.protection)) {
+            || !['uninitialized', 'legacy-default', 'passphrase', 'operator-file', 'os-store'].includes(status.protection)) {
           throw new Error('Encryption status unavailable');
         }
         setMigrationPending(false); setError(null);
+        setSystemKey(status.protection === 'os-store' && status.locked ? parseSystemKeyStatus(status.systemKey) ?? {
+          available: null, keptIn: null, recoveryKeySaved: false, problem: null,
+        } : null);
         const initialized = status.initialized;
         setOperatorUnavailable(false);
         log.debug(`Encryption initialized: ${initialized}`);
@@ -183,6 +192,9 @@ export default function EncryptionAuthDialog() {
     }
   };
 
+  useInterval(() => { if (!verifyBusy.current) void checkEncryptionStatus(); },
+    systemKey && isOpen && !isAuthenticated ? SYSTEM_KEY_RECHECK_MS : null);
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
       handleVerify();
@@ -216,15 +228,18 @@ export default function EncryptionAuthDialog() {
         )}
         
         {operatorUnavailable && <Alert severity="error">{t('encryption.operator.unavailable')}</Alert>}
+        {systemKey?.problem && <Alert severity="warning" sx={{ mb: 2 }}>{systemKey.problem}</Alert>}
         <Typography variant="body1" sx={{ marginBottom: '16px' }}>
-          {t('encryption.unlock.description')}
+          {systemKey
+            ? t('encryption.systemKey.description', { store: t(STORE_NAME_KEYS[systemKey.keptIn ?? systemKey.available ?? 'windows']) })
+            : t('encryption.unlock.description')}
         </Typography>
         
         <TextField
           autoFocus
           disabled={operatorUnavailable}
           fullWidth
-          label={t('encryption.unlock.password')}
+          label={t(systemKey ? 'encryption.systemKey.label' : 'encryption.unlock.password')}
           variant="outlined"
           type={showPassword ? 'text' : 'password'}
           value={password}

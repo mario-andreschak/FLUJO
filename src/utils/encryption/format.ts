@@ -20,8 +20,15 @@ export interface EncryptionMetadata {
   key_id?: string;
   kdf?: string;
   kdf_iterations?: number;
-  key_protection?: 'passphrase' | 'operator-file';
+  key_protection?: KeyProtection;
 }
+/**
+ * How a private (`user`) keyring is wrapped: a password the owner types, a
+ * secret file an operator mounts, or the system key that FLUJO keeps in the
+ * operating system's protected store (#1443).
+ */
+export type KeyProtection = 'passphrase' | 'operator-file' | 'os-store';
+export const KEY_PROTECTIONS: readonly KeyProtection[] = ['passphrase', 'operator-file', 'os-store'];
 
 function hex(value: unknown, bytes: number): value is string {
   return typeof value === 'string' && new RegExp(`^[a-f0-9]{${bytes * 2}}$`).test(value);
@@ -112,7 +119,7 @@ export async function unwrapKeyring(metadata: EncryptionMetadata, password: stri
       || metadata.kdf_iterations !== KDF_ITERATIONS || !hex(metadata.data_encryption_salt, 16)
       || !hex(metadata.key_id, 32) || !['default', 'user'].includes(metadata.encryption_type ?? '')
       || (metadata.key_protection !== undefined && (metadata.encryption_type !== 'user'
-        || !['passphrase', 'operator-file'].includes(metadata.key_protection)))) {
+        || !KEY_PROTECTIONS.includes(metadata.key_protection)))) {
     throw new Error('Unsupported encryption metadata');
   }
   const wrappingKey = await derive(password, Buffer.from(metadata.data_encryption_salt, 'hex'), KDF_ITERATIONS, 32, 'sha256');

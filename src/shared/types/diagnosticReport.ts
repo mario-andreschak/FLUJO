@@ -29,7 +29,7 @@ export const DIAGNOSTIC_LABELS = {
   os: ['windows', 'macos', 'linux'],
   arch: ['x64', 'arm64', 'ia32', 'arm'],
   networkAccess: ['localhost', 'network', 'public'],
-  credentialProtection: ['passphrase', 'operator-file', 'default-password', 'not-set-up', 'migration-pending'],
+  credentialProtection: ['passphrase', 'operator-file', 'system-key', 'default-password', 'not-set-up', 'migration-pending'],
   provider: Object.keys(PROVIDER_INFO),
   transport: ['stdio', 'sse', 'streamable', 'websocket'],
   appState: [

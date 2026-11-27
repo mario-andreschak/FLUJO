@@ -15,6 +15,7 @@ import {
 } from '@mui/material';
 import { Visibility, VisibilityOff, LockOutlined, LockOpenOutlined } from '@mui/icons-material';
 import CredentialMigrationSettings from './CredentialMigrationSettings';
+import SystemKeySettings, { parseSystemKeyStatus, STORE_NAME_KEYS, type SystemKeyStatus } from './SystemKeySettings';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 
@@ -38,7 +39,11 @@ export default function EncryptionSettings() {
   const [isInitialized, setIsInitialized] = useState(false);
   const [isUserEncryption, setIsUserEncryption] = useState(false);
   const [isOperatorEncryption, setIsOperatorEncryption] = useState(false);
+  const [protection, setProtection] = useState('uninitialized');
+  const [locked, setLocked] = useState(false);
+  const [systemKey, setSystemKey] = useState<SystemKeyStatus | null>(null);
   const [statusReady, setStatusReady] = useState(false);
+  const isSystemKey = protection === 'os-store';
   const [isLoading, setIsLoading] = useState(false);
 
   // After setting or changing the custom password the encryption state changes
@@ -58,12 +63,15 @@ export default function EncryptionSettings() {
         if (!response.ok) throw new Error('Encryption status unavailable');
         const status = await response.json();
         if (typeof status.initialized !== 'boolean'
-            || !['uninitialized', 'legacy-default', 'passphrase', 'operator-file'].includes(status.protection)) {
+            || !['uninitialized', 'legacy-default', 'passphrase', 'operator-file', 'os-store'].includes(status.protection)) {
           throw new Error('Encryption status unavailable');
         }
         setIsInitialized(status.initialized);
         setIsUserEncryption(status.protection === 'passphrase');
         setIsOperatorEncryption(status.protection === 'operator-file');
+        setProtection(status.protection);
+        setLocked(status.locked === true);
+        setSystemKey(parseSystemKeyStatus(status.systemKey));
         setStatusReady(true);
       } catch { setMessage({ type: 'error', text: t('encryption.unlock.error') }); }
     };
@@ -192,10 +200,12 @@ export default function EncryptionSettings() {
       <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
         <Typography variant="body1" sx={{ mr: 2 }}>{t('settings.encryption.status')}</Typography>
         {isInitialized ? (
-          isUserEncryption || isOperatorEncryption ? (
+          isUserEncryption || isOperatorEncryption || isSystemKey ? (
             <Chip 
               icon={<LockOutlined />} 
-              label={t(isOperatorEncryption ? 'settings.encryption.statusOperator' : 'settings.encryption.statusCustom')}
+              label={isSystemKey
+                ? t('settings.systemKey.status', { store: t(STORE_NAME_KEYS[systemKey?.keptIn ?? systemKey?.available ?? 'windows']) })
+                : t(isOperatorEncryption ? 'settings.encryption.statusOperator' : 'settings.encryption.statusCustom')}
               color="success" 
               variant="outlined" 
             />
@@ -216,7 +226,10 @@ export default function EncryptionSettings() {
         )}
       </Box>
 
+      {statusReady && <SystemKeySettings protection={protection} locked={locked} status={systemKey} />}
+
       {!statusReady ? null : isOperatorEncryption ? <Alert severity="info">{t('settings.encryption.operatorHelp')}</Alert>
+        : isSystemKey ? null
         : isInitialized && !isUserEncryption ? <Alert severity="warning">{t('settings.encryption.migrationRequired')}</Alert>
         : !isInitialized || !isUserEncryption ? (
         <Paper elevation={2} sx={{ p: 3, mb: 4 }}>
@@ -342,7 +355,7 @@ export default function EncryptionSettings() {
       ) : null}
       
       {/* Security information */}
-      <Box sx={{ mt: 4 }}>
+      {!isSystemKey && <Box sx={{ mt: 4 }}>
         <Alert severity={isUserEncryption ? "warning" : "info"}>
           <Typography variant="subtitle2" sx={{ fontWeight: "bold" }}>
             {t(isUserEncryption ? 'settings.encryption.securityTitle' : 'settings.encryption.defaultTitle')}
@@ -361,7 +374,7 @@ export default function EncryptionSettings() {
             </Typography>
           )}
         </Alert>
-      </Box>
+      </Box>}
       {statusReady && isInitialized && <CredentialMigrationSettings />}
     </Box>
   );

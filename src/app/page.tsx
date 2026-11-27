@@ -137,29 +137,20 @@ export default function HomePage() {
   useEffect(() => {
     const checkEncryptionStatus = async () => {
       try {
-        const initResponse = await fetch('/api/encryption/secure', {
+        const response = await fetch('/api/encryption/secure', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'check_initialized' }),
+          body: JSON.stringify({ action: 'status' }),
         });
-        if (!initResponse.ok) {
+        if (!response.ok) {
           setEncryptionKeySet(false);
           return;
         }
-        const initData = await initResponse.json();
-        const initialized = initData.initialized === true;
-        setEncryptionKeySet(initialized);
-        if (!initialized) return;
-
-        const userResponse = await fetch('/api/encryption/secure', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'check_user_encryption' }),
-        });
-        if (userResponse.ok) {
-          const userData = await userResponse.json();
-          setIsUserEncryption(userData.userEncryption === true);
-        }
+        const status = await response.json();
+        // A fresh install on a computer with a protected key store is protected by the system key on first save (#1443).
+        const systemKeyAhead = status.protection === 'uninitialized' && Boolean(status.systemKey?.available);
+        setEncryptionKeySet(status.initialized === true || systemKeyAhead);
+        setIsUserEncryption(systemKeyAhead || ['passphrase', 'operator-file', 'os-store'].includes(status.protection));
       } catch (error) {
         log.error('Error checking encryption status', error);
         setEncryptionKeySet(false);

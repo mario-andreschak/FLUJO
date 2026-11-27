@@ -14,7 +14,7 @@ import { WORKER_SNAPSHOT_FORMAT_VERSION } from './workerCompatibility';
 import { addFolderToZipLinkSafe, assertLinkFreeFileParent } from './backupRestoreFs';
 import { buildWorkspaceMcpTransferPlan, pinWorkspaceMcpTransferPlan, selectWorkspaceFlowDependencies, type WorkspaceMcpTransferPlan } from '@/backend/services/packages/workspaceMcpTransfer';
 import { isCredentialMigrationPending } from '@/utils/encryption/credentialMigrationState';
-import { getOperatorWorkerBootstrapKey } from '@/utils/encryption/secure';
+import { getOperatorWorkerBootstrapKey, getSystemKeyWorkerBootstrapKey } from '@/utils/encryption/secure';
 import type { EncryptionMetadata } from '@/utils/encryption/format';
 import { CODEX_AUTH_SOURCE_FILE, WORKSPACE_CODEX_AUTH_SOURCE, readCodexAuthForTransfer } from '@/backend/services/model/adapters/codexAuth';
 import { CREDENTIAL_TRANSFER_STORES, transformCredentialValues } from './credentialTransfer';
@@ -451,7 +451,9 @@ export async function captureWorkspaceSnapshot(
       try {
         workspaceDek = encryptionMetadata.key_protection === 'operator-file'
           ? await runWithWorkspace(workspace, () => getOperatorWorkerBootstrapKey(encryptionMetadata))
-          : getServerDek();
+          : encryptionMetadata.key_protection === 'os-store'
+            ? await runWithWorkspace(workspace, () => getSystemKeyWorkerBootstrapKey(encryptionMetadata))
+            : getServerDek();
       } catch {
         throw new SnapshotArchiveError('CREDENTIALS_UNAVAILABLE', 'Restore the matching independent operator secret before creating a worker snapshot.');
       }

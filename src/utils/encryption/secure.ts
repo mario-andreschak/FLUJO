@@ -8,10 +8,15 @@ import { createLogger } from '@/utils/logger';
 import { createSession, getDekFromSession, invalidateSession, unlockServer, getServerDek, isServerLocked,
   recordWorkerTransferProvenance, getWorkerTransferProvenance } from './session';
 import {
-  DEFAULT_PASSWORD, decryptLegacy, keyId, metadataRevision, newKeyring, open, parseSessionKey, seal,
+  DEFAULT_PASSWORD, KEY_PROTECTIONS, decryptLegacy, keyId, metadataRevision, newKeyring, open, parseSessionKey, seal,
   serializeKeyring, unwrapKeyring, unwrapLegacyKey, wrapKeyring,
   type EncryptionMetadata, type EncryptionType, type Keyring,
 } from './format';
+import {
+  adoptSystemSecret, backupKeyFileBeforeMove, getSystemKeyStatus, getSystemSecret, normalizeRecoveryKey,
+  SystemKeyError, systemKeyRetryAt,
+} from './systemKey';
+import { detectSystemKeyStore } from './systemKeyStore';
 import { assertCredentialMigrationReady, isCredentialMigrationPending } from './credentialMigrationState';
 import { withWorkspaceMutation } from '@/backend/services/workspace/workspaceMutationGate';
 import { readOperatorSecret } from './operatorSecret';
@@ -76,17 +81,26 @@ async function readMetadata(): Promise<EncryptionMetadata | null> {
     throw new Error('Invalid encryption type');
   }
   if (metadata.key_protection !== undefined && (metadata.encryption_type !== 'user'
-      || !['passphrase', 'operator-file'].includes(metadata.key_protection))) throw new Error('Invalid key protection');
+      || !KEY_PROTECTIONS.includes(metadata.key_protection))) throw new Error('Invalid key protection');
   return metadata;
+}
+
+function metadataFilePath(): string {
+  return path.join(getWorkspaceDataDir(), 'db', `${StorageKey.ENCRYPTION_KEY}.json`);
 }
 
 async function persist(ring: Keyring, type: EncryptionType, password: string,
   protection?: EncryptionMetadata['key_protection'], fresh = false): Promise<EncryptionMetadata> {
   invalidateOperatorKeyring();
   await assertCredentialMigrationReady();
-  const metadata = await wrapKeyring(ring, type, password, protection);
+  return commitMetadata(await wrapKeyring(ring, type, password, protection), ring, fresh);
+}
+
+async function commitMetadata(metadata: EncryptionMetadata, ring: Keyring, fresh = false): Promise<EncryptionMetadata> {
+  invalidateOperatorKeyring();
+  await assertCredentialMigrationReady();
   if (fresh) {
-    const final = path.join(getWorkspaceDataDir(), 'db', `${StorageKey.ENCRYPTION_KEY}.json`);
+    const final = metadataFilePath();
     const staged = `${final}.initial.${randomUUID()}`;
     try {
       await writeFileAtomic(staged, JSON.stringify(metadata));
@@ -134,9 +148,141 @@ async function metadataOrInitialize(): Promise<EncryptionMetadata> {
   }
   const secret = await readOperatorSecret();
   // A custom password is optional. Explicit operator provisioning still fails
-  // closed in readOperatorSecret; ordinary local use keeps default encryption.
-  return secret ? persist(newKeyring(), 'user', secret, 'operator-file', true)
+  // closed in readOperatorSecret. Ordinary local use gets the system key when
+  // this computer offers a protected store (#1443), else default encryption.
+  if (secret) return persist(newKeyring(), 'user', secret, 'operator-file', true);
+  const system = await systemSecretForNewKey();
+  return system ? persist(newKeyring(), 'user', system, 'os-store', true)
     : persist(newKeyring(), 'default', DEFAULT_PASSWORD, undefined, true);
+}
+
+/** The system key may wrap new or default keys only where nobody else manages keys. */
+function systemKeyAllowed(): boolean {
+  return !isWorkerMode() && process.env.FLUJO_ENCRYPTION_SECRET_FILE === undefined;
+}
+
+async function systemSecretForNewKey(): Promise<string | null> {
+  if (!systemKeyAllowed()) return null;
+  try { return await getSystemSecret({ create: true }); }
+  catch (error) {
+    log.warn(`Using basic protection for now: ${error instanceof Error ? error.message : 'the system key store did not answer'}`);
+    return null;
+  }
+}
+
+function lockedBySystemKey(error: unknown): EncryptionLockedError {
+  return new EncryptionLockedError(error instanceof SystemKeyError ? error.message
+    : 'FLUJO could not reach the system key store. It keeps trying on its own. You can also unlock with your recovery key.');
+}
+
+function serverRingFor(metadata: EncryptionMetadata): Keyring | null {
+  const serialized = getServerDek();
+  if (!serialized) return null;
+  try {
+    const ring = parseSessionKey(serialized);
+    return 'activeKey' in ring && ring.metadataRevision === metadataRevision(metadata) && keyId(ring) === metadata.key_id
+      ? ring : null;
+  } catch { return null; }
+}
+
+/**
+ * Opens a workspace whose key is wrapped by the system key: from the unlocked
+ * server state, else with the system key, which then unlocks the server. Runs
+ * under the metadata lock.
+ */
+async function systemKeyring(metadata: EncryptionMetadata): Promise<Keyring> {
+  const unlocked = serverRingFor(metadata);
+  if (unlocked) return unlocked;
+  if (isWorkerMode()) throw new EncryptionLockedError('Worker workspace encryption is locked. Unlock this workspace before running jobs.');
+  let secret: string | null;
+  try { secret = await getSystemSecret(); }
+  catch (error) { throw lockedBySystemKey(error); }
+  if (!secret) throw lockedBySystemKey(new SystemKeyError('missing', null));
+  let ring: Keyring;
+  try { ring = await unwrapKeyring(metadata, secret); }
+  catch {
+    throw new EncryptionLockedError('This workspace was protected by another FLUJO system key, for example on another computer. '
+      + "Unlock it once with that recovery key; FLUJO then protects it with this computer's key.");
+  }
+  unlockServer(serializeKeyring(ring, metadataRevision(metadata)));
+  return ring;
+}
+
+declare global {
+  var __flujo_system_key_moves: Map<string, number> | undefined;
+}
+const MOVE_RETRY_MS = 60_000;
+
+/**
+ * Moves a default-protected workspace key under the system key (#1443). The
+ * data key itself stays the same, so every stored secret, worker snapshot and
+ * task payload stays readable. A sealed copy of the old key file is written
+ * first; the new file replaces the old one in a single atomic step and is
+ * opened before it is written. Runs under the metadata lock.
+ */
+async function moveToSystemKey(metadata: EncryptionMetadata): Promise<EncryptionMetadata | null> {
+  if (!systemKeyAllowed() || metadata.encryption_type === 'user' || await isCredentialMigrationPending()) return null;
+  const moves = global.__flujo_system_key_moves ??= new Map();
+  const workspaceKey = workspaceCacheKey('system-key-move');
+  if ((moves.get(workspaceKey) ?? 0) > Date.now() || !(await detectSystemKeyStore())) return null;
+  let secret: string | null;
+  try { secret = await getSystemSecret({ create: true }); }
+  catch { return null; }
+  if (!secret) return null;
+  try {
+    const ring = await unwrapAndUpgrade(metadata, DEFAULT_PASSWORD);
+    const current = await readMetadata();
+    if (!current || current.encryption_type === 'user') return null;
+    const candidate = await wrapKeyring(ring, 'user', secret, 'os-store');
+    if (keyId(await unwrapKeyring(candidate, secret)) !== keyId(ring)) throw new Error('The new key file did not open');
+    await backupKeyFileBeforeMove(getCurrentWorkspace(), await fs.readFile(metadataFilePath()), secret);
+    await commitMetadata(candidate, ring);
+    const committed = await readMetadata();
+    if (!committed || metadataRevision(committed) !== metadataRevision(candidate)) return null;
+    unlockServer(serializeKeyring(ring, metadataRevision(committed)));
+    moves.delete(workspaceKey);
+    log.info(`Saved credentials of workspace "${getCurrentWorkspace()}" are now protected by the system key`);
+    return committed;
+  } catch (error) {
+    moves.set(workspaceKey, Date.now() + MOVE_RETRY_MS);
+    log.warn(`Could not move workspace "${getCurrentWorkspace()}" to the system key yet; trying again later`, error);
+    return null;
+  }
+}
+
+/**
+ * Lock checks run on every request, so this returns at once while a move is
+ * not possible or waits for its next try, and asks the store for the system
+ * key before taking the metadata lock: a slow store never holds up requests.
+ */
+async function tryMoveToSystemKey(): Promise<boolean> {
+  if (!systemKeyAllowed() || !(await detectSystemKeyStore())) return false;
+  const now = Date.now();
+  if ((global.__flujo_system_key_moves?.get(workspaceCacheKey('system-key-move')) ?? 0) > now
+      || (systemKeyRetryAt() ?? 0) > now) return false;
+  if (!(await getSystemSecret({ create: true }).catch(() => null))) return false;
+  return withMetadataLock(async () => {
+    const current = await readMetadata();
+    return current !== null && current.encryption_type !== 'user' && (await moveToSystemKey(current)) !== null;
+  }).catch(() => false);
+}
+
+/** A recovery key opened this workspace: put it back into the system store, or re-protect the workspace with this computer's key. */
+async function unlockWithRecoveryKey(metadata: EncryptionMetadata, input: string): Promise<{ valid: boolean; token?: string }> {
+  const secret = normalizeRecoveryKey(input);
+  const ring = await unwrapKeyring(metadata, secret);
+  let committed = metadata;
+  const adopted = isWorkerMode() ? 'memory-only' : await adoptSystemSecret(secret).catch(() => 'memory-only' as const);
+  if (adopted === 'different') {
+    const own = await getSystemSecret().catch(() => null);
+    if (own) {
+      await commitMetadata(await wrapKeyring(ring, 'user', own, 'os-store'), ring);
+      committed = (await readMetadata()) ?? metadata;
+    }
+  }
+  const serialized = serializeKeyring(ring, metadataRevision(committed));
+  unlockServer(serialized);
+  return { valid: true, token: createSession(serialized) };
 }
 
 /** Upgrade metadata only; keep v1 ciphertext decryptable without a bulk rewrite. */
@@ -183,7 +329,10 @@ export async function changeEncryptionPassword(oldPassword: string, newPassword:
     return await withMetadataLock(async () => {
       const metadata = await readMetadata();
       if (!metadata) return false;
-      if (metadata.encryption_version === 2 && metadata.encryption_type !== 'user') throw new CredentialMigrationRequiredError();
+      // A system key may wrap a key that was once publicly wrapped; a password goes through the migration that can replace it.
+      if ((metadata.encryption_version === 2 && metadata.encryption_type !== 'user') || metadata.key_protection === 'os-store') {
+        throw new CredentialMigrationRequiredError();
+      }
       const password = metadata.key_protection === 'operator-file' ? await readOperatorSecret()
         : metadata.encryption_type === 'user' ? oldPassword : DEFAULT_PASSWORD;
       if (!password) return false;
@@ -224,8 +373,7 @@ export async function unlockValidatedWorkerTransfer(serializedKey: string, conte
         || (metadata.key_protection === 'operator-file' && metadata.encryption_version !== 2)
         || (metadata.encryption_version === 2 && (!('activeKey' in ring) || keyId(ring) !== metadata.key_id
           || (ring.metadataRevision !== undefined && ring.metadataRevision !== metadataRevision(metadata))
-          || ((metadata.key_protection === 'operator-file' || metadata.key_protection === 'passphrase')
-            && ring.metadataRevision === undefined)))
+          || (metadata.key_protection !== undefined && ring.metadataRevision === undefined)))
         || (metadata.encryption_version === 1 && !('legacyKey' in ring))) {
       throw new EncryptionLockedError('Worker transfer does not match encryption metadata');
     }
@@ -264,7 +412,14 @@ async function getKeys(passwordOrToken?: string, isToken = false, allowInitializ
       return verifiedOperatorKeyring(metadata, readMetadata);
     }
     invalidateOperatorKeyring();
-    if (metadata.encryption_type !== 'user') return unwrapAndUpgrade(metadata, DEFAULT_PASSWORD);
+    if (metadata.key_protection === 'os-store') {
+      if (passwordOrToken && !isToken) return unwrapKeyring(metadata, normalizeRecoveryKey(passwordOrToken));
+      return systemKeyring(metadata);
+    }
+    if (metadata.encryption_type !== 'user') {
+      const moved = await moveToSystemKey(metadata);
+      return moved ? systemKeyring(moved) : unwrapAndUpgrade(metadata, DEFAULT_PASSWORD);
+    }
     // An explicit password is verified even if the process is already unlocked.
     if (passwordOrToken && !isToken) return unwrapAndUpgrade(metadata, passwordOrToken);
     const serialized = isToken && passwordOrToken ? getDekFromSession(passwordOrToken) : getServerDek();
@@ -322,6 +477,7 @@ export async function verifyPassword(password: string): Promise<{ valid: boolean
     return await withMetadataLock(async () => {
       const metadata = await readMetadata();
       if (!metadata || metadata.encryption_type !== 'user' || metadata.key_protection === 'operator-file') return { valid: false };
+      if (metadata.key_protection === 'os-store') return await unlockWithRecoveryKey(metadata, password);
       const ring = await unwrapAndUpgrade(metadata, password);
       const committed = await readMetadata();
       if (!committed || committed.key_id !== keyId(ring)) return { valid: false };
@@ -367,7 +523,27 @@ export async function getOperatorWorkerBootstrapKey(capturedMetadata: Encryption
   });
 }
 
+/** Snapshot capture for a workspace protected by the system key: the keyring, bound to the captured metadata. */
+export async function getSystemKeyWorkerBootstrapKey(capturedMetadata: EncryptionMetadata): Promise<string> {
+  return withMetadataLock(async () => {
+    await assertCredentialMigrationReady();
+    const metadata = await readMetadata();
+    if (!metadata || metadata.key_protection !== 'os-store'
+        || metadataRevision(metadata) !== metadataRevision(capturedMetadata)) {
+      throw new EncryptionLockedError('Worker snapshot encryption metadata changed');
+    }
+    return serializeKeyring(await systemKeyring(metadata), metadataRevision(metadata));
+  });
+}
+
+/** The owner types a password to unlock (not a system key or an operator file). */
 export async function isUserEncryptionEnabled(): Promise<boolean> {
+  const metadata = await readMetadata();
+  return metadata?.encryption_type === 'user' && (metadata.key_protection ?? 'passphrase') === 'passphrase';
+}
+
+/** Credentials can stay locked until a password, a recovery key or the system key opens them. */
+export async function hasUnlockStep(): Promise<boolean> {
   const metadata = await readMetadata();
   return metadata?.encryption_type === 'user' && metadata.key_protection !== 'operator-file';
 }
@@ -383,6 +559,20 @@ async function encryptionLockState(): Promise<boolean> {
     // Without key metadata there is nothing to unlock. Only a worker that already
     // holds secrets it cannot read stays locked; see describeWorkerEncryptionLock.
     return isWorkerMode() && (await findStoredCiphertext()) !== null;
+  }
+  if (metadata.encryption_type !== 'user' && await tryMoveToSystemKey()) metadata = await readMetadata() ?? metadata;
+  if (metadata.key_protection === 'os-store') {
+    invalidateOperatorKeyring();
+    if (serverRingFor(metadata)) return false;
+    if (isWorkerMode()) return true;
+    if (!(await getSystemSecret().catch(() => null))) return true;
+    try {
+      await withMetadataLock(async () => {
+        const current = await readMetadata();
+        if (current?.key_protection === 'os-store') await systemKeyring(current);
+      });
+      return false;
+    } catch { return true; }
   }
   const cached = getServerDek();
   if (cached) {
@@ -424,7 +614,18 @@ export async function getEncryptionStatus() {
   if (await isCredentialMigrationPending()) return { initialized: true, locked: true, protection: 'migration-pending' };
   const locked = await isEncryptionLocked();
   const metadata = await readMetadata();
-  return { initialized: metadata !== null, locked, protection: !metadata
+  const protection = !metadata
     ? process.env.FLUJO_ENCRYPTION_SECRET_FILE !== undefined ? 'operator-file' : 'uninitialized'
-    : metadata.key_protection ?? (metadata.encryption_type === 'user' ? 'passphrase' : 'legacy-default') };
+    : metadata.key_protection ?? (metadata.encryption_type === 'user' ? 'passphrase' : 'legacy-default');
+  const systemKey = await systemKeyStatusFor(protection, locked);
+  return { initialized: metadata !== null, locked, protection, ...(systemKey ? { systemKey } : {}) };
+}
+
+/** What Settings and the unlock dialog say about the system key, in plain words; nothing where it plays no part. */
+async function systemKeyStatusFor(protection: string, locked: boolean) {
+  const status = await getSystemKeyStatus().catch(() => null);
+  if (!status || (!status.available && !status.keptIn && protection !== 'os-store')) return null;
+  const problem = protection === 'os-store' && locked
+    ? await getSystemSecret().then(() => null, error => lockedBySystemKey(error).message) : null;
+  return { ...status, problem, retryAt: problem ? systemKeyRetryAt() : null };
 }

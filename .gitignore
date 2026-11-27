@@ -204,6 +204,8 @@ memory-experiment-results.json
 /mcp-servers/browser/outputs/
 /mcp-servers/browser/*-evidence-*/
 /workspaces
+/accounts
+/keys
 .tmp-sandbox-harness/sandbox.html
 
 # Persona endurance test artifacts

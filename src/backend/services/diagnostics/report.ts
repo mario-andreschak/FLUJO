@@ -28,6 +28,7 @@ const OS: Readonly<Record<string, string>> = { win32: 'windows', darwin: 'macos'
 const PROTECTION: Readonly<Record<string, string>> = {
   passphrase: 'passphrase',
   'operator-file': 'operator-file',
+  'os-store': 'system-key',
   'legacy-default': 'default-password',
   uninitialized: 'not-set-up',
   'migration-pending': 'migration-pending',

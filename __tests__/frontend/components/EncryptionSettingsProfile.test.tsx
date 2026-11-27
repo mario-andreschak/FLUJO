@@ -46,3 +46,57 @@ test('private password changes remain available alongside optional retirement mi
   expect(screen.getByText('settings.migration.title')).toBeInTheDocument();
   expect(screen.queryByText('settings.encryption.migrationRequired')).not.toBeInTheDocument();
 });
+
+describe('system key protection (#1443)', () => {
+  const systemKey = { available: 'windows', keptIn: 'windows', recoveryKeySaved: false, problem: null, retryAt: null };
+  function serve(status: Record<string, unknown>) {
+    const calls: Array<{ url: string; body: unknown }> = [];
+    global.fetch = jest.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
+      calls.push({ url: String(url), body });
+      if (String(url).includes('/api/encryption/system-key')) {
+        return { ok: true, json: async () => body.action === 'reveal' ? { recoveryKey: 'RECOVERY-key_0123456789abcdefghijklmnopqrstuvwx' } : { saved: true } };
+      }
+      return { ok: true, json: async () => status };
+    });
+    return calls;
+  }
+
+  test('shows the protection, the recovery key and remembers that it was saved; no public-password warning', async () => {
+    const calls = serve({ initialized: true, locked: false, protection: 'os-store', systemKey });
+    render(<EncryptionSettings />);
+    expect(await screen.findByText('settings.systemKey.status')).toBeInTheDocument();
+    expect(screen.getByText('settings.systemKey.help')).toBeInTheDocument();
+    expect(screen.getByText('settings.systemKey.recoveryNotSaved')).toBeInTheDocument();
+    expect(screen.queryByText('settings.encryption.migrationRequired')).not.toBeInTheDocument();
+    expect(screen.queryByText('settings.encryption.default1', { exact: false })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('settings.encryption.newPassword')).not.toBeInTheDocument();
+    expect(screen.getByText('settings.migration.title')).toBeInTheDocument();
+
+    screen.getByRole('button', { name: 'settings.systemKey.show' }).click();
+    expect(await screen.findByDisplayValue('RECOVERY-key_0123456789abcdefghijklmnopqrstuvwx')).toBeInTheDocument();
+    expect(calls.find(call => call.url.includes('/api/encryption/system-key'))?.body).toEqual({ action: 'reveal' });
+
+    screen.getByRole('button', { name: 'settings.systemKey.markSaved' }).click();
+    expect(await screen.findByText('settings.systemKey.recoverySaved')).toBeInTheDocument();
+    expect(screen.queryByDisplayValue('RECOVERY-key_0123456789abcdefghijklmnopqrstuvwx')).not.toBeInTheDocument();
+  });
+
+  test('explains plainly when the store does not answer, without offering the recovery key panel', async () => {
+    serve({ initialized: true, locked: true, protection: 'os-store',
+      systemKey: { ...systemKey, problem: 'Windows did not hand over FLUJO\'s key just now.' } });
+    render(<EncryptionSettings />);
+    expect(await screen.findByText(/settings.systemKey.locked/)).toHaveTextContent('Windows did not hand over FLUJO\'s key just now.');
+    expect(screen.queryByRole('button', { name: 'settings.systemKey.show' })).not.toBeInTheDocument();
+  });
+
+  test('says the move is automatic while a default workspace waits for it, and warns where no store exists', async () => {
+    serve({ initialized: true, locked: false, protection: 'legacy-default', systemKey: { ...systemKey, keptIn: null } });
+    const { unmount } = render(<EncryptionSettings />);
+    expect(await screen.findByText('settings.systemKey.movePending')).toBeInTheDocument();
+    unmount();
+    serve({ initialized: true, locked: false, protection: 'legacy-default' });
+    render(<EncryptionSettings />);
+    expect(await screen.findByText('settings.systemKey.unavailableHere')).toBeInTheDocument();
+  });
+});
