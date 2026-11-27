@@ -289,7 +289,7 @@ The detailed instructions remain available for each setup:
 
 ### Network exposure
 
-The default installation is for one trusted operator on localhost, without a sign-in screen or separate user accounts. **Settings → Network access** controls exposure, not authentication. Deliberate LAN or public exposure needs appropriate authenticating controls; public/shared hosting acceptance remains open. Workspace selection does not provide user isolation.
+The default installation is for one trusted operator on localhost, without a sign-in screen. To require a password, also for a FLUJO only you use, turn on sign-in in **Settings → Users and sign-in**; no environment variables are needed. Saved keys (API keys, tokens) are protected by the computer's own key store (Windows data protection, the macOS Keychain or the Linux keyring) where one is available; **Settings → Encryption** shows the protection and the recovery key. **Settings → Network access** controls exposure, not authentication. Deliberate LAN or public exposure needs appropriate authenticating controls; public/shared hosting acceptance remains open. Workspace selection does not provide user isolation.
 
 ![Network access settings](docs/images/readme/settings.png)
 

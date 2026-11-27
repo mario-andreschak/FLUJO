@@ -30,7 +30,8 @@ const startEnabledServersMock = jest.fn();
 const refreshSpotlightMock = jest.fn();
 const schedulerStartMock = jest.fn();
 const isEncryptionLockedMock = jest.fn();
-const isUserEncryptionEnabledMock = jest.fn();
+const hasUnlockStepMock = jest.fn();
+const getEncryptionStatusMock = jest.fn();
 const describeWorkerEncryptionLockMock = jest.fn();
 const ensureDefaultFlujoAgentMock = jest.fn();
 const listPersonasMock = jest.fn();
@@ -111,7 +112,8 @@ jest.mock('@/backend/services/scheduler', () => ({
 }));
 jest.mock('@/utils/encryption/secure', () => ({
   isEncryptionLocked: (...a: unknown[]) => isEncryptionLockedMock(...a),
-  isUserEncryptionEnabled: (...a: unknown[]) => isUserEncryptionEnabledMock(...a),
+  hasUnlockStep: (...a: unknown[]) => hasUnlockStepMock(...a),
+  getEncryptionStatus: (...a: unknown[]) => getEncryptionStatusMock(...a),
   describeWorkerEncryptionLock: (...a: unknown[]) => describeWorkerEncryptionLockMock(...a),
 }));
 jest.mock('@/backend/services/flow/defaultAgent', () => ({
@@ -165,7 +167,8 @@ describe('backend init startup gating (#78)', () => {
     refreshSpotlightMock.mockResolvedValue(undefined);
     schedulerStartMock.mockResolvedValue(undefined);
     isEncryptionLockedMock.mockResolvedValue(false);
-    isUserEncryptionEnabledMock.mockResolvedValue(false);
+    hasUnlockStepMock.mockResolvedValue(false);
+    getEncryptionStatusMock.mockResolvedValue({ protection: 'passphrase' });
     delete process.env.FLUJO_WORKER_MODE;
     global.__flujo_worker_bootstrap_status = undefined;
     restoreWorkerSnapshotMock.mockResolvedValue({ workspace: 'default-workspace', codexAuth: 'none', encryption: 'default',
@@ -256,9 +259,43 @@ describe('backend init startup gating (#78)', () => {
     expect(startPersonaGoalRuntimeMock).not.toHaveBeenCalled();
   });
 
+  it('locked by the system key: retries in the background and starts the deferred services once it opens (#1443)', async () => {
+    isEncryptionLockedMock.mockResolvedValue(true);
+    hasUnlockStepMock.mockResolvedValue(true);
+    getEncryptionStatusMock.mockResolvedValue({ protection: 'os-store' });
+    const realSetTimeout = global.setTimeout;
+    const retries: Array<{ ms: number; run: () => void }> = [];
+    jest.spyOn(global, 'setTimeout').mockImplementation(((callback: () => void, ms?: number) => {
+      if (ms !== undefined && ms >= 5_000) {
+        retries.push({ ms, run: callback });
+        return { unref: () => undefined } as unknown as ReturnType<typeof setTimeout>;
+      }
+      return realSetTimeout(callback, ms);
+    }) as typeof setTimeout);
+    const settle = async (done: () => boolean) => {
+      for (let i = 0; i < 100 && !done(); i++) await new Promise(resolve => realSetTimeout(resolve, 5));
+    };
+
+    await ensureBackendInitialized();
+    expect(startEnabledServersMock).not.toHaveBeenCalled();
+    await settle(() => retries.length === 1);
+    expect(retries.map(retry => retry.ms)).toEqual([5_000]);
+
+    retries[0].run();
+    await settle(() => retries.length === 2);
+    expect(retries[1].ms).toBe(10_000);
+    expect(startEnabledServersMock).not.toHaveBeenCalled();
+
+    isEncryptionLockedMock.mockResolvedValue(false);
+    retries[1].run();
+    await settle(() => startEnabledServersMock.mock.calls.length > 0);
+    expect(startEnabledServersMock).toHaveBeenCalledTimes(1);
+    expect(retries).toHaveLength(2);
+  });
+
   it('the init response joins deferred services after a completed locked boot and an unlock', async () => {
     isEncryptionLockedMock.mockResolvedValue(true);
-    isUserEncryptionEnabledMock.mockResolvedValue(true);
+    hasUnlockStepMock.mockResolvedValue(true);
     await ensureBackendInitialized();
     expect(startEnabledServersMock).not.toHaveBeenCalled();
 
@@ -290,7 +327,7 @@ describe('backend init startup gating (#78)', () => {
 
   it('the init response propagates deferred startup failure after a completed locked boot', async () => {
     isEncryptionLockedMock.mockResolvedValue(true);
-    isUserEncryptionEnabledMock.mockResolvedValue(true);
+    hasUnlockStepMock.mockResolvedValue(true);
     await ensureBackendInitialized();
     isEncryptionLockedMock.mockResolvedValue(false);
     migrateInternalMcpServersMock.mockRejectedValue(new Error('synthetic shipped-service startup failure'));
@@ -302,7 +339,7 @@ describe('backend init startup gating (#78)', () => {
 
   it('the init route retains the locked boot path without starting secret-dependent effects', async () => {
     isEncryptionLockedMock.mockResolvedValue(true);
-    isUserEncryptionEnabledMock.mockResolvedValue(true);
+    hasUnlockStepMock.mockResolvedValue(true);
     const response = await initializeRoute(new NextRequest('http://localhost/api/init'));
     expect(response.status).toBe(200);
     expect(migrateInternalMcpServersMock).not.toHaveBeenCalled();
@@ -312,7 +349,7 @@ describe('backend init startup gating (#78)', () => {
 
   it('onUnlocked starts services once and re-kicks durable Persona work on later unlocks', async () => {
     isEncryptionLockedMock.mockResolvedValue(true);
-    isUserEncryptionEnabledMock.mockResolvedValue(true);
+    hasUnlockStepMock.mockResolvedValue(true);
 
     await ensureBackendInitialized();
     expect(startEnabledServersMock).not.toHaveBeenCalled();
@@ -346,7 +383,7 @@ describe('backend init startup gating (#78)', () => {
   });
 
   it('onUnlocked in DEFAULT mode is a no-op (boot already started everything)', async () => {
-    // isUserEncryptionEnabled=false → DEFAULT mode.
+    // hasUnlockStep=false → DEFAULT mode.
     await onUnlocked();
 
     expect(startEnabledServersMock).not.toHaveBeenCalled();
@@ -357,7 +394,7 @@ describe('backend init startup gating (#78)', () => {
 
   it('a later ensureBackendInitialized after unlock does not re-start the services', async () => {
     isEncryptionLockedMock.mockResolvedValue(true);
-    isUserEncryptionEnabledMock.mockResolvedValue(true);
+    hasUnlockStepMock.mockResolvedValue(true);
 
     await ensureBackendInitialized(); // deferred (locked)
     await onUnlocked(); // starts once
@@ -395,7 +432,7 @@ describe('backend init startup gating (#78)', () => {
     expect(migrateEnduringAgentDirectoryShardsMock).not.toHaveBeenCalled();
     expect(migrateInternalMcpServersMock).not.toHaveBeenCalled();
     expect(getWorkerBootstrapStatus().state).toBe('ready');
-    isUserEncryptionEnabledMock.mockResolvedValue(true);
+    hasUnlockStepMock.mockResolvedValue(true);
     await onUnlocked();
     expect(startPersonaFlowDispatcherMock).not.toHaveBeenCalled();
     expect(reconcilePersonaSchedulerProjectionsMock).not.toHaveBeenCalled();

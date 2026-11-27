@@ -11,6 +11,7 @@ import { DEFAULT_PASSWORD, KDF_ITERATIONS, decryptLegacy, newKeyring, open, seal
 import { MAX_TRANSFER_BYTES, openRecipientTransfer, sealRecipientTransfer } from '@/utils/encryption/recipientTransfer';
 import { encodeOAuthValue, OAUTH_CREDENTIAL_FORMAT, readSourceOAuthValue } from '@/utils/encryption/oauthCredentialEnvelope';
 import { readOperatorSecret } from '@/utils/encryption/operatorSecret';
+import { getSystemSecret, normalizeRecoveryKey } from '@/utils/encryption/systemKey';
 import { lockServer } from '@/utils/encryption/session';
 import { CREDENTIAL_TRANSFER_STORES, transformCredentialValues, validateCredentialRecord } from './credentialTransfer';
 import { assertLinkFreeFileParent, atomicWriteWithoutLinks } from './backupRestoreFs';
@@ -86,8 +87,11 @@ async function prepare(options: CredentialMigrationOptions, planSalt = randomByt
       metadata = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(metadataBytes));
       if (!metadata || ![1, 2].includes(metadata.encryption_version)
           || (metadata.encryption_type !== undefined && !['default', 'user'].includes(metadata.encryption_type))) throw new Error();
+      // A key wrapped by the system key opens with it, or with its recovery key typed as the current password.
       const sourcePassword = metadata.key_protection === 'operator-file' ? await readOperatorSecret()
-        : metadata.encryption_type === 'user' ? options.sourcePassphrase : DEFAULT_PASSWORD;
+        : metadata.key_protection === 'os-store'
+          ? options.sourcePassphrase ? normalizeRecoveryKey(options.sourcePassphrase) : await getSystemSecret().catch(() => null)
+          : metadata.encryption_type === 'user' ? options.sourcePassphrase : DEFAULT_PASSWORD;
       if (!sourcePassword) throw new Error();
       publiclyWrapped = sourcePassword === DEFAULT_PASSWORD;
       ring = metadata.encryption_version === 2 ? await unwrapKeyring(metadata, sourcePassword)

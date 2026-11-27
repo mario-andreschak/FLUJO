@@ -24,6 +24,11 @@ jest.setTimeout(15_000);
 // suite opts back in explicitly.
 process.env.FLUJO_WRITER_LEASE_IDLE_MS = '0';
 
+// Tests never use this computer's real key store (Windows data protection,
+// macOS Keychain, Linux keyring). Suites that test the system key install a
+// fake store with setSystemKeyStoreForTests.
+process.env.FLUJO_SYSTEM_KEY_STORE = 'off';
+
 // Workspace route wrappers now await the real layout barrier. Give every Jest
 // environment an isolated installation root before test modules are evaluated,
 // so an unmocked route can never migrate or write the checkout's real data.

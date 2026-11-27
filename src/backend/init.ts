@@ -7,7 +7,7 @@ import { snapshotStore } from '@/backend/services/snapshot/SnapshotStore';
 import { reconcileOrphanedTasks, sweepOldSubflowTasks } from '@/backend/services/subflowTasks';
 import { refreshSpotlightServers } from '@/backend/services/spotlight';
 import { getSchedulerService } from '@/backend/services/scheduler';
-import { describeWorkerEncryptionLock, isEncryptionLocked, isUserEncryptionEnabled } from '@/utils/encryption/secure';
+import { describeWorkerEncryptionLock, getEncryptionStatus, hasUnlockStep, isEncryptionLocked } from '@/utils/encryption/secure';
 import { createLogger } from '@/utils/logger';
 import { ensureDefaultFlujoAgent } from '@/backend/services/flow/defaultAgent';
 import {
@@ -475,6 +475,7 @@ async function runInitialization(): Promise<void> {
     log.info(
       'Encryption locked — deferring MCP/scheduler startup until unlock'
     );
+    if (!isWorkerMode()) await retrySystemKeyUnlockLater(getCurrentWorkspace());
     return;
   }
 
@@ -624,7 +625,7 @@ async function startWorkerRuntime(): Promise<void> {
  * everything.
  */
 export async function onUnlocked(): Promise<void> {
-  if (!(await isUserEncryptionEnabled())) {
+  if (!(await hasUnlockStep())) {
     // DEFAULT mode: secret-dependent services started at boot already.
     return;
   }
@@ -649,4 +650,33 @@ export async function onUnlocked(): Promise<void> {
   await getSchedulerService().reconcilePersonaSchedulerProjections(false).catch(error => {
     log.error('Failed to reconcile Persona scheduler projections after unlock:', error);
   });
+}
+
+const SYSTEM_KEY_RETRY_FIRST_MS = 5_000;
+const SYSTEM_KEY_RETRY_MAX_MS = 5 * 60_000;
+
+/**
+ * The system key store (#1443) did not answer at start. Try again with growing
+ * pauses (5 s up to 5 minutes) and start the deferred services as soon as the
+ * workspace opens, so a slow or briefly locked store never needs a restart.
+ * Stops when the workspace is open (also through a recovery key) or no longer
+ * protected by the system key.
+ */
+async function retrySystemKeyUnlockLater(workspace: string, attempt = 1): Promise<void> {
+  if ((await getEncryptionStatus()).protection !== 'os-store') return;
+  const pause = Math.min(SYSTEM_KEY_RETRY_MAX_MS, SYSTEM_KEY_RETRY_FIRST_MS * 2 ** (attempt - 1));
+  const timer = setTimeout(() => {
+    runWithWorkspace(workspace, async () => {
+      if (await isEncryptionLocked()) {
+        await retrySystemKeyUnlockLater(workspace, attempt + 1);
+        return;
+      }
+      log.info(`The system key opened workspace ${workspace}; starting deferred MCP/scheduler startup`);
+      await onUnlocked();
+    }).catch(error => {
+      log.warn('Trying the system key again failed; trying later', error);
+      void runWithWorkspace(workspace, () => retrySystemKeyUnlockLater(workspace, attempt + 1)).catch(() => undefined);
+    });
+  }, pause);
+  timer.unref?.();
 }

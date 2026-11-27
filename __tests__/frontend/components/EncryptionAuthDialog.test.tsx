@@ -202,3 +202,15 @@ test('recovery teardown aborts and discards the late result from the previous wo
   await waitFor(() => expect(screen.getByRole('button', { name: 'encryption.recovery.resume' })).toBeDisabled());
   expect(settled).not.toHaveBeenCalled();
 });
+
+test('a workspace locked by the system key asks for the recovery key and says why (#1443)', async () => {
+  mockFetch.mockResolvedValue(response({ initialized: true, locked: true, protection: 'os-store',
+    systemKey: { available: 'windows', keptIn: 'windows', recoveryKeySaved: true, problem: 'Windows no longer has FLUJO\'s key.', retryAt: null } }));
+  render(<EncryptionAuthDialog />);
+  const field = await screen.findByLabelText('encryption.systemKey.label');
+  expect(screen.getByText('encryption.systemKey.description')).toBeInTheDocument();
+  expect(screen.getByText('Windows no longer has FLUJO\'s key.')).toBeInTheDocument();
+  fireEvent.change(field, { target: { value: 'the recovery key' } });
+  fireEvent.click(screen.getByRole('button', { name: 'encryption.unlock.action' }));
+  await waitFor(() => expect(mockVerify).toHaveBeenCalledWith('the recovery key'));
+});

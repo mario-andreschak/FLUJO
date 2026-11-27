@@ -10,6 +10,16 @@ The password wraps a versioned keyring using AES-256-GCM. PBKDF2-HMAC-SHA256 der
 
 **Default mode is storage obfuscation, not protection from someone who can read the workspace files.** It intentionally uses a published compatibility password so FLUJO works without asking for a password. Set a strong user password for meaningful protection of secrets at rest. Neither mode protects secrets from code already running as the same OS user while the workspace is unlocked.
 
+## System key (#1443)
+
+Where the computer offers a protected store, the keyring is wrapped by a system key instead of the public password: metadata `encryption_type: 'user'`, `key_protection: 'os-store'`. The system key is 32 random bytes kept by the operating system for this user account: Windows data protection (DPAPI, through the built-in Windows PowerShell), the macOS Keychain (`/usr/bin/security`) or the Linux Secret Service (`secret-tool`). No extra package or native build is involved. `<data>/keys/system-key.json` records where the key is kept and, on Windows, holds the copy that only this Windows user can open. One system key serves every workspace of a data folder. `FLUJO_SYSTEM_KEY_STORE=off` turns it off; worker hosts and installations with `FLUJO_ENCRYPTION_SECRET_FILE` never use it.
+
+- **Fresh install**: the first key is wrapped by the system key. Without a store, or when it does not answer, the default protection is used as before.
+- **Existing default-protected workspaces** move automatically on first use (status check, start, or first secret read). The data key stays the same, so every stored secret, task payload and worker snapshot stays readable. A copy of the old key file, sealed with the system key, is kept in `<data>/keys/before-system-key/`; the new key file is opened in memory before it replaces the old one in one atomic step. A crash before that step leaves the old file in place and the move runs again. A copy of the data folder taken before the move still carries the publicly wrapped key; to retire it, use credential migration with "Replace the active data key".
+- **Store problems**: a store that does not answer is tried again after a growing pause (2 s up to one minute; startup retries up to every 5 minutes and then starts the deferred services). Meanwhile the workspace is locked with a plain explanation. A key is never replaced once its record exists: a lost or unreadable key (password reset, data folder from another computer) asks for the recovery key.
+- **Recovery key**: the system key itself, shown in Settings → Encryption on the computer FLUJO runs on, to an admin when people sign in, and only while unlocked. Typed into the unlock dialog it opens the workspace and goes back into the store. A workspace restored from another FLUJO is re-protected with this computer's system key after its recovery key opens it once.
+- Setting a password on top goes through credential migration (it can replace the data key). Worker snapshots carry the keyring like password-protected workspaces do.
+
 ## Legacy data and upgrades
 
 Version 1 used an eight-random-byte key represented as hexadecimal text and unauthenticated AES-CBC. It remains readable for compatibility, with exactly its original effective key representation. Legacy ciphertext cannot gain authentication retroactively.
@@ -34,6 +44,8 @@ Upgrade worker hosts before transferring a migrated workspace. Older worker buil
 - `secure.ts`: workspace metadata lifecycle, atomic upgrade, password transitions and encryption/decryption API.
 - `session.ts`: workspace-scoped sessions and server unlock state.
 - `lockGate.ts`: HTTP 423 while a password-protected workspace is locked.
+- `systemKeyStore.ts` / `systemKey.ts`: the operating system stores, the per-data-folder record, retries and the recovery key.
+- `__tests__/encryption/systemKey.test.ts`: fresh install, automatic move, crash between backup and move, store down and back, lost key and recovery, restored workspaces, snapshot capture and the recovery-key route. `__tests__/encryption/systemKeyWindows.test.ts` runs against real Windows data protection with `FLUJO_TEST_REAL_SYSTEM_KEY=1`.
 - `__tests__/encryption/dekInvariant.test.ts`: real temp-directory crypto tests for legacy/new reads, upgrade interruption, backup/restore, restart, password changes, tamper rejection and concurrent initialization.
 - `__tests__/encryption/credentialFailure.test.ts`: failure-path tests ensuring model and registry saves preserve previous credentials.
 - `__tests__/encryption/envCredentialFailure.test.ts`: single and batch environment-variable writes preserve all old values when encryption or initialization fails.

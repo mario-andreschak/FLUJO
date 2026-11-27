@@ -9,10 +9,12 @@ Design and rules: [multi-user plan](../architecture/multi-user-plan.md) and
 
 ## Turn it on
 
-In FLUJO: **Settings → Users and sign-in**. Pick your sign-in name and a
-password of at least 15 characters (a few ordinary words in a row work well),
-then choose "Turn on sign-in for several people". You become the first admin,
-every existing workspace becomes yours, and this browser stays signed in.
+In FLUJO: **Settings → Users and sign-in**. Keep the suggested sign-in name
+"owner" or pick your own, choose a password of at least 15 characters (a few
+ordinary words in a row work well), then choose "Turn on sign-in". You become
+the first admin, every existing workspace becomes yours, and this browser stays
+signed in. This is also the way to protect a FLUJO that only you use: no
+environment variables or command-line tools are needed.
 
 On the server instead:
 

@@ -30,13 +30,14 @@ test('while multi-user mode is off it explains the option and turns it on with t
   const reloadPage = jest.fn();
   render(<UserAccountsSettings reloadPage={reloadPage} />);
 
-  expect(await screen.findByText(/Let several people use this FLUJO/)).toBeInTheDocument();
+  expect(await screen.findByText(/also if you are the only person using FLUJO/)).toBeInTheDocument();
+  expect(screen.getByLabelText('Your sign-in name')).toHaveValue('owner');
   expect(screen.getByText(/everyone must sign in to use FLUJO/)).toBeInTheDocument();
   fireEvent.change(screen.getByLabelText('Your sign-in name'), { target: { value: 'ada' } });
   fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'Ada' } });
   fireEvent.change(screen.getByLabelText('Password'), { target: { value: PASSWORD } });
   fireEvent.change(screen.getByLabelText('Repeat password'), { target: { value: PASSWORD } });
-  fireEvent.click(screen.getByRole('button', { name: 'Turn on sign-in for several people' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Turn on sign-in' }));
 
   await waitFor(() => expect(reloadPage).toHaveBeenCalledTimes(1));
   expect(turnOn).toHaveBeenCalledWith({ enabled: true, name: 'ada', displayName: 'Ada', password: PASSWORD });
@@ -49,11 +50,11 @@ test('does not send a password that is too short or not repeated the same', asyn
   fireEvent.change(await screen.findByLabelText('Your sign-in name'), { target: { value: 'ada' } });
   fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'short' } });
   fireEvent.change(screen.getByLabelText('Repeat password'), { target: { value: 'short' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Turn on sign-in for several people' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Turn on sign-in' }));
   expect(await screen.findByText('Use a password of at least 15 characters.')).toBeInTheDocument();
 
   fireEvent.change(screen.getByLabelText('Password'), { target: { value: PASSWORD } });
-  fireEvent.click(screen.getByRole('button', { name: 'Turn on sign-in for several people' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Turn on sign-in' }));
   expect(await screen.findByText('The two passwords are not the same.')).toBeInTheDocument();
   expect(fetchMock).toHaveBeenCalledTimes(1);
 });
@@ -68,7 +69,7 @@ test('shows the server message when turning it on is refused', async () => {
   fireEvent.change(await screen.findByLabelText('Your sign-in name'), { target: { value: 'Not Valid' } });
   fireEvent.change(screen.getByLabelText('Password'), { target: { value: PASSWORD } });
   fireEvent.change(screen.getByLabelText('Repeat password'), { target: { value: PASSWORD } });
-  fireEvent.click(screen.getByRole('button', { name: 'Turn on sign-in for several people' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Turn on sign-in' }));
   expect(await screen.findByText('Use a sign-in name of 1 to 64 lower-case letters.')).toBeInTheDocument();
   expect(reloadPage).not.toHaveBeenCalled();
 });

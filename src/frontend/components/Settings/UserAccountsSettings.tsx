@@ -277,7 +277,7 @@ function NoticeAlert({ notice }: { notice: Notice | null }) {
 
 function TurnOnForm({ reloadPage }: { reloadPage: () => void }) {
   const { busy, notice, setNotice, send } = useAccountRequest();
-  const [name, setName] = useState('');
+  const [name, setName] = useState('owner');
   const [displayName, setDisplayName] = useState('');
   const [password, setPassword] = useState('');
   const [repeat, setRepeat] = useState('');
@@ -304,8 +304,9 @@ function TurnOnForm({ reloadPage }: { reloadPage: () => void }) {
   return (
     <Stack spacing={2}>
       <Typography>
-        Let several people use this FLUJO, each with their own private workspaces. Everyone signs in with a name and
-        password. Admins can see everything.
+        Sign-in is off: anyone who can open FLUJO in a browser on this computer can use it. Turn on sign-in to require a
+        password, also if you are the only person using FLUJO. Later you can add more people, each with their own private
+        workspaces.
       </Typography>
       <Alert severity="warning">
         After you turn this on, everyone must sign in to use FLUJO, including you. All workspaces that exist now will
@@ -322,7 +323,7 @@ function TurnOnForm({ reloadPage }: { reloadPage: () => void }) {
         <TextField label="Repeat password" type="password" value={repeat} disabled={busy} autoComplete="new-password"
           onChange={event => setRepeat(event.target.value)} />
         <Box>
-          <Button type="submit" variant="contained" disabled={busy}>Turn on sign-in for several people</Button>
+          <Button type="submit" variant="contained" disabled={busy}>Turn on sign-in</Button>
         </Box>
       </Box>
       <NoticeAlert notice={notice} />

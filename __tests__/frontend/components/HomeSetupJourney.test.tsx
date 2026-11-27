@@ -88,8 +88,7 @@ describe('setup-first home journey', () => {
       writable: true,
       value: jest.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
         const payload = typeof init?.body === 'string' ? JSON.parse(init.body) : {};
-        if (payload.action === 'check_initialized') return okJson({ initialized: true }) as Response;
-        if (payload.action === 'check_user_encryption') return okJson({ userEncryption: true }) as Response;
+        if (payload.action === 'status') return okJson({ initialized: true, locked: false, protection: 'passphrase' }) as Response;
         return okJson({}) as Response;
       }),
     });
