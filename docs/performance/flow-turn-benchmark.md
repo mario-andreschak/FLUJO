@@ -65,6 +65,30 @@ Every mode/scenario pair gets a fresh server process. Run 1 is the cold turn
 (first turn after start); the report shows it, the last run and the median of
 runs 5 to the last.
 
+## Without a build
+
+`__tests__/chat/flowTurnInProcess.test.ts` runs the same flow and stubs inside
+Jest, through the real route, storage and locks. It needs no build, so it suits
+a quick before/after check of a change. In the normal test run it only checks
+that the three kinds of turn answer. To measure, set both variables before Jest
+starts and keep both files outside the checkout:
+
+```bash
+FLUJO_TURN_TRACE_FILE=<trace.jsonl> FLUJO_TURN_BENCH_OUT=<after.json> \
+  node scripts/run-local-jest.cjs __tests__/chat/flowTurnInProcess.test.ts --runInBand
+node scripts/flow-turn-benchmark.mjs --compare <before.json> <after.json>
+```
+
+After 8 warm-up turns (`FLUJO_TURN_BENCH_WARMUP`) it runs 12 turns
+(`FLUJO_TURN_BENCH_RUNS`) each of a streamed answer, a streamed tool turn and a
+continued non-streamed conversation. With warm-up turns all runs are warm, so
+ignore the cold columns. With `FLUJO_TURN_BENCH_WARMUP=0`, run 1 of the
+streamed answer is the first turn after FLUJO loaded; Jest loads modules more
+slowly than a built server, so that cold turn is only a rough guide. Its times
+are not the shipped server's (no owner sign-in, Jest instead of the Next.js
+build, stubs in the same process): compare its results only with each other.
+On a busy machine, run each side a few times, taking turns.
+
 ## What the columns mean
 
 | step | meaning |
@@ -77,6 +101,7 @@ runs 5 to the last.
 | `tool_roundtrip` | model finished asking for a tool until FLUJO asked the model again |
 | `after_model` | model finished until the response (or stream) ended |
 | `flujo_own` | `total` minus the stubs' own time |
+| `cpu_ms` | in-process benchmark only: processor time Jest used for the turn, stubs and the saves after the reply included; steadier than the times above when other programs keep the machine busy |
 
 ## Step timers inside FLUJO
 
@@ -85,7 +110,6 @@ When the server starts with `FLUJO_TURN_TRACE_FILE=<file>`, each
 (see `src/backend/execution/flow/turnTrace.ts`). The benchmark sets it and adds
 the spans to its report as `trace: <name>`. Spans can nest, so they do not add
 up. Without the variable the timers call straight through and cost nothing.
-</content>
 
 With `--claude`, the marks `claude.query` (FLUJO asks for Claude Code),
 `claude.claimed` (a parked process took the request), `claude.init`,
