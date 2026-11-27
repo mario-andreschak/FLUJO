@@ -15,8 +15,11 @@
     },
     {
       "file": "src/backend/execution/flow/handlers/ModelHandler.ts",
-      "maxLines": 5279,
-      "modules": []
+      "maxLines": 3955,
+      "modules": [
+        "src/backend/execution/flow/handlers/toolCallProcessing.ts",
+        "src/backend/execution/flow/handlers/modelMedia.ts"
+      ]
     },
     {
       "file": "src/backend/services/mcp/index.ts",
