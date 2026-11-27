@@ -10,7 +10,7 @@ import type { Model } from '@/shared/types/model';
 import { StorageKey } from '@/shared/types/storage';
 import { loadServerConfigs, saveConfig } from '@/backend/services/mcp/config';
 import { installBundledFixtureOwner } from '../mcp/fixtures/bundledFixtureOwner';
-import { trustedHostMcpApproval } from '@/backend/services/security/trustedHostMcp';
+import { trustedHostMcpApprovalAsync } from '@/backend/services/security/trustedHostMcp';
 import { executionApprovalFailure } from '@/backend/services/mcp/executionApproval';
 
 let mockWorkspace = '';
@@ -390,7 +390,7 @@ it('lets a fresh bundled server wait for owner approval with a clear reason', as
     const stored = mockPreparedConfigs.get(name);
     try {
       if (stored?.transport !== 'stdio') throw new Error('not a stdio server');
-      trustedHostMcpApproval(stored);
+      await trustedHostMcpApprovalAsync(stored);
       return { success: true };
     } catch (error) { return executionApprovalFailure(error) ?? { success: false }; }
   });
