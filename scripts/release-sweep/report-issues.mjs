@@ -18,7 +18,7 @@ Nothing is filed unless --file is given.
   --repo OWNER/NAME   Repository (default: $GITHUB_REPOSITORY, else the current gh repository).
   --run-url URL       Link to the sweep's files (the CI run), shown in each issue.
   --max-new N         New issues per run (default ${DEFAULT_MAX_NEW}); the rest wait for the next run.
-  --offline           Dry run without reading open issues.
+  --offline           Dry run without reading the existing sweep issues.
   --out FILE          Where to write the plan (default: issues-plan.md next to the report).
 
 Exit code 0 when the plan was made (and filed with --file), 2 when it could not be.`;
@@ -31,8 +31,10 @@ export function runGh(args, input) {
   return result.stdout;
 }
 
-export function readOpenIssues(repo, gh = runGh) {
-  const output = gh(['issue', 'list', '--repo', repo, '--label', SWEEP_LABEL, '--state', 'open', '--limit', '1000', '--json', 'number,title,body,comments']);
+/** Open and closed sweep issues: open ones get "seen again", closed-as-not-planned ones stay quiet. */
+export function readSweepIssues(repo, gh = runGh) {
+  const output = gh(['issue', 'list', '--repo', repo, '--label', SWEEP_LABEL, '--state', 'all', '--limit', '1000',
+    '--json', 'number,state,stateReason,title,body,comments']);
   return JSON.parse(output || '[]');
 }
 
@@ -68,21 +70,21 @@ export async function main(argv = process.argv.slice(2), { log = console.log, gh
   const dryRun = options.file !== true;
   const maxNew = options['max-new'] === undefined ? DEFAULT_MAX_NEW : Number(options['max-new']);
   if (!Number.isInteger(maxNew) || maxNew < 0) throw new Error('--max-new must be a whole number.');
-  if (!dryRun && options.offline) throw new Error('--offline only works for a dry run: filing needs the open issues to avoid duplicates.');
+  if (!dryRun && options.offline) throw new Error('--offline only works for a dry run: filing needs the existing issues to avoid duplicates.');
   let repo = typeof options.repo === 'string' ? options.repo : env.GITHUB_REPOSITORY;
 
   const problems = problemsFromReport(report);
-  let openIssues = [];
+  let knownIssues = [];
   if (!options.offline && problems.length) {
     try {
       repo ??= JSON.parse(gh(['repo', 'view', '--json', 'nameWithOwner'])).nameWithOwner;
-      openIssues = readOpenIssues(repo, gh);
+      knownIssues = readSweepIssues(repo, gh);
     } catch (error) {
       if (!dryRun) throw error;
-      log(`! Could not read open issues (${error.message.split('\n')[0]}); planning as if none were open.`);
+      log(`! Could not read the sweep's issues (${error.message.split('\n')[0]}); planning as if there were none.`);
     }
   }
-  const actions = planIssues(problems, openIssues, {
+  const actions = planIssues(problems, knownIssues, {
     version: report.target?.version, repo, runUrl: typeof options['run-url'] === 'string' ? options['run-url'] : undefined, maxNew,
   });
   const plan = renderPlan(actions, { dryRun });

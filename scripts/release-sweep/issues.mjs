@@ -48,9 +48,10 @@ function stepBlock(check, repo) {
 }
 
 /** Title, body and labels for a new issue. Everything in it comes from the report, nothing else. */
-export function renderIssue(problem, { version, repo, runUrl } = {}) {
+export function renderIssue(problem, { version, repo, runUrl, cameBackAfter } = {}) {
   const release = version ? `FLUJO ${version}` : 'this FLUJO build';
   const parts = [];
+  if (cameBackAfter) parts.push(`This came back after #${cameBackAfter} was closed as done.`);
   if (problem.kind === 'broken') {
     parts.push(`The release sweep could not test ${release}: it stopped before it walked the feature map.`, `- **Reason:** ${code(problem.error)}`,
       'If FLUJO itself would not install or start, that is the bug. If the sweep machine failed (network, browser), run the sweep again.');
@@ -87,28 +88,37 @@ export function renderComment(problem, { version, runUrl } = {}) {
 }
 
 /**
- * What to do for each problem, given the open issues that carry the sweep label.
+ * What to do for each problem, given the issues (open and closed) that carry the sweep label.
+ * An issue closed as not planned silences its problem until someone reopens it.
  * @param {object[]} problems from problemsFromReport
- * @param {{ number: number, body?: string, comments?: { body?: string }[] }[]} openIssues
+ * @param {{ number: number, state?: string, stateReason?: string, body?: string, comments?: { body?: string }[] }[]} knownIssues
  */
-export function planIssues(problems, openIssues, { version, repo, runUrl, maxNew = DEFAULT_MAX_NEW } = {}) {
-  const byFingerprint = new Map();
-  for (const issue of openIssues) {
-    for (const found of fingerprintsIn(issue.body)) if (!byFingerprint.has(found)) byFingerprint.set(found, issue);
+export function planIssues(problems, knownIssues, { version, repo, runUrl, maxNew = DEFAULT_MAX_NEW } = {}) {
+  const openByFingerprint = new Map();
+  const closedByFingerprint = new Map();
+  for (const issue of knownIssues) {
+    const open = (issue.state ?? 'OPEN') === 'OPEN';
+    for (const found of fingerprintsIn(issue.body)) {
+      if (open && !openByFingerprint.has(found)) openByFingerprint.set(found, issue);
+      if (!open && !(closedByFingerprint.get(found)?.number > issue.number)) closedByFingerprint.set(found, issue);
+    }
   }
   const ordered = [...problems].sort((left, right) => KIND_ORDER.indexOf(left.kind) - KIND_ORDER.indexOf(right.kind));
   const actions = [];
   let created = 0;
   for (const problem of ordered) {
-    const issue = byFingerprint.get(problem.fingerprint);
+    const issue = openByFingerprint.get(problem.fingerprint);
+    const closed = closedByFingerprint.get(problem.fingerprint);
     if (issue) {
       const texts = [issue.body, ...(issue.comments ?? []).map((comment) => comment.body)];
       if (version && texts.some((text) => String(text ?? '').includes(seenMarker(version)))) {
         actions.push({ type: 'skip', number: issue.number, problem, reason: `already noted for ${version}` });
       } else actions.push({ type: 'comment', number: issue.number, problem, body: renderComment(problem, { version, runUrl }) });
+    } else if (closed?.stateReason === 'NOT_PLANNED') {
+      actions.push({ type: 'skip', number: closed.number, problem, reason: `closed as not planned in #${closed.number}; reopen it to hear about this again` });
     } else if (created < maxNew) {
       created += 1;
-      actions.push({ type: 'create', problem, issue: renderIssue(problem, { version, repo, runUrl }) });
+      actions.push({ type: 'create', problem, issue: renderIssue(problem, { version, repo, runUrl, cameBackAfter: closed?.number }) });
     } else {
       actions.push({ type: 'defer', problem, reason: `more than ${maxNew} new problems in one run; the next run files it` });
     }

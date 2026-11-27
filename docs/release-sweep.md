@@ -64,11 +64,14 @@ This plans one GitHub issue per distinct problem, prints the plan and writes
   failure in the next release has the same fingerprint.
 - An open issue with that fingerprint gets one "seen again" comment per
   release, never two.
+- An issue closed as "not planned" keeps its problem quiet until someone
+  reopens it. A problem that comes back after its issue was closed as done is
+  filed again, with a link to the old issue.
 - A browser error seen on many pages is one issue. If FLUJO stops answering
   during the sweep, that is one issue and the remaining checks are "not run".
 - At most 10 new issues per run (`--max-new`); the next run files the rest.
-- When filing, it stops if it cannot read the open issues, so it never files
-  duplicates.
+- When filing, it stops if it cannot read the existing sweep issues, so it
+  never files duplicates.
 - Issues get the labels `release-sweep` and `classification: BUG`. Each one
   says that either FLUJO broke or the feature map step is out of date, and
   shows the step, the error, the start of the accessibility snapshot and where

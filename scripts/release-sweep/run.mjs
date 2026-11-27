@@ -17,6 +17,7 @@ import { loadPlan, slug } from './steps.mjs';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SANDBOX_PREFIX = 'flujo-sweep-';
 const RESERVED_PORT = '4200';
+const INSTALL_ATTEMPTS = 3;
 export const EXIT = Object.freeze({ passed: 0, problems: 1, broken: 2 });
 
 export const USAGE = `Usage: node scripts/release-sweep/run.mjs [target] [options]
@@ -134,12 +135,19 @@ async function installRelease(version, sandbox, env, log) {
   writeFileSync(path.join(consumer, 'package.json'), '{"private":true}\n');
   const emptyConfig = path.join(sandbox, 'empty.npmrc');
   writeFileSync(emptyConfig, '');
-  log(`Installing flujo-ai@${version} from npm into ${consumer}`);
-  const code = await runToEnd([npmCli(), 'install', `flujo-ai@${version}`, '--ignore-scripts', '--no-audit', '--no-fund',
-    '--registry=https://registry.npmjs.org', `--userconfig=${emptyConfig}`, `--globalconfig=${emptyConfig}`], {
-    cwd: consumer, env: { ...env, npm_config_cache: path.join(sandbox, 'npm-cache') }, timeoutMs: 900_000, logFile: path.join(sandbox, 'install.log'),
-  });
-  if (code !== 0) throw new Error(`npm install flujo-ai@${version} failed (exit ${code}):\n${tail(path.join(sandbox, 'install.log'))}`);
+  const installLog = path.join(sandbox, 'install.log');
+  // A version published a minute ago may not be on every registry mirror yet, and networks drop; try a few times.
+  let code;
+  for (let attempt = 1; attempt <= INSTALL_ATTEMPTS; attempt += 1) {
+    log(`Installing flujo-ai@${version} from npm into ${consumer}${attempt > 1 ? ` (try ${attempt} of ${INSTALL_ATTEMPTS})` : ''}`);
+    code = await runToEnd([npmCli(), 'install', `flujo-ai@${version}`, '--ignore-scripts', '--no-audit', '--no-fund',
+      '--registry=https://registry.npmjs.org', `--userconfig=${emptyConfig}`, `--globalconfig=${emptyConfig}`], {
+      cwd: consumer, env: { ...env, npm_config_cache: path.join(sandbox, 'npm-cache') }, timeoutMs: 900_000, logFile: installLog,
+    });
+    if (code === 0) break;
+    if (attempt < INSTALL_ATTEMPTS) await new Promise((resolve) => { setTimeout(resolve, 30_000 * attempt); });
+  }
+  if (code !== 0) throw new Error(`npm install flujo-ai@${version} failed ${INSTALL_ATTEMPTS} times (exit ${code}):\n${tail(installLog)}`);
   const appRoot = path.join(consumer, 'node_modules', 'flujo-ai');
   const manifest = JSON.parse(readFileSync(path.join(appRoot, 'package.json'), 'utf8'));
   if (manifest.version !== version) throw new Error(`npm installed flujo-ai ${manifest.version}, not ${version}.`);

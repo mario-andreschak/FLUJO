@@ -101,6 +101,19 @@ test('dedup: a new problem is filed once, an open one gets one comment per relea
   assert.deepEqual(planIssues(problems, openIssues, { version: '3.48.11' }).map((action) => action.type), ['skip', 'create']);
 });
 
+test('a problem closed as not planned stays quiet; one closed as done that comes back is filed again with a link', () => {
+  const problems = problemsFromReport(report([failedCheck(), failedCheck({ id: 'settings/other', label: 'Other' })]));
+  const [quiet, back] = problems;
+  const plan = planIssues(problems, [
+    { number: 3, state: 'CLOSED', stateReason: 'NOT_PLANNED', body: fingerprintMarker(quiet.fingerprint) },
+    { number: 4, state: 'CLOSED', stateReason: 'COMPLETED', body: fingerprintMarker(back.fingerprint) },
+    { number: 2, state: 'CLOSED', stateReason: 'NOT_PLANNED', body: fingerprintMarker(back.fingerprint) },
+  ], { version: '3.48.11' });
+  assert.deepEqual(plan.map((action) => [action.type, action.number]), [['skip', 3], ['create', undefined]]);
+  assert.match(plan[0].reason, /not planned in #3; reopen it/);
+  assert.match(plan[1].issue.body, /^This came back after #4 was closed as done\./);
+});
+
 test('a run with many new problems files up to the cap and leaves the rest for the next run', () => {
   const problems = problemsFromReport(report([1, 2, 3].map((n) => failedCheck({ id: `settings/check-${n}`, label: `Check ${n}` }))));
   const plan = planIssues(problems, [], { version: '3.48.11', maxNew: 2 });
@@ -149,7 +162,7 @@ test('filing stops when the open issues cannot be read, so it never files duplic
     await assert.rejects(main(['--report', file, '--repo', 'owner/repo', '--file'], { log: () => {}, gh, env: {} }), /HTTP 502/);
     const lines = [];
     assert.equal(await main(['--report', file, '--repo', 'owner/repo'], { log: (line) => lines.push(line), gh, env: {} }), 0);
-    assert.match(lines.join('\n'), /Could not read open issues/);
+    assert.match(lines.join('\n'), /Could not read the sweep's issues/);
   } finally {
     rmSync(folder, { recursive: true, force: true });
   }
