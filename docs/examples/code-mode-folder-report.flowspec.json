@@ -1,0 +1,29 @@
+{
+  "name": "Folder report (code mode)",
+  "description": "Example for code mode and deferred tool descriptions (#1448). The step reads every file in a folder inside one program and returns a short summary, so the file contents never fill the model's context. Pick your own AI model for the step before you run it.",
+  "nodes": [
+    {
+      "key": "start",
+      "type": "start",
+      "prompt": "You help people understand what is in a folder on this computer."
+    },
+    {
+      "key": "report",
+      "type": "process",
+      "label": "Folder report",
+      "model": "<your model>",
+      "prompt": "When the user names a folder, write ONE program with run_tool_script: list the folder with tools.filesystem.list_dir, read each text file with tools.filesystem.read_file, and return for each file its name, its number of lines and its first heading. Read the inputs of a tool with search_tools first if you need them. Then answer with a short table and one sentence about the folder.",
+      "servers": [{ "name": "filesystem" }],
+      "toolLoading": "on-demand",
+      "codeMode": "on"
+    },
+    {
+      "key": "finish",
+      "type": "finish"
+    }
+  ],
+  "edges": [
+    { "from": "start", "to": "report" },
+    { "from": "report", "to": "finish" }
+  ]
+}

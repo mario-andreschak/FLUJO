@@ -88,6 +88,10 @@ export interface ModelCallInput {
   onApprovalRequired?: 'auto' | 'fail' | 'pause';
   /** A sub-flow's approval card shows in this conversation (the one the person views). */
   approvalConversationId?: string;
+  /** #1448: the step's deferred-tool and code-mode catalog, for in-loop executors. */
+  toolCatalog?: import('../toolLoading/toolLoadingExecutors').StepToolCatalog;
+  /** #1448: records deferred tools the model loaded, for the next turn. */
+  markToolsLoaded?: (names: readonly string[]) => void;
   /** Issue #239: bound MCP node references for native resource tools. Forwarded to
    *  localToolExecutors so self-orchestrating adapters can execute list_mcp_resources
    *  and native-URI read_resource in-loop. */
@@ -213,6 +217,18 @@ export interface ToolCallProcessingInput {
     executionExtensionContext?: import('@/backend/execution/extensions').ExecutionExtensionContext;
   personaAttribution?: PersonaAttribution;
   beforeToolDispatch?: () => Promise<void>;
+  /** #1448: the step's deferred-tool and code-mode catalog (rebuilt when missing). */
+  toolCatalog?: import('../toolLoading/toolLoadingExecutors').StepToolCatalog;
+  /** #1448: records deferred tools the model loaded, for the next turn. */
+  markToolsLoaded?: (names: readonly string[]) => void;
+  /**
+   * #1448: the run's Require Tool Approval setting and headless policy. Tools
+   * that a program or `call_tool` runs ask the one approval gate live with
+   * these, since such a call cannot pause the run.
+   */
+  requireToolApproval?: boolean;
+  onApprovalRequired?: 'auto' | 'fail' | 'pause';
+  approvalConversationId?: string;
 }
 
 // Tool call processing result

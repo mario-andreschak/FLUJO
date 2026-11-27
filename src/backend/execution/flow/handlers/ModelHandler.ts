@@ -117,6 +117,7 @@ import { resolveToolResultBound } from '@/shared/toolResultLimit';
 import { isRunResourceToolName, executeRunResourceTool, nativeRunResourceResult, buildReadResourceTool, WRITE_RESOURCE_TOOL_NAME, READ_RESOURCE_TOOL_NAME } from './runResourceTools';
 import { isQuestionToolName, executeQuestionTool, QUESTION_TOOL_NAME } from './runQuestionTool';
 import { isTodoToolName, executeTodoTool, TODO_TOOL_NAME } from './todoTool';
+import { executeToolLoadingTool, isToolLoadingToolName, toolLoadingResultValue } from '../toolLoading/toolLoadingExecutors';
 import { isPersonaToolName, executePersonaTool } from './personaTools';
 import {
   executeMeetingTool,
@@ -1643,8 +1644,12 @@ export class ModelHandler {
           .map((t) => t.function.name)
       : [];
     const hasBehaviorTool = behaviorToolCallNames.length > 0;
+    // #1448: search_tools, call_tool and run_tool_script run in-loop too.
+    const toolLoadingCallNames = (tools ?? [])
+      .filter((t) => t.type === 'function' && isToolLoadingToolName(t.function.name))
+      .map((t) => t.function.name);
     const localToolExecutors: Record<string, (args: Record<string, unknown>) => Promise<unknown>> | undefined =
-      (hasRunResourceTool || hasMCPResourceTool || hasQuestionTool || hasTodoTool || hasPersonaTool || hasMeetingTool || hasSubflowTool || hasBehaviorTool || hasDetachedSubflowTool || communicationToolNames.length > 0)
+      (hasRunResourceTool || hasMCPResourceTool || hasQuestionTool || hasTodoTool || hasPersonaTool || hasMeetingTool || hasSubflowTool || hasBehaviorTool || hasDetachedSubflowTool || communicationToolNames.length > 0 || toolLoadingCallNames.length > 0)
         ? {
             [WRITE_RESOURCE_TOOL_NAME]: async (args: Record<string, unknown>): Promise<unknown> => {
               const outcome = await executeRunResourceTool(WRITE_RESOURCE_TOOL_NAME, args, {
@@ -1780,6 +1785,30 @@ export class ModelHandler {
           const outcome = await executeMeetingTool(toolName, args, { conversationId });
           if (!outcome.success) throw new Error(outcome.error ?? `${toolName} failed`);
           return outcome.data;
+        };
+      }
+    }
+
+    if (localToolExecutors && toolLoadingCallNames.length > 0) {
+      for (const toolName of toolLoadingCallNames) {
+        localToolExecutors[toolName] = async (args: Record<string, unknown>): Promise<unknown> => {
+          const outcome = await executeToolLoadingTool(toolName, args, {
+            catalog: input.toolCatalog,
+            toolNameMap: toolNameMap ?? {},
+            mcpNodes,
+            markToolsLoaded: input.markToolsLoaded,
+            approve: requestToolApproval,
+            service: mcpService,
+            conversationId,
+            runId,
+            nodeId,
+            signal: input.signal ?? input.executionAuthority?.signal,
+            beforeToolDispatch: input.beforeToolDispatch,
+            authorizePersonaCoreMcp: input.executionAuthority?.authorizePersonaCoreMcp,
+            contextWindow: modelContextWindow,
+          });
+          if (!outcome.success) throw new Error(outcome.content);
+          return toolLoadingResultValue(outcome.content);
         };
       }
     }
@@ -4124,6 +4153,7 @@ export class ModelHandler {
         if (isRunResourceToolName(toolName)) return LOCAL_GROUP;
         if (isQuestionToolName(toolName)) return LOCAL_GROUP;
         if (isTodoToolName(toolName)) return LOCAL_GROUP;
+        if (isToolLoadingToolName(toolName)) return LOCAL_GROUP;
         if (isPersonaToolName(toolName)) return LOCAL_GROUP;
         if (isMeetingToolName(toolName)) return LOCAL_GROUP;
         if (isSubflowToolName(toolName)) return LOCAL_GROUP;
@@ -4131,6 +4161,15 @@ export class ModelHandler {
         const decoded = decodeToolName(toolName, toolNameMap);
         return decoded ? `srv:${decoded.server}` : LOCAL_GROUP;
       };
+      const approveStepTool = createLiveToolApproval({
+        conversationId: input.approvalConversationId ?? conversationId,
+        requireApproval: requireApprovalOf(input.requireToolApproval),
+        stepRequiresApproval: Object.values(toolNameMap ?? {}).some((tool) => tool.requiresApproval)
+          ? (toolName) => toolNameMap?.[toolName]?.requiresApproval === true
+          : undefined,
+        onApprovalRequired: input.onApprovalRequired,
+        signal,
+      });
       const limitForGroup = (key: string): number => {
         if (key === LOCAL_GROUP) return Math.max(1, toolCalls.length);
         const server = key.slice('srv:'.length);
@@ -4399,6 +4438,38 @@ export class ModelHandler {
               timestamp: Date.now(),
             });
             processedToolCalls.push({ name, args, id, result: resultContent });
+            return;
+          }
+
+          // #1448: deferred tool search, call-through and code mode. A tool a
+          // program runs asks the approval gate live, since it cannot pause the run.
+          if (isToolLoadingToolName(name)) {
+            emit?.({ type: 'tool:call', toolCallId: id, name, args: argsString });
+            const outcome = await executeToolLoadingTool(name, args, {
+              catalog: input.toolCatalog,
+              toolNameMap: toolNameMap ?? {},
+              offeredToolNames: input.offeredToolNames,
+              mcpNodes,
+              markToolsLoaded: input.markToolsLoaded,
+              approve: approveStepTool,
+              service: mcpService,
+              conversationId,
+              runId,
+              nodeId: node?.nodeId,
+              signal,
+              beforeToolDispatch: input.beforeToolDispatch,
+              authorizePersonaCoreMcp: input.executionAuthority?.authorizePersonaCoreMcp,
+              contextWindow: input.modelContextWindow,
+            });
+            emit?.({
+              type: 'tool:result',
+              toolCallId: id,
+              name,
+              result: outcome.content.length > 500 ? `${outcome.content.slice(0, 500)}…` : outcome.content,
+              isError: !outcome.success,
+            });
+            toolCallMessages.push({ id: uuidv4(), role: 'tool', tool_call_id: id, content: outcome.content, timestamp: Date.now() });
+            processedToolCalls.push({ name, args, id, result: outcome.content });
             return;
           }
 
@@ -5040,7 +5111,7 @@ export class ModelHandler {
               ? 'handoff' as const
               : isRunResourceToolName(name) || isMCPResourceToolName(name)
                 ? 'resource' as const
-                : isQuestionToolName(name) || isTodoToolName(name) || isPersonaToolName(name) || isMeetingToolName(name) || isSubflowToolName(name) || isBehaviorToolName(name) || isSubflowCommunicationTool(name) || name.startsWith(SUBFLOW_DETACHED_TOOL_PREFIX) || name === 'subflow_task_get' || name === 'subflow_task_cancel'
+                : isQuestionToolName(name) || isTodoToolName(name) || isToolLoadingToolName(name) || isPersonaToolName(name) || isMeetingToolName(name) || isSubflowToolName(name) || isBehaviorToolName(name) || isSubflowCommunicationTool(name) || name.startsWith(SUBFLOW_DETACHED_TOOL_PREFIX) || name === 'subflow_task_get' || name === 'subflow_task_cancel'
                   ? 'synthetic' as const
                   : decodedForUi
                     ? 'mcp' as const

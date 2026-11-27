@@ -33,6 +33,7 @@ the call comes in:
 | Ordinary AI step (OpenAI, Anthropic, Gemini, Ollama and similar) | The run pauses and is saved | The chat card, `POST /v1/chat/conversations/{id}/respond`, or the approval inbox for automations |
 | AI that runs its own tool loop (Claude subscription, Codex, Antigravity) | The run waits live | The same chat card and `/respond` route |
 | Sub-flow | The child run waits live, in the conversation the person is viewing | The same chat card |
+| A tool called from a code-mode program (`run_tool_script`) or through `call_tool` (#1448) | The program waits live; the card shows the real tool and its arguments | The same chat card and `/respond` route |
 | Static node with "wait for a person", Human step | The run pauses and is saved | The chat card, the approval inbox, or `/api/human-tasks` |
 
 The gate code is `src/backend/execution/flow/toolApprovalGate.ts` and runFlow's
