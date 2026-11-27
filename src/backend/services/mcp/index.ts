@@ -260,13 +260,34 @@ import {
 import { resolveLazyStart } from "./lazyStart";
 import {
   listMcpEvents,
+  pollMcpEvent,
   serverSupportsEvents,
   subscribeMcpEvent,
+  unsubscribeMcpEvent,
   type McpEventDescriptor,
+  type McpEventPollRequest,
+  type McpEventPollResult,
   type McpEventSubscribeRequest,
   type McpEventSubscribeResult,
+  type McpEventUnsubscribeRequest,
 } from "./serverEvents";
+import {
+  MCP_EVENT_NOTIFICATIONS,
+  openMcpEventStream,
+  registerMcpEventStreamHandlers,
+  routeMcpEventNotification,
+  type McpEventStream,
+  type McpEventStreamHandlers,
+  type McpEventStreamRequest,
+} from "./serverEventStream";
+import type { ExtensionNotificationHandlers } from "./betaClient";
 import { registerResourceNotificationHandlers, registerToolListChangedHandler } from "./resourceNotifications";
+import {
+  CLAUDE_CHANNEL_METHOD,
+  receiveClaudeChannelNotification,
+  registerClaudeChannelHandler,
+  serverDeclaresClaudeChannel,
+} from "./inboundEvents";
 import { cachedMcpList, invalidateMcpLists } from "./listCache";
 import {
   isMcpBetaProtocolEnabled,
@@ -1193,7 +1214,7 @@ export class MCPService {
       }), () => {
         invalidateMcpLists(client, 'tools');
         invalidateMcpLists(this.clients.get(config.name), 'tools');
-      }) : createNewClient(config);
+      }, this.extensionNotificationHandlers(config.name, () => client)) : createNewClient(config);
       if (executionExtensionContext) pendingProtectedClient = client;
       const transport = useBeta
         ? await createBetaTransport(config, transportOptions)
@@ -1225,30 +1246,18 @@ export class MCPService {
           invalidateMcpLists(notifiedClient, 'tools');
           invalidateMcpLists(this.clients.get(config.name), 'tools');
         }));
-      } else {
-        // v2 beta SDK: the Client class's setNotificationHandler takes a method string and a
-        // typed handler. Cast through unknown to call it without importing the beta types here.
-        const betaSetNotification = (
-          client as unknown as {
-            setNotificationHandler: (
-              method: string,
-              handler: (n: unknown) => void,
-            ) => void;
-          }
-        ).setNotificationHandler?.bind(client);
-        if (betaSetNotification) {
-          betaSetNotification("notifications/resources/list_changed", bindToCurrentWorkspace(() => {
-            if (this.getClient(config.name) === client) this.onResourceListChanged(config.name);
-          }));
-          betaSetNotification(
-            "notifications/resources/updated",
-            bindToCurrentWorkspace((notification: unknown) => {
-              const uri = (notification as { params?: { uri?: string } })
-                ?.params?.uri;
-              if (uri && this.getClient(config.name) === client) this.onResourceUpdated(config.name, uri);
-            }),
+        // Claude channel messages (#1401): only automations that chose this
+        // source listen. Late messages from a replaced client are ignored.
+        registerClaudeChannelHandler(client, config.name, bindToCurrentWorkspace((notification: unknown) => {
+          receiveClaudeChannelNotification(
+            notifiedClient,
+            config.name,
+            notification,
+            () => this.getClient(config.name) === notifiedClient,
           );
-        }
+        }));
+        // MCP events push streams (#1401): routed to the stream that asked.
+        registerMcpEventStreamHandlers(client, config.name);
       }
 
       // Add stderr capture. Duck-typed on the stderr stream (present on both the v1
@@ -2189,13 +2198,50 @@ export class MCPService {
     return [...closed, ...evicted];
   }
 
-  /** The events a server can report, for the automation editor. */
-  async listServerEvents(serverName: string): Promise<{ supported: boolean; events: McpEventDescriptor[]; error?: string }> {
+  /**
+   * The events a server can report, for the automation editor. `channel` says
+   * whether it also sends Claude channel messages (#1401).
+   */
+  async listServerEvents(serverName: string): Promise<{
+    supported: boolean;
+    channel: boolean;
+    events: McpEventDescriptor[];
+    error?: string;
+  }> {
     const acquired = await this.acquireServerLease(serverName);
-    if (!acquired.lease) return { supported: false, events: [], error: acquired.error };
+    if (!acquired.lease) return { supported: false, channel: false, events: [], error: acquired.error };
     try {
-      if (!serverSupportsEvents(acquired.lease.client)) return { supported: false, events: [] };
-      return { supported: true, events: await listMcpEvents(acquired.lease.client) };
+      const channel = serverDeclaresClaudeChannel(acquired.lease.client);
+      if (!serverSupportsEvents(acquired.lease.client)) return { supported: false, channel, events: [] };
+      return { supported: true, channel, events: await listMcpEvents(acquired.lease.client) };
+    } finally {
+      acquired.lease.release();
+    }
+  }
+
+  /** Ends a webhook subscription. Throws when the server cannot be reached or refuses. */
+  async unsubscribeServerEvent(serverName: string, request: McpEventUnsubscribeRequest): Promise<void> {
+    const acquired = await this.acquireServerLease(serverName);
+    if (!acquired.lease) throw new Error(acquired.error ?? `MCP server '${serverName}' is not available`);
+    try {
+      if (!serverSupportsEvents(acquired.lease.client)) return;
+      await unsubscribeMcpEvent(acquired.lease.client, request);
+    } finally {
+      acquired.lease.release();
+    }
+  }
+
+  /**
+   * Starts the server if needed and says whether it sends Claude channel
+   * messages. Called on arm and every few minutes, which also reconnects a
+   * server that went away. Throws when the server cannot be reached.
+   */
+  async connectClaudeChannel(serverName: string): Promise<boolean> {
+    if (await this.isServerDisabled(serverName)) throw new Error(`MCP server '${serverName}' is disabled`);
+    const acquired = await this.acquireServerLease(serverName);
+    if (!acquired.lease) throw new Error(acquired.error ?? `MCP server '${serverName}' is not available`);
+    try {
+      return serverDeclaresClaudeChannel(acquired.lease.client);
     } finally {
       acquired.lease.release();
     }
@@ -2212,6 +2258,71 @@ export class MCPService {
     } finally {
       acquired.lease.release();
     }
+  }
+
+  /**
+   * Opens a push subscription (`events/stream`) and resolves once the server
+   * confirmed it. The stream lives on the connection, not on a lease: the
+   * caller pins the server, and the stream ends when the connection does.
+   */
+  async openServerEventStream(
+    serverName: string,
+    request: McpEventStreamRequest,
+    handlers: McpEventStreamHandlers,
+  ): Promise<McpEventStream> {
+    if (await this.isServerDisabled(serverName)) throw new Error(`MCP server '${serverName}' is disabled`);
+    const acquired = await this.acquireServerLease(serverName);
+    if (!acquired.lease) throw new Error(acquired.error ?? `MCP server '${serverName}' is not available`);
+    try {
+      if (!serverSupportsEvents(acquired.lease.client)) throw new Error(`MCP server '${serverName}' does not report events`);
+      return await openMcpEventStream(acquired.lease.client, request, handlers);
+    } finally {
+      acquired.lease.release();
+    }
+  }
+
+  /** One `events/poll`. Throws when the server cannot be reached or refuses. */
+  async pollServerEvent(serverName: string, request: McpEventPollRequest): Promise<McpEventPollResult> {
+    if (await this.isServerDisabled(serverName)) throw new Error(`MCP server '${serverName}' is disabled`);
+    const acquired = await this.acquireServerLease(serverName);
+    if (!acquired.lease) throw new Error(acquired.error ?? `MCP server '${serverName}' is not available`);
+    try {
+      if (!serverSupportsEvents(acquired.lease.client)) throw new Error(`MCP server '${serverName}' does not report events`);
+      return await pollMcpEvent(acquired.lease.client, request);
+    } finally {
+      acquired.lease.release();
+    }
+  }
+
+  /**
+   * Notification handlers for the newer client, registered with a schema while
+   * it is built: resource changes, Claude channel messages and MCP events push
+   * streams (#1401). `currentClient` returns the client being built, so a
+   * replaced client's late messages are ignored.
+   */
+  private extensionNotificationHandlers(serverName: string, currentClient: () => Client | undefined): ExtensionNotificationHandlers {
+    const isCurrent = (client: Client | undefined): client is Client => Boolean(client) && this.getClient(serverName) === client;
+    const handlers: ExtensionNotificationHandlers = {
+      "notifications/resources/list_changed": bindToCurrentWorkspace(() => {
+        if (isCurrent(currentClient())) this.onResourceListChanged(serverName);
+      }),
+      "notifications/resources/updated": bindToCurrentWorkspace((params: unknown) => {
+        const uri = (params as { uri?: unknown } | undefined)?.uri;
+        if (typeof uri === "string" && isCurrent(currentClient())) this.onResourceUpdated(serverName, uri);
+      }),
+      [CLAUDE_CHANNEL_METHOD]: bindToCurrentWorkspace((params: unknown) => {
+        const client = currentClient();
+        if (!client) return;
+        receiveClaudeChannelNotification(client, serverName, { params }, () => this.getClient(serverName) === client);
+      }),
+    };
+    for (const method of MCP_EVENT_NOTIFICATIONS) {
+      handlers[method] = (params: unknown) => {
+        const client = currentClient();
+        if (client) routeMcpEventNotification(client, method, params);
+      };
+    }
+    return handlers;
   }
 
   /**

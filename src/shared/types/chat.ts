@@ -212,6 +212,19 @@ export type FlujoChatMessage = OpenAI.ChatCompletionMessageParam & {
     kind: 'message' | 'completion';
   };
 
+  /**
+   * Trusted provenance for an event an automation steered into this running
+   * conversation (#1401). The user role is a transport detail: the content is
+   * the automation's prompt plus the event as labelled, untrusted data. Shown
+   * in the transcript; stripped from provider wire messages like agentMessage.
+   */
+  triggerEvent?: {
+    executionId: string;
+    executionName?: string;
+    serverName: string;
+    source: 'events' | 'claude-channel';
+  };
+
   /** Token usage for the call/run that produced this message; may cover multiple model requests. */
   usage?: {
     promptTokens: number;

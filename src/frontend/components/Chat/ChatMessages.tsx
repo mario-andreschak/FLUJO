@@ -1262,12 +1262,15 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
   // guide line + chip. They are display-only (never sent back as history).
   const depth = message.depth ?? 0;
   const agentMessage = message.agentMessage;
-  const isHumanMessage = message.role === 'user' && !agentMessage;
-  const hasNeutralBubble = Boolean(agentMessage) || message.role === 'assistant' || message.role === 'tool';
+  const triggerEvent = message.triggerEvent;
+  const isHumanMessage = message.role === 'user' && !agentMessage && !triggerEvent;
+  const hasNeutralBubble = Boolean(agentMessage) || Boolean(triggerEvent) || message.role === 'assistant' || message.role === 'tool';
   const senderLabel = agentMessage
     ? t(agentMessage.kind === 'completion' ? 'chat.messages.agentCompletion' : 'chat.messages.agentMessage', {
         sender: agentMessage.senderName?.trim() || agentMessage.senderConversationId,
       })
+    : triggerEvent
+      ? t('chat.messages.triggerEvent', { server: triggerEvent.serverName })
     : message.role === 'user'
       ? t('chat.messages.you')
       : message.role === 'assistant'
@@ -1309,7 +1312,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
           variant="caption"
           color="text.secondary"
           sx={{ mr: 1, overflowWrap: 'anywhere' }}
-          title={agentMessage?.senderConversationId}
+          title={agentMessage?.senderConversationId ?? triggerEvent?.executionName}
         >
           {senderLabel} • {typeof message.timestamp === 'number' && !Number.isNaN(message.timestamp)
                   ? formatLocalizedDate(message.timestamp, { hour: '2-digit', minute: '2-digit' })

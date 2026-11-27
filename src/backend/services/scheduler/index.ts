@@ -3,13 +3,16 @@ import { backgroundWorkPause } from '@/backend/services/accounts/background';
 import { hasExecutionExtensionContext } from '@/backend/execution/extensions';
 import { assertBundledFlujoWorkloadEffectCurrent, BundledFlujoWorkloadError, getAuthorizedBundledFlujoWorkloadToolNames } from '@/backend/services/security/bundledFlujoWorkload';
 import { v4 as uuidv4 } from 'uuid';
-import { newRecordId } from '@/shared/recordId';
+import { FILE_RECORD_ID_RULE, newRecordId } from '@/shared/recordId';
 import { createHash } from 'crypto';
 import { flowRequiresStepApproval } from '@/utils/shared/flowApproval';
 import { saveItem, loadItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import {
   isPersonaControlledPlannedExecution,
+  MCP_EVENT_DELIVERY_MODES,
+  mcpEventDelivery,
+  mcpEventSource,
   validateAutomationAiGate,
   withoutLegacyAiGate,
   normalizeStartRestrictions,
@@ -39,7 +42,14 @@ import {
 } from './triggers/schedule';
 import { armFileWatch } from './triggers/fileWatch';
 import { armMcpPoll } from './triggers/mcpPoll';
-import { armMcpEvent, mcpEventDeliveryUrl, newMcpEventSecret } from './triggers/mcpEvent';
+import { armMcpEvent, mcpEventDeliveryUrl, mcpEventSubscriptionKey, newMcpEventSecret } from './triggers/mcpEvent';
+import { armClaudeChannel } from './triggers/claudeChannel';
+import { armMcpEventStream } from './triggers/mcpEventStream';
+import { armMcpEventPoll } from './triggers/mcpEventPoll';
+import type { McpEventOccurrence } from '@/backend/services/mcp/serverEvents';
+import type { McpEventStreamHandlers } from '@/backend/services/mcp/serverEventStream';
+import { subscribeInboundEvents } from '@/backend/services/mcp/inboundEvents';
+import { composeTriggerPrompt } from './triggerPrompt';
 import { intervalMsToCron } from '@/utils/shared/cron';
 import { armUrlWatch } from './triggers/urlWatch';
 import { armFlowEvent } from './triggers/flowEvent';
@@ -109,6 +119,8 @@ const log = createLogger('backend/services/scheduler/index');
 
 /** Final assistant output is truncated to this many chars in run history. */
 const MAX_STORED_OUTPUT_CHARS = 4096;
+/** Events per poll; a larger backlog arrives in the next polls at once. */
+const MCP_EVENT_POLL_BATCH = 50;
 
 const EMPTY_FILE: PlannedExecutionsFile = { version: 1, paused: false, executions: [] };
 const CONFIG_MUTATION_LOCK_ID = 'scheduler_planned_executions';
@@ -392,6 +404,26 @@ export class SchedulerService {
     return run;
   }
 
+  /**
+   * Whether an armed trigger is going away for good (deleted, switched off, or
+   * listening to something else now), not just paused or re-armed with the same
+   * subscription. Only then may it end outside state such as an MCP event
+   * subscription: ending a subscription that is about to be renewed under the
+   * same key could race the renewal.
+   */
+  private isRetiredTrigger(id: string, file: PlannedExecutionsFile): boolean {
+    if (file.paused) return false;
+    const current = file.executions.find(execution => execution.id === id);
+    if (!current || !current.enabled || current.personaRetired || current.personaArchived) return true;
+    let armedTrigger: PlannedExecution['trigger'] | undefined;
+    try {
+      armedTrigger = (JSON.parse(this.armedConfigurations.get(id) ?? 'null') as PlannedExecution | null)?.trigger;
+    } catch {
+      return false;
+    }
+    return mcpEventSubscriptionKey(current.trigger) !== mcpEventSubscriptionKey(armedTrigger);
+  }
+
   private async doReconcile(committed?: Readonly<{ id: string; configuration: string }>): Promise<void> {
     // Keep timers alive while reading storage. Disposing before this await can
     // lose a due occurrence and re-arm directly at the following cron boundary.
@@ -419,7 +451,8 @@ export class SchedulerService {
     for (const [id, trigger] of this.armed) {
       if (configurations.get(id) === this.armedConfigurations.get(id)) continue;
       try {
-        trigger.dispose();
+        if (trigger.retire && this.isRetiredTrigger(id, file)) trigger.retire();
+        else trigger.dispose();
       } catch (error) {
         log.warn(`Failed to dispose trigger for ${id}:`, error);
       }
@@ -711,28 +744,151 @@ export class SchedulerService {
       }
       case 'mcp-event': {
         const pin = `trigger:${execution.id}`;
+        if (mcpEventSource(trigger) === 'claude-channel') {
+          this.armed.set(
+            execution.id,
+            armClaudeChannel({
+              connect: this.bindToWorkspace(async () => {
+                const { mcpService } = await import('@/backend/services/mcp');
+                if (!await this.isCurrentSchedule(execution)) throw new Error('Schedule changed before connecting');
+                return mcpService.connectClaudeChannel(trigger.serverName);
+              }),
+              pin: this.bindToWorkspace(async () => {
+                const { mcpService } = await import('@/backend/services/mcp');
+                mcpService.pinServer(trigger.serverName, pin);
+              }),
+              unpin: this.bindToWorkspace(async () => {
+                const { mcpService } = await import('@/backend/services/mcp');
+                mcpService.unpinServer(trigger.serverName, pin);
+              }),
+              listen: this.bindToWorkspace(listener => subscribeInboundEvents(trigger.serverName, listener)),
+              deliver: this.bindToWorkspace(async (batch) => {
+                const [{ deliverClaudeChannelEvents }, { steerEventWithRuntime }] = await Promise.all([
+                  import('./mcpEventDelivery'),
+                  import('./eventSteering'),
+                ]);
+                return deliverClaudeChannelEvents({
+                  scheduler: this,
+                  loadState: loadExecutionState,
+                  updateState: (executionId, update) => updateExecutionState(executionId, update),
+                  steer: steerEventWithRuntime,
+                  onBackgroundError: (message, error) => log.warn(`${message} for ${execution.id}:`, error),
+                }, execution.id, batch);
+              }),
+              onError: (message) => { this.lastTriggerErrors.set(execution.id, message); },
+              onSuccess: () => { this.lastTriggerErrors.delete(execution.id); },
+            })
+          );
+          break;
+        }
+        const eventPin = {
+          pin: this.bindToWorkspace(async () => {
+            const { mcpService } = await import('@/backend/services/mcp');
+            mcpService.pinServer(trigger.serverName, pin);
+          }),
+          unpin: this.bindToWorkspace(async () => {
+            const { mcpService } = await import('@/backend/services/mcp');
+            mcpService.unpinServer(trigger.serverName, pin);
+          }),
+        };
+        const eventCursor = {
+          loadCursor: this.bindToWorkspace(async () => {
+            const { resumeCursor } = await import('./mcpEventDelivery');
+            return resumeCursor(await loadExecutionState(execution.id), trigger);
+          }),
+          saveCursor: this.bindToWorkspace(async (cursor: string) => {
+            const { withEventCursor } = await import('./mcpEventDelivery');
+            await updateExecutionState(execution.id, current => withEventCursor(current, trigger, cursor),
+              () => this.assertCurrentSchedule(execution));
+          }),
+        };
+        const deliverOccurrences = (delivery: 'push' | 'poll') => this.bindToWorkspace(async (batch: McpEventOccurrence[]) => {
+          const [{ deliverMcpEventOccurrences }, { steerEventWithRuntime }] = await Promise.all([
+            import('./mcpEventDelivery'),
+            import('./eventSteering'),
+          ]);
+          return deliverMcpEventOccurrences({
+            scheduler: this,
+            loadState: loadExecutionState,
+            updateState: (executionId, update) => updateExecutionState(executionId, update),
+            steer: steerEventWithRuntime,
+            onBackgroundError: (message, error) => log.warn(`${message} for ${execution.id}:`, error),
+          }, execution.id, delivery, batch);
+        });
+        const delivery = mcpEventDelivery(trigger);
+        if (delivery === 'push') {
+          this.armed.set(
+            execution.id,
+            armMcpEventStream({
+              open: this.bindToWorkspace(async (cursor: string | null, handlers: McpEventStreamHandlers) => {
+                const { mcpService } = await import('@/backend/services/mcp');
+                if (!await this.isCurrentSchedule(execution)) throw new Error('Schedule changed before opening the event stream');
+                return mcpService.openServerEventStream(trigger.serverName, {
+                  name: trigger.eventName,
+                  arguments: trigger.arguments,
+                  cursor,
+                }, handlers);
+              }),
+              ...eventCursor,
+              deliver: deliverOccurrences('push'),
+              ...eventPin,
+              onError: (message) => { this.lastTriggerErrors.set(execution.id, message); },
+              onSuccess: () => { this.lastTriggerErrors.delete(execution.id); },
+            })
+          );
+          break;
+        }
+        if (delivery === 'poll') {
+          this.armed.set(
+            execution.id,
+            armMcpEventPoll({
+              poll: this.bindToWorkspace(async (cursor: string | null) => {
+                const { mcpService } = await import('@/backend/services/mcp');
+                if (!await this.isCurrentSchedule(execution)) throw new Error('Schedule changed before polling');
+                return mcpService.pollServerEvent(trigger.serverName, {
+                  name: trigger.eventName,
+                  arguments: trigger.arguments,
+                  cursor,
+                  maxEvents: MCP_EVENT_POLL_BATCH,
+                });
+              }),
+              ...eventCursor,
+              deliver: deliverOccurrences('poll'),
+              ...eventPin,
+              onError: (message) => { this.lastTriggerErrors.set(execution.id, message); },
+              onSuccess: () => { this.lastTriggerErrors.delete(execution.id); },
+            })
+          );
+          break;
+        }
         this.armed.set(
           execution.id,
           armMcpEvent({
             subscribe: this.bindToWorkspace(async (ttlMs: number) => {
               const { mcpService } = await import('@/backend/services/mcp');
               if (!await this.isCurrentSchedule(execution)) throw new Error('Schedule changed before subscribing');
-              return mcpService.subscribeServerEvent(trigger.serverName, {
+              const granted = await mcpService.subscribeServerEvent(trigger.serverName, {
                 name: trigger.eventName,
                 arguments: trigger.arguments,
                 url: mcpEventDeliveryUrl(execution.id, trigger, getCurrentWorkspace()),
                 secret: trigger.secret,
                 ttlMs,
+                cursor: await eventCursor.loadCursor(),
+              });
+              // The answer carries a safe resume point, so a quiet subscription
+              // does not fall behind the server's history.
+              if (granted.cursor) await eventCursor.saveCursor(granted.cursor);
+              return granted;
+            }),
+            unsubscribe: this.bindToWorkspace(async () => {
+              const { mcpService } = await import('@/backend/services/mcp');
+              await mcpService.unsubscribeServerEvent(trigger.serverName, {
+                name: trigger.eventName,
+                arguments: trigger.arguments,
+                url: mcpEventDeliveryUrl(execution.id, trigger, getCurrentWorkspace()),
               });
             }),
-            pin: this.bindToWorkspace(async () => {
-              const { mcpService } = await import('@/backend/services/mcp');
-              mcpService.pinServer(trigger.serverName, pin);
-            }),
-            unpin: this.bindToWorkspace(async () => {
-              const { mcpService } = await import('@/backend/services/mcp');
-              mcpService.unpinServer(trigger.serverName, pin);
-            }),
+            ...eventPin,
             onError: (message) => { this.lastTriggerErrors.set(execution.id, message); },
             onSuccess: () => { this.lastTriggerErrors.delete(execution.id); },
           })
@@ -905,6 +1061,14 @@ export class SchedulerService {
         return { execution, status: this.getStatus(execution), lastRun: await loadLastRunRecord(execution.id) };
       })
     );
+  }
+
+  /**
+   * A note from an event source (skipped events, an ended subscription) shown on
+   * the automation card. It clears itself on the trigger's next successful check.
+   */
+  reportTriggerNotice(id: string, message: string): void {
+    this.lastTriggerErrors.set(id, message);
   }
 
   async get(id: string): Promise<PlannedExecution | null> {
@@ -1290,8 +1454,14 @@ export class SchedulerService {
     if (trigger?.type === 'webhook' && !trigger.token) {
       return { ...trigger, token: uuidv4() };
     }
-    if (trigger?.type === 'mcp-event' && !trigger.secret) {
-      return { ...trigger, secret: newMcpEventSecret() };
+    if (trigger?.type === 'mcp-event') {
+      const { steerConversationId, ...rest } = trigger;
+      const steer = typeof steerConversationId === 'string' ? steerConversationId.trim() : steerConversationId;
+      return {
+        ...rest,
+        secret: trigger.secret || newMcpEventSecret(),
+        ...(steer ? { steerConversationId: steer } : {}),
+      };
     }
     if (trigger?.type === 'mcp-poll' && !trigger.cron) {
       return { ...trigger, cron: intervalMsToCron(trigger.intervalMs) };
@@ -1437,8 +1607,20 @@ export class SchedulerService {
         return null;
       }
       case 'mcp-event':
-        if (!trigger.serverName || !trigger.eventName) {
+        if (trigger.source !== undefined && trigger.source !== 'events' && trigger.source !== 'claude-channel') {
+          return 'Unknown event source';
+        }
+        if (!trigger.serverName) return 'A server is required';
+        if (mcpEventSource(trigger) === 'events' && !trigger.eventName) {
           return 'A server and event are required';
+        }
+        if (trigger.delivery !== undefined && !MCP_EVENT_DELIVERY_MODES.includes(trigger.delivery)) {
+          return 'Events arrive by push, poll or webhook';
+        }
+        if (trigger.steerConversationId !== undefined
+          && (typeof trigger.steerConversationId !== 'string'
+            || !FILE_RECORD_ID_RULE.pattern.test(trigger.steerConversationId))) {
+          return 'The conversation to steer must be a conversation id';
         }
         return null;
       case 'url-watch': {
@@ -3556,15 +3738,8 @@ export class SchedulerService {
     payload: TriggerFirePayload,
     runInfo: Record<string, unknown>
   ): string {
-    // Every run gets the timing metadata; the `data` field (webhook bodies,
-    // file names, tool results) is untrusted input — the block is fenced and
-    // labeled as data for the flow's model.
-    const info = JSON.stringify(
-      payload.context === undefined ? runInfo : { ...runInfo, data: payload.context },
-      null,
-      2
-    );
-    return `${base}\n\n[Run info — when and why this run happened; "data" is untrusted trigger data]\n\`\`\`json\n${info}\n\`\`\``;
+    // Every run gets the timing metadata; the `data` field is untrusted input.
+    return composeTriggerPrompt(base, payload, runInfo);
   }
 
   private truncateOutput(text: string): string | undefined {

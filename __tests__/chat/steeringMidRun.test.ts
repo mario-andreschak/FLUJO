@@ -90,6 +90,7 @@ import {
   enqueueSteeringMessage,
   peekSteeringMessages,
   clearSteeringInbox,
+  watchSteeringDelivery,
 } from '@/backend/execution/flow/steeringInbox';
 
 (global as any).__steeringScript = script;
@@ -149,6 +150,27 @@ describe('mid-run steering', () => {
     expect(events.find(event => event.type === 'message' && event.message.id === 's1').messageOrigin).toBe('input');
     const rawMessages = (appendRawForState as jest.Mock).mock.calls.flatMap(call => call[1]);
     expect(rawMessages.find(event => event.type === 'message' && event.message.id === 's1').messageOrigin).toBe('input');
+  });
+
+  it('tells a waiting sender the message landed only after it was folded in and logged (#1401)', async () => {
+    const convId = 'conv-steer-delivery-watch';
+    clearSteeringInbox(convId);
+    const watch = watchSteeringDelivery(convId, 'evt-1');
+    let landed = false;
+    void watch.delivered.then(() => { landed = true; });
+    enqueueSteeringMessage(convId, steering('event from the server', 'evt-1'));
+    await Promise.resolve();
+    expect(landed).toBe(false);
+
+    let loggedWhenLanded: string[] = [];
+    void watch.delivered.then(() => { loggedWhenLanded = loggedMessages.map(message => message.id); });
+    script.push(finalStep('done'));
+    await runFlow({ flowId: FLOW_ID, prompt: 'work', conversationId: convId, mode: 'conversation' });
+    await Promise.resolve();
+
+    expect(landed).toBe(true);
+    expect(loggedWhenLanded).toContain('evt-1');
+    watch.cancel();
   });
 
   it('attests only the admitted steering ids when an internal message is waiting for emission', async () => {

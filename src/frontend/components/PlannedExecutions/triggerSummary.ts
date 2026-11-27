@@ -21,7 +21,10 @@ export function describeTrigger(trigger: TriggerConfig, t: Translator = english)
         tool: trigger.toolName,
       });
     case 'mcp-event':
-      return t('automations.trigger.onServerEvent', { server: trigger.serverName, event: trigger.eventName });
+      return t('automations.trigger.onServerEvent', {
+        server: trigger.serverName,
+        event: trigger.source === 'claude-channel' ? t('automations.event.channelMessages') : trigger.eventName,
+      });
     case 'url-watch': {
       try {
         return t('automations.trigger.watchingHost', { host: new URL(trigger.url).hostname });

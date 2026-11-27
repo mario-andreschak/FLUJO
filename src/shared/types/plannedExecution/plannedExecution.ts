@@ -113,12 +113,65 @@ export interface McpPollTriggerConfig {
 export interface McpEventTriggerConfig {
   type: 'mcp-event';
   serverName: string;
-  /** An event name from the server's `events/list`. */
+  /**
+   * Where events come from (#1401). Absent or 'events': the MCP events
+   * extension over signed webhooks, which the server retries until accepted.
+   * 'claude-channel': `notifications/claude/channel` messages on the open MCP
+   * connection. Those have no acknowledgement or replay, so a message sent
+   * while FLUJO or the server is off is lost.
+   */
+  source?: McpEventSource;
+  /** An event name from the server's `events/list`. Unused for channel messages. */
   eventName: string;
+  /**
+   * How events arrive (MCP events extension): 'push' over a long-lived
+   * `events/stream`, 'poll' with `events/poll`, or 'webhook' to a local URL.
+   * The editor picks one the event offers. Absent means 'webhook', which is
+   * what automations saved before the other modes existed use.
+   */
+  delivery?: McpEventDeliveryMode;
   /** Subscription arguments, as described by the event's `inputSchema`. */
   arguments?: Record<string, unknown>;
   /** Signing secret (`whsec_...`). Generated on save; never exported. */
   secret: string;
+  /**
+   * Optional conversation to steer (#1401). While it is running, an event is
+   * added to it as a new message at its next safe point instead of starting a
+   * run. When it is not running, the automation starts a run as usual.
+   */
+  steerConversationId?: string;
+}
+
+export type McpEventSource = 'events' | 'claude-channel';
+
+export function mcpEventSource(trigger: Pick<McpEventTriggerConfig, 'source'>): McpEventSource {
+  return trigger.source === 'claude-channel' ? 'claude-channel' : 'events';
+}
+
+export type McpEventDeliveryMode = 'push' | 'poll' | 'webhook';
+
+export const MCP_EVENT_DELIVERY_MODES: readonly McpEventDeliveryMode[] = ['push', 'poll', 'webhook'];
+
+export function mcpEventDelivery(trigger: Pick<McpEventTriggerConfig, 'delivery'>): McpEventDeliveryMode {
+  return trigger.delivery === 'push' || trigger.delivery === 'poll' ? trigger.delivery : 'webhook';
+}
+
+/**
+ * The modes an event offers (its `delivery` list in `events/list`), in FLUJO's
+ * order of preference. Earlier drafts listed none and only knew webhooks.
+ */
+export function mcpEventDeliveryModes(offered: readonly string[] | undefined): McpEventDeliveryMode[] {
+  if (!offered) return ['webhook'];
+  return MCP_EVENT_DELIVERY_MODES.filter(mode => offered.includes(mode));
+}
+
+/**
+ * FLUJO's choice when the user did not pick one. Push needs no reachable URL
+ * and arrives at once. Poll works with every server. Webhook last: the spec
+ * requires an `https` callback and lets servers refuse this computer's address.
+ */
+export function preferredMcpEventDelivery(offered: readonly string[] | undefined): McpEventDeliveryMode | undefined {
+  return mcpEventDeliveryModes(offered)[0];
 }
 
 export interface UrlWatchTriggerConfig {
@@ -441,8 +494,21 @@ export interface PlannedExecutionState {
   lastScheduledFireAt?: string;
   /** on-change: hash of the last seen tool result. */
   lastHash?: string;
-  /** new-items: ids already seen (capped). */
+  /** new-items: ids already seen (capped). mcp-event: accepted event ids. */
   seenIds?: string[];
+  /**
+   * mcp-event: the server's cursor from the last accepted event (or a gap
+   * notice). Sent on every subscribe, so a new or expired subscription
+   * resumes where FLUJO stopped instead of "from now" (#1401). Push streams
+   * and polls resume from it too.
+   */
+  eventCursor?: string;
+  /**
+   * mcp-event: which subscription (server, event, arguments) `eventCursor`
+   * belongs to. A cursor from another subscription is never sent. Absent on
+   * cursors saved before this field existed; those are still used.
+   */
+  eventCursorFor?: string;
   /** llm-gate: day stamp (YYYY-MM-DD) + count for the daily call cap. */
   llmCallsDay?: string;
   llmCallsCount?: number;
