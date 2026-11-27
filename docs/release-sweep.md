@@ -46,8 +46,10 @@ Other targets:
 
 The report goes to `flujo-drive/evidence/release-sweep/<version>-<time>/` in
 your cache folder (`%LOCALAPPDATA%` on Windows, `~/.cache` elsewhere), outside
-the repository. In dev mode the sweep loads each page once first, so slow
-first compiles do not count as failures.
+the repository. In dev mode the sweep first loads each page and opens it once
+in the browser, so slow first compiles do not count as failures. Dev mode still
+needs plenty of free memory; on a busy machine prefer `--release` or
+`--launch --mode start`.
 
 ## From problems to issues
 

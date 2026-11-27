@@ -8,7 +8,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  EVIDENCE_DIR, freePort, isAlive, loadChromium, main as drive, parseArgs, parseViewport, probe, readState, runStep, settle, tail,
+  EVIDENCE_DIR, freePort, gotoWithRetry, isAlive, loadChromium, main as drive, parseArgs, parseViewport, probe, readState, routeUrl, runStep,
+  settle, tail,
 } from '../flujo-drive.mjs';
 import { drillEnvironment } from '../maintainer-drill.mjs';
 import { problemsFromReport } from './problems.mjs';
@@ -18,6 +19,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const SANDBOX_PREFIX = 'flujo-sweep-';
 const RESERVED_PORT = '4200';
 const INSTALL_ATTEMPTS = 3;
+const ANSWER_WAIT_MS = 120_000;
+const SANDBOX_REMOVAL_MS = 60_000;
 export const EXIT = Object.freeze({ passed: 0, problems: 1, broken: 2 });
 
 export const USAGE = `Usage: node scripts/release-sweep/run.mjs [target] [options]
@@ -223,14 +226,44 @@ async function stopInstance(handle, out, log) {
     mkdirSync(out, { recursive: true });
     writeFileSync(path.join(out, 'flujo-log-tail.txt'), `${tail(handle.logFile, 400)}\n`);
   }
-  if (path.basename(handle.sandbox).startsWith(SANDBOX_PREFIX) && path.dirname(handle.sandbox) === path.resolve(os.tmpdir())) {
-    rmSync(handle.sandbox, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
-  }
-  log(`Stopped FLUJO${handle.pid ? ` (pid ${handle.pid})` : ''} and removed ${handle.sandbox}.`);
+  if (!path.basename(handle.sandbox).startsWith(SANDBOX_PREFIX) || path.dirname(handle.sandbox) !== path.resolve(os.tmpdir())) return;
+  // Windows releases file handles a little after a process tree dies, and tool servers FLUJO started may exit last.
+  const removed = await waitUntil(() => {
+    try {
+      rmSync(handle.sandbox, { recursive: true, force: true, maxRetries: 3, retryDelay: 500 });
+      return true;
+    } catch {
+      return false;
+    }
+  }, SANDBOX_REMOVAL_MS, 5_000);
+  log(removed ? `Stopped FLUJO${handle.pid ? ` (pid ${handle.pid})` : ''} and removed ${handle.sandbox}.`
+    : `! Stopped FLUJO, but ${handle.sandbox} was still locked after ${SANDBOX_REMOVAL_MS / 1000}s; delete that folder by hand.`);
 }
 
-async function stillAnswering(baseUrl) {
-  return waitUntil(async () => (await probe(baseUrl, 10_000)).api, 30_000, 5_000);
+/** After a failure: is FLUJO still there? Dev mode can be busy compiling for a while, so wait before deciding it is gone. */
+async function stillAnswering(baseUrl, pid) {
+  return waitUntil(async () => {
+    if (pid !== undefined && !isAlive(pid)) return false;
+    return (await probe(baseUrl, 30_000)).api;
+  }, ANSWER_WAIT_MS, 5_000);
+}
+
+/** Dev mode compiles a page's scripts and API routes on the first browser visit; do that before any check is timed. */
+async function warmInBrowser(browser, routes, { baseUrl, viewport, log }) {
+  for (const route of routes) {
+    const started = Date.now();
+    const context = await browser.newContext({ viewport, locale: 'en-US' });
+    try {
+      const page = await context.newPage();
+      await gotoWithRetry(page, routeUrl(baseUrl, route), () => {});
+      await settle(page, () => {});
+      log(`✓ ${route} opened in the browser in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+    } catch (error) {
+      log(`! ${route} did not finish opening while warming (${String(error.message).split('\n')[0]}); the sweep will time it.`);
+    } finally {
+      await context.close().catch(() => undefined);
+    }
+  }
 }
 
 /** A switch or checkbox step: turn it on unless it already is, then check that it stayed on. */
@@ -305,7 +338,7 @@ async function runCheck(browser, check, { baseUrl, viewport, out, budgetMs }) {
   }
 }
 
-export async function sweep(plan, { baseUrl, viewport, out, log, checkTimeoutMs, pageTimeoutMs, browser }) {
+export async function sweep(plan, { baseUrl, viewport, out, log, checkTimeoutMs, pageTimeoutMs, browser, pid }) {
   const entries = [];
   let instanceProblem;
   for (const entry of plan) {
@@ -321,7 +354,7 @@ export async function sweep(plan, { baseUrl, viewport, out, log, checkTimeoutMs,
       else {
         const pageViewport = check.viewport ? parseViewport(check.viewport) : viewport;
         result = await runCheck(browser, check, { baseUrl, viewport: pageViewport, out, budgetMs: Math.min(checkTimeoutMs, pageDeadline - Date.now()) });
-        if (result.status === 'failed' && !(await stillAnswering(baseUrl))) instanceProblem = `FLUJO stopped answering during ${check.id}: ${result.error}`;
+        if (result.status === 'failed' && !(await stillAnswering(baseUrl, pid))) instanceProblem = `FLUJO stopped answering during ${check.id}: ${result.error}`;
       }
       const mark = { passed: '✓', failed: '✗' }[result.status] ?? '·';
       log(`  ${mark} ${check.label}${result.status === 'failed' ? `: ${result.error}` : ''}${result.reason ? ` (${result.status}: ${result.reason})` : ''}`
@@ -435,15 +468,16 @@ export async function main(argv = process.argv.slice(2), log = console.log) {
     }
     report.target.baseUrl = baseUrl;
     report.dataDir = await assertThrowawayData(baseUrl, roots);
+    browser = await loadChromium();
     const devMode = target.mode === 'dev' || target.fromDrive;
     if (devMode && options['no-warm'] === undefined) {
       const routes = [...new Set(autoChecks.flatMap((check) => check.steps).filter((step) => step.do === 'goto').map((step) => step.route))];
-      log(`Loading ${routes.length} pages once so dev mode compiles them before the sweep times anything.`);
+      log(`Loading ${routes.length} pages once, then opening each in the browser, so dev mode compiles them before the sweep times anything.`);
       await drive(['warm', ...routes, '--base-url', baseUrl], log);
+      await warmInBrowser(browser, routes, { baseUrl, viewport, log });
     }
-    browser = await loadChromium();
     const result = await sweep(plan, {
-      baseUrl, viewport, out, log, browser,
+      baseUrl, viewport, out, log, browser, pid: handle?.pid,
       checkTimeoutMs: Number(options['check-timeout'] ?? 180) * 1000,
       pageTimeoutMs: Number(options['page-timeout'] ?? 600) * 1000,
     });
