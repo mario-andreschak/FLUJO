@@ -230,9 +230,8 @@ function MessageList({
   return (
     <Box sx={{ display: 'grid', gap: 1.25 }}>
       {visible.map((message, index) => {
-        const record = message as unknown as Record<string, unknown>;
-        const id = typeof record.id === 'string' ? record.id : undefined;
-        const role = typeof record.role === 'string' ? record.role : 'unknown';
+        const id = 'id' in message && typeof message.id === 'string' ? message.id : undefined;
+        const role = 'role' in message && typeof message.role === 'string' ? message.role : 'unknown';
         const status = id ? statusById.get(id) : undefined;
         return (
           <Paper key={id ?? index} variant="outlined" sx={{ overflow: 'hidden' }}>
@@ -257,7 +256,7 @@ function MessageList({
               </Typography>
             </Box>
             <Divider />
-            <ModelTurnJsonPreview value={record} />
+            <ModelTurnJsonPreview value={message} />
           </Paper>
         );
       })}

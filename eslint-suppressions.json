@@ -438,32 +438,12 @@
       "count": 2
     }
   },
-  "src/frontend/components/Chat/DebuggerConversation.tsx": {
-    "flujo/no-double-cast": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/Chat/ModelTurnInspector.tsx": {
-    "flujo/no-double-cast": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/Chat/chatApiContent.ts": {
-    "flujo/no-double-cast": {
-      "count": 1
-    }
-  },
   "src/frontend/components/Chat/index.tsx": {
     "react-hooks/immutability": {
       "count": 3
     },
     "react-hooks/purity": {
       "count": 3
-    }
-  },
-  "src/frontend/components/Chat/mcpAppClient.ts": {
-    "flujo/no-double-cast": {
-      "count": 1
     }
   },
   "src/frontend/components/ClientOnly.tsx": {

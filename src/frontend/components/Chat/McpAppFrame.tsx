@@ -34,7 +34,7 @@ import type {
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import { mcpService } from '@/frontend/services/mcp';
-import { makeMcpAppClient } from './mcpAppClient';
+import { routeMcpAppRequests } from './mcpAppClient';
 import {
   MAX_UI_RESOURCE_BYTES,
   canonicalizeLoopbackCspOrigin,
@@ -1332,8 +1332,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
         });
       };
       const bridge = new AppBridge(
-        makeMcpAppClient(serverName, ownerScopeRef.current, revokeAccess, mcpService,
-          tool => log.info(`MCP App tools/call: ${serverName}/${tool}`)),
+        null,
         HOST_INFO,
         {
           openLinks: {},
@@ -1375,6 +1374,8 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
           },
         },
       );
+      routeMcpAppRequests(bridge, serverName, ownerScopeRef.current, revokeAccess, mcpService,
+        tool => log.info(`MCP App tools/call: ${serverName}/${tool}`));
       bridgeRef.current = bridge;
       const isActiveBridge = () => (
         isCurrentMount()

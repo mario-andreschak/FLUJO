@@ -6,7 +6,7 @@ import { TextDecoder, TextEncoder } from 'util';
 Object.assign(globalThis, { TextDecoder, TextEncoder });
 
 interface BridgeFixture {
-  client: { request: (request: unknown) => Promise<unknown> };
+  oncalltool?: (params: unknown, extra: { mcpReq: { signal?: AbortSignal } }) => Promise<unknown>;
   oninitialized?: () => void;
   close: jest.Mock;
   sendToolResult: jest.Mock;
@@ -32,7 +32,7 @@ jest.mock('@/frontend/services/mcp', () => ({
 }));
 jest.mock('@modelcontextprotocol/ext-apps/app-bridge', () => ({
   AppBridge: class {
-    client: BridgeFixture['client'];
+    oncalltool?: BridgeFixture['oncalltool'];
     oninitialized?: () => void;
     close = jest.fn(async () => undefined);
     sendToolInput = jest.fn(async () => undefined);
@@ -43,7 +43,7 @@ jest.mock('@modelcontextprotocol/ext-apps/app-bridge', () => ({
     teardownResource = jest.fn(async () => undefined);
     connect = jest.fn(async () => undefined);
     getAppCapabilities = () => ({ availableDisplayModes: ['inline', 'pip'] });
-    constructor(client: BridgeFixture['client']) { this.client = client; mockBridges.push(this); }
+    constructor() { mockBridges.push(this); }
   },
   PostMessageTransport: class {},
   buildAllowAttribute: () => '',
@@ -151,10 +151,10 @@ it('rebinds same-tool owner changes during initialization and overlapping teardo
   await act(async () => { first.oninitialized?.(); current.oninitialized?.(); });
   await waitFor(() => expect(current.sendToolResult).toHaveBeenCalledTimes(1));
   expect(first.sendToolResult).not.toHaveBeenCalled();
-  await current.client.request({
-    method: 'tools/call',
-    params: { name: 'browser_open', arguments: { sessionId: 'third-session' }, ownerScope: 'run:app-forged' },
-  });
+  await current.oncalltool?.(
+    { name: 'browser_open', arguments: { sessionId: 'third-session' }, ownerScope: 'run:app-forged' },
+    { mcpReq: {} },
+  );
   expect(mockCallToolFromApp).toHaveBeenLastCalledWith(
     'browser', 'browser_open', { sessionId: 'third-session' }, undefined, undefined, 'run:third',
   );
