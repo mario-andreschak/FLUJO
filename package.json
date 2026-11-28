@@ -81,7 +81,7 @@
     "lint:all": "eslint src __tests__ scripts --max-warnings=0",
     "lint:ratchet": "node scripts/check-lint-ratchet.mjs",
     "lint:prune": "eslint src __tests__ scripts --prune-suppressions",
-    "test:checks": "node --test tooling/eslint-plugin-flujo/rules.test.mjs scripts/check-lint-ratchet.test.mjs scripts/check-repo-hygiene.test.mjs scripts/check-feature-map.test.mjs scripts/check-corrections.test.mjs scripts/flujo-drive.test.mjs scripts/check-formal.test.mjs scripts/security-response-check.test.mjs scripts/collect-release-evidence.test.mjs scripts/first-journey/stub-model.test.mjs scripts/first-journey/run.test.mjs scripts/release-sweep/steps.test.mjs scripts/release-sweep/issues.test.mjs scripts/release-sweep/run.test.mjs scripts/smoke-file-locks.test.mjs scripts/contributor-guide.test.mjs scripts/run-tsc.test.mjs",
+    "test:checks": "node --test tooling/eslint-plugin-flujo/rules.test.mjs scripts/check-lint-ratchet.test.mjs scripts/check-repo-hygiene.test.mjs scripts/check-feature-map.test.mjs scripts/check-corrections.test.mjs scripts/flujo-drive.test.mjs scripts/check-formal.test.mjs scripts/security-response-check.test.mjs scripts/collect-release-evidence.test.mjs scripts/first-journey/stub-model.test.mjs scripts/first-journey/run.test.mjs scripts/release-sweep/steps.test.mjs scripts/release-sweep/issues.test.mjs scripts/release-sweep/run.test.mjs scripts/smoke-file-locks.test.mjs scripts/contributor-guide.test.mjs scripts/node-heap.test.mjs",
     "check:repo-hygiene": "node scripts/check-repo-hygiene.mjs",
     "check:feature-map": "node scripts/check-feature-map.mjs",
     "check:corrections": "node scripts/check-corrections.mjs",

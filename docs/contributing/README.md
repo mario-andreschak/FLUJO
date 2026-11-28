@@ -18,6 +18,10 @@ fixing this page is a welcome first pull request.
   that explains how to update.
 - **Git.**
 - About **2 GB of free disk space** (the installed packages take 1.4 GB).
+- About **8 GB of memory**. The type check and the app's first start each use
+  about 4 GB, more than Node.js allows itself on a computer with less than 16 GB.
+  `npm run typecheck` and the app launcher raise that limit to fit your computer,
+  so you do not need to set anything.
 
 Check what you have:
 
