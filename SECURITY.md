@@ -55,6 +55,11 @@ What happens next, and how fast, is written in
 These are targets, not a contract: no named human responder or trained backup
 exists yet, and no practice run of the full path has happened.
 
+Security responders: none named yet
+
+The release reassessment reads the line above after every release: it counts the
+GitHub handles on it (for example `@name`) and asks for a responder and a backup.
+
 In a private report include affected source commit and installed artifact/version,
 OS/install/exposure mode, prerequisites, a minimal sanitized reproduction,
 expected/observed behavior, impact, and any proposed fix. Use disposable fixtures.
@@ -66,3 +71,10 @@ advisory publication, affected-version guidance and release verification must
 identify their actual evidence. A passing scanner or source test is not a
 promise that a released artifact is unaffected. Historical audit findings and
 unresolved high-severity issues remain visible until remediation is verified.
+
+## Independent security review
+
+None yet. An outside threat-model review of an installed release, with zero open
+high or critical findings, is still missing ([#578](https://github.com/mario-andreschak/FLUJO/issues/578)).
+When one is published, add it here as a list item, `- [Reviewer, date](link to the
+report)`; the release reassessment looks for such an item after every release.

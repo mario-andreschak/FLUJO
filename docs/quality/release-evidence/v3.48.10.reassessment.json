@@ -1,0 +1,1748 @@
+{
+  "inputs": {
+    "schemaVersion": 1,
+    "assessedAt": "2026-11-28T02:06:52.662Z",
+    "command": "npm run reassess:release -- --evidence docs/quality/release-evidence/v3.48.10.json --source v3.48.10",
+    "source": {
+      "ref": "v3.48.10",
+      "commit": "174ffaf034532b1ec52e483724563309e1fc9693"
+    },
+    "evidence": {
+      "version": "3.48.10",
+      "tag": "v3.48.10",
+      "commit": "174ffaf034532b1ec52e483724563309e1fc9693",
+      "publishedAt": "2026-11-21T05:59:15Z",
+      "collectedAt": "2026-11-28T02:01:02.943Z",
+      "answersRecorded": true,
+      "secretsFound": [],
+      "checks": [
+        {
+          "id": "release",
+          "piece": "GitHub release",
+          "status": "ok",
+          "detail": "v3.48.10 published 2026-11-21 05:59 UTC."
+        },
+        {
+          "id": "source-commit",
+          "piece": "Exact commit and tree",
+          "status": "ok",
+          "detail": "Tag v3.48.10 points to commit 174ffaf0, tree ad155c3f."
+        },
+        {
+          "id": "source-main",
+          "piece": "Commit is on main",
+          "status": "ok",
+          "detail": "main contains the commit (36 newer commits since)."
+        },
+        {
+          "id": "source-version",
+          "piece": "package.json version",
+          "status": "ok",
+          "detail": "package.json at the commit says 3.48.10."
+        },
+        {
+          "id": "source-signature",
+          "piece": "Commit signature",
+          "status": "ok",
+          "detail": "GitHub shows the commit signature as verified (valid)."
+        },
+        {
+          "id": "ci-verify",
+          "piece": "CI: verify.yml",
+          "status": "ok",
+          "detail": "success (push); 12 of 13 jobs passed, skipped: diagnostic Persona memory profile (not release acceptance)."
+        },
+        {
+          "id": "ci-publish-npm",
+          "piece": "CI: publish-npm.yml",
+          "status": "ok",
+          "detail": "success (workflow_dispatch, attempt 3); 5 of 6 jobs passed, skipped: diagnose-oidc."
+        },
+        {
+          "id": "ci-publish-image",
+          "piece": "CI: publish-image.yml",
+          "status": "ok",
+          "detail": "success (workflow_dispatch); 3 of 3 jobs passed."
+        },
+        {
+          "id": "ci-installer",
+          "piece": "CI: installer.yml",
+          "status": "ok",
+          "detail": "success (workflow_dispatch, attempt 2); 8 of 9 jobs passed, skipped: Fresh Windows installer and first launch."
+        },
+        {
+          "id": "ci-verify-full",
+          "piece": "CI: verify-full.yml",
+          "status": "missing",
+          "detail": "Did not run on this commit; release-evidence.yml starts it after each release."
+        },
+        {
+          "id": "ci-scorecard-source",
+          "piece": "CI: scorecard-source.yml",
+          "status": "missing",
+          "detail": "Did not run on this commit; release-evidence.yml starts it after each release."
+        },
+        {
+          "id": "tests-ci",
+          "piece": "Tests: ci stage",
+          "status": "ok",
+          "detail": "13473 of 13486 tests passed in 1151 suites; 0 failed, 13 skipped; floor 12185 tests."
+        },
+        {
+          "id": "tests-isolated",
+          "piece": "Tests: isolated stage",
+          "status": "ok",
+          "detail": "206 of 206 tests passed in 16 suites; 0 failed, 0 skipped; floor 186 tests."
+        },
+        {
+          "id": "npm-registry",
+          "piece": "npm packages on the registry",
+          "status": "ok",
+          "detail": "All 5 packages exist at 3.48.10 with an integrity hash and 2+ registry signatures."
+        },
+        {
+          "id": "npm-provenance",
+          "piece": "npm provenance",
+          "status": "ok",
+          "detail": "All 5 packages carry npm provenance from publish-npm.yml naming commit 174ffaf0."
+        },
+        {
+          "id": "npm-bytes",
+          "piece": "npm tarball bytes",
+          "status": "ok",
+          "detail": "Downloaded all 5 tarballs (15357891 bytes); each matches its registry integrity hash."
+        },
+        {
+          "id": "npm-github-provenance",
+          "piece": "GitHub build record for npm bytes",
+          "status": "ok",
+          "detail": "GitHub holds a signed build record for each tarball, from publish-npm.yml at commit 174ffaf0."
+        },
+        {
+          "id": "npm-sbom-signed",
+          "piece": "npm dependency list (SBOM), signed",
+          "status": "ok",
+          "detail": "Signed CycloneDX 1.5 list for pkg:npm/flujo-ai@3.48.10, 1202 components."
+        },
+        {
+          "id": "npm-sbom-release",
+          "piece": "npm SBOM and checksums on the release page",
+          "status": "missing",
+          "detail": "Not attached: source-lock.sbom.cdx.json, release-evidence.json, SHA256SUMS. Releases made before the release workflow attached them (#565) keep them only in GitHub's signed store and the 30-day workflow artifact. The signed npm build record still names the SBOM's SHA-256 (9b069943a6b8...)."
+        },
+        {
+          "id": "image-digest",
+          "piece": "Docker image",
+          "status": "ok",
+          "detail": "3.48.10 and sha-174ffaf point to sha256:f7567006d333..."
+        },
+        {
+          "id": "image-provenance",
+          "piece": "Docker image build record",
+          "status": "ok",
+          "detail": "Signed build record from .github/workflows/publish-image.yml at refs/heads/main names commit 174ffaf0."
+        },
+        {
+          "id": "image-sbom",
+          "piece": "Docker image dependency list (SBOM), signed",
+          "status": "ok",
+          "detail": "Signed CycloneDX 1.6 list of the image's OS and installed packages, 10891 components."
+        },
+        {
+          "id": "installer-asset",
+          "piece": "Windows installer",
+          "status": "ok",
+          "detail": "flujo-setup.exe (2117273 bytes) matches installer-release-evidence.json and installer-SHA256SUMS."
+        },
+        {
+          "id": "installer-provenance",
+          "piece": "Windows installer build record",
+          "status": "ok",
+          "detail": "Signed build record from .github/workflows/installer.yml at refs/tags/v3.48.10 names commit 174ffaf0."
+        },
+        {
+          "id": "installer-code-signing",
+          "piece": "Windows code signing (Authenticode)",
+          "status": "missing",
+          "detail": "flujo-setup.exe has no Authenticode signature, so Windows shows its publisher as unknown. Its bytes are still covered by the signed build record and installer-SHA256SUMS."
+        },
+        {
+          "id": "alerts-code-scanning",
+          "piece": "Open code scanning alerts at release",
+          "status": "attention",
+          "detail": "68 open (3 critical, 28 high); 71 open on 2026-11-28."
+        },
+        {
+          "id": "alerts-dependabot",
+          "piece": "Open dependency alerts at release",
+          "status": "ok",
+          "detail": "13 open (0 critical, 0 high); 6 open on 2026-11-28."
+        }
+      ],
+      "runs": [
+        {
+          "path": ".github/workflows/verify.yml",
+          "conclusion": "success",
+          "failedJobs": []
+        },
+        {
+          "path": ".github/workflows/publish-npm.yml",
+          "conclusion": "success",
+          "failedJobs": []
+        },
+        {
+          "path": ".github/workflows/installer.yml",
+          "conclusion": "success",
+          "failedJobs": []
+        },
+        {
+          "path": ".github/workflows/publish-image.yml",
+          "conclusion": "success",
+          "failedJobs": []
+        }
+      ],
+      "alerts": {
+        "code-scanning": {
+          "atRelease": {
+            "critical": 3,
+            "high": 28,
+            "medium": 37,
+            "low": 0,
+            "total": 68,
+            "uncertain": 0
+          },
+          "now": {
+            "critical": 3,
+            "high": 29,
+            "medium": 39,
+            "low": 0,
+            "total": 71,
+            "uncertain": 0
+          }
+        },
+        "dependabot": {
+          "atRelease": {
+            "critical": 0,
+            "high": 0,
+            "medium": 12,
+            "low": 1,
+            "total": 13,
+            "uncertain": 0
+          },
+          "now": {
+            "critical": 0,
+            "high": 0,
+            "medium": 5,
+            "low": 1,
+            "total": 6,
+            "uncertain": 0
+          }
+        }
+      }
+    },
+    "files": {
+      "docsClaims": [
+        {
+          "id": "deferred-shared-team",
+          "file": "README.md",
+          "detail": "README.md does not say that shared or team use (several users on one FLUJO, #212) is not supported yet. Add one line that names the limit."
+        },
+        {
+          "id": "experimental-meetings",
+          "file": "docs/project-status.md",
+          "detail": "docs/project-status.md never marks Meetings as experimental. Add it to the status table with \"Experimental\"."
+        },
+        {
+          "id": "experimental-waves",
+          "file": "docs/project-status.md",
+          "detail": "docs/project-status.md never marks Waves as experimental. Add it to the status table with \"Experimental\"."
+        }
+      ],
+      "installedChecks": [
+        {
+          "form": "npm package",
+          "workflow": ".github/workflows/publish-npm.yml",
+          "present": false
+        },
+        {
+          "form": "Docker image",
+          "workflow": ".github/workflows/publish-image.yml",
+          "present": false
+        },
+        {
+          "form": "Windows installer",
+          "workflow": ".github/workflows/installer.yml",
+          "present": false
+        }
+      ],
+      "hotSpots": [
+        {
+          "file": "src/backend/execution/flow/runFlow.ts",
+          "planned": 3540,
+          "lines": 3852
+        },
+        {
+          "file": "src/backend/execution/flow/handlers/ModelHandler.ts",
+          "planned": 4375,
+          "lines": 5167
+        },
+        {
+          "file": "src/backend/services/mcp/index.ts",
+          "planned": 3577,
+          "lines": 4144
+        }
+      ],
+      "lintExceptions": null,
+      "triage": null,
+      "liveSpendLimitUsd": 0,
+      "statusPageCheckedOn": null,
+      "securityResponders": 0,
+      "independentSecurityReview": false,
+      "pilot": {
+        "testers": 0,
+        "weeks": 0,
+        "activeEveryWeek": 0,
+        "novices": 0,
+        "fastNovices": 0
+      },
+      "coreChanges": {
+        "since": "2026-08-30",
+        "commits": 297,
+        "outsideAuthors": 0
+      }
+    },
+    "facts": {
+      "criticalIssues": [],
+      "openCodeScanningAlerts": [
+        {
+          "created_at": "2026-11-25T14:39:41Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "__tests__/mcp/fixtures/trustedHostFingerprint.ts"
+            }
+          },
+          "number": 433,
+          "rule": {
+            "id": "js/file-system-race",
+            "security_severity_level": "high",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-11-25T14:05:27Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/check-formal.mjs"
+            }
+          },
+          "number": 432,
+          "rule": {
+            "id": "js/http-to-file-access",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-11-25T13:42:32Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "src/backend/services/model/adapters/claudeSessionPersistence.ts"
+            }
+          },
+          "number": 429,
+          "rule": {
+            "id": "js/insufficient-password-hash",
+            "security_severity_level": "high",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-11-25T11:10:02Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/flujo-drive.mjs"
+            }
+          },
+          "number": 427,
+          "rule": {
+            "id": "js/insecure-temporary-file",
+            "security_severity_level": "high",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-11-25T11:10:02Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/flujo-drive.mjs"
+            }
+          },
+          "number": 426,
+          "rule": {
+            "id": "js/insecure-temporary-file",
+            "security_severity_level": "high",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-11-25T11:10:02Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/flujo-drive.mjs"
+            }
+          },
+          "number": 425,
+          "rule": {
+            "id": "js/insecure-temporary-file",
+            "security_severity_level": "high",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-11-25T11:10:02Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/flujo-drive.mjs"
+            }
+          },
+          "number": 424,
+          "rule": {
+            "id": "js/file-access-to-http",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-11-20T21:25:20Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "src/backend/services/security/isolatedMcp.ts"
+            }
+          },
+          "number": 423,
+          "rule": {
+            "id": "js/remote-property-injection",
+            "security_severity_level": "high",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-11-20T21:25:20Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "src/backend/services/security/isolatedMcp.ts"
+            }
+          },
+          "number": 422,
+          "rule": {
+            "id": "js/command-line-injection",
+            "security_severity_level": "critical",
+            "severity": "error"
+          }
+        },
+        {
+          "created_at": "2026-11-20T21:25:20Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "src/backend/services/security/isolatedMcp.ts"
+            }
+          },
+          "number": 421,
+          "rule": {
+            "id": "js/command-line-injection",
+            "security_severity_level": "critical",
+            "severity": "error"
+          }
+        },
+        {
+          "created_at": "2026-11-20T21:25:20Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "src/backend/services/mcp/githubInstall.ts"
+            }
+          },
+          "number": 420,
+          "rule": {
+            "id": "js/command-line-injection",
+            "security_severity_level": "critical",
+            "severity": "error"
+          }
+        },
+        {
+          "created_at": "2026-11-20T21:25:20Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "src/backend/services/security/isolatedMcp.ts"
+            }
+          },
+          "number": 419,
+          "rule": {
+            "id": "js/insufficient-password-hash",
+            "security_severity_level": "high",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-11-14T03:56:12Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/flow-turn-benchmark.mjs"
+            }
+          },
+          "number": 418,
+          "rule": {
+            "id": "js/file-access-to-http",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-11-04T21:34:14Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "src/backend/execution/flow/nodes/StaticNode.ts"
+            }
+          },
+          "number": 415,
+          "rule": {
+            "id": "js/remote-property-injection",
+            "security_severity_level": "high",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-11-04T21:34:14Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "src/backend/execution/flow/nodes/StaticNode.ts"
+            }
+          },
+          "number": 414,
+          "rule": {
+            "id": "js/remote-property-injection",
+            "security_severity_level": "high",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-23T16:27:41Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "src/backend/services/workspace/migration.ts"
+            }
+          },
+          "number": 402,
+          "rule": {
+            "id": "js/file-system-race",
+            "security_severity_level": "high",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/smoke-operations-recovery.mjs"
+            }
+          },
+          "number": 401,
+          "rule": {
+            "id": "js/http-to-file-access",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/responses-live-state-acceptance.mjs"
+            }
+          },
+          "number": 400,
+          "rule": {
+            "id": "js/http-to-file-access",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/responses-compaction-capability.mjs"
+            }
+          },
+          "number": 399,
+          "rule": {
+            "id": "js/http-to-file-access",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/persona-goal-runtime-read-acceptance.mjs"
+            }
+          },
+          "number": 398,
+          "rule": {
+            "id": "js/http-to-file-access",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/meeting-transcript-browser-acceptance.mjs"
+            }
+          },
+          "number": 397,
+          "rule": {
+            "id": "js/http-to-file-access",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/compaction-semantic-acceptance.mjs"
+            }
+          },
+          "number": 396,
+          "rule": {
+            "id": "js/http-to-file-access",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/compaction-recovery-acceptance.mjs"
+            }
+          },
+          "number": 395,
+          "rule": {
+            "id": "js/http-to-file-access",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/compaction-recovery-acceptance.mjs"
+            }
+          },
+          "number": 394,
+          "rule": {
+            "id": "js/http-to-file-access",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/compaction-action-acceptance.mjs"
+            }
+          },
+          "number": 393,
+          "rule": {
+            "id": "js/http-to-file-access",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/compaction-action-acceptance.mjs"
+            }
+          },
+          "number": 392,
+          "rule": {
+            "id": "js/http-to-file-access",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/compaction-action-acceptance.mjs"
+            }
+          },
+          "number": 391,
+          "rule": {
+            "id": "js/http-to-file-access",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/codex-native-lifecycle-acceptance.mjs"
+            }
+          },
+          "number": 390,
+          "rule": {
+            "id": "js/http-to-file-access",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "src/backend/execution/flow/executionAuthority.ts"
+            }
+          },
+          "number": 389,
+          "rule": {
+            "id": "js/user-controlled-bypass",
+            "security_severity_level": "high",
+            "severity": "error"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "src/backend/execution/flow/executionAuthority.ts"
+            }
+          },
+          "number": 388,
+          "rule": {
+            "id": "js/user-controlled-bypass",
+            "security_severity_level": "high",
+            "severity": "error"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "src/backend/services/model/allowance/claudeAccount.ts"
+            }
+          },
+          "number": 387,
+          "rule": {
+            "id": "js/file-access-to-http",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/worker-phone-host.mjs"
+            }
+          },
+          "number": 386,
+          "rule": {
+            "id": "js/file-access-to-http",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/worker-phone-host.mjs"
+            }
+          },
+          "number": 385,
+          "rule": {
+            "id": "js/file-access-to-http",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "src/backend/services/model/adapters/codexContextUsage.ts"
+            }
+          },
+          "number": 384,
+          "rule": {
+            "id": "js/file-system-race",
+            "security_severity_level": "high",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/smoke-operations-recovery.mjs"
+            }
+          },
+          "number": 382,
+          "rule": {
+            "id": "js/file-system-race",
+            "security_severity_level": "high",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/responses-terminal-status-acceptance.mjs"
+            }
+          },
+          "number": 381,
+          "rule": {
+            "id": "js/file-system-race",
+            "security_severity_level": "high",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/operations-acceptance/worker-recovery.mjs"
+            }
+          },
+          "number": 380,
+          "rule": {
+            "id": "js/file-system-race",
+            "security_severity_level": "high",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/operations-acceptance/operator-upgrade.mjs"
+            }
+          },
+          "number": 379,
+          "rule": {
+            "id": "js/file-system-race",
+            "security_severity_level": "high",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/operations-acceptance/operator-upgrade.mjs"
+            }
+          },
+          "number": 378,
+          "rule": {
+            "id": "js/file-system-race",
+            "security_severity_level": "high",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/operations-acceptance/installation-restore.mjs"
+            }
+          },
+          "number": 377,
+          "rule": {
+            "id": "js/file-system-race",
+            "security_severity_level": "high",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/operations-acceptance/migration-recovery.mjs"
+            }
+          },
+          "number": 376,
+          "rule": {
+            "id": "js/file-system-race",
+            "security_severity_level": "high",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/operations-acceptance/installation-restore.mjs"
+            }
+          },
+          "number": 375,
+          "rule": {
+            "id": "js/file-system-race",
+            "security_severity_level": "high",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/operations-acceptance/build-evidence.mjs"
+            }
+          },
+          "number": 374,
+          "rule": {
+            "id": "js/file-system-race",
+            "security_severity_level": "high",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/operations-acceptance/build-evidence.mjs"
+            }
+          },
+          "number": 373,
+          "rule": {
+            "id": "js/file-system-race",
+            "security_severity_level": "high",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/operations-acceptance/build-evidence.mjs"
+            }
+          },
+          "number": 372,
+          "rule": {
+            "id": "js/file-system-race",
+            "security_severity_level": "high",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/compaction-recovery-acceptance.mjs"
+            }
+          },
+          "number": 371,
+          "rule": {
+            "id": "js/file-system-race",
+            "security_severity_level": "high",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "src/backend/services/mcp/connection.ts"
+            }
+          },
+          "number": 369,
+          "rule": {
+            "id": "js/insufficient-password-hash",
+            "security_severity_level": "high",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "src/backend/execution/flow/compaction/digest.ts"
+            }
+          },
+          "number": 368,
+          "rule": {
+            "id": "js/insufficient-password-hash",
+            "security_severity_level": "high",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "src/backend/execution/flow/compaction/digest.ts"
+            }
+          },
+          "number": 367,
+          "rule": {
+            "id": "js/insufficient-password-hash",
+            "security_severity_level": "high",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "src/backend/execution/flow/compaction/digest.ts"
+            }
+          },
+          "number": 366,
+          "rule": {
+            "id": "js/insufficient-password-hash",
+            "security_severity_level": "high",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/operations-acceptance/migration-equipment.test.mjs"
+            }
+          },
+          "number": 365,
+          "rule": {
+            "id": "js/bad-code-sanitization",
+            "security_severity_level": "medium",
+            "severity": "error"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/smoke-mcp-subscriptions.mjs"
+            }
+          },
+          "number": 364,
+          "rule": {
+            "id": "js/stack-trace-exposure",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/smoke-mcp-subscriptions.mjs"
+            }
+          },
+          "number": 363,
+          "rule": {
+            "id": "js/stack-trace-exposure",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/mcp-apps-browser-fixture.mjs"
+            }
+          },
+          "number": 362,
+          "rule": {
+            "id": "js/stack-trace-exposure",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/smoke-mcp-subscriptions.mjs"
+            }
+          },
+          "number": 361,
+          "rule": {
+            "id": "js/xss-through-exception",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/smoke-mcp-sampling.mjs"
+            }
+          },
+          "number": 360,
+          "rule": {
+            "id": "js/xss-through-exception",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-21T21:12:03Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/mcp-apps-browser-fixture.mjs"
+            }
+          },
+          "number": 359,
+          "rule": {
+            "id": "js/xss-through-exception",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-10T19:07:55Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/prompt-editor-browser-acceptance.mjs"
+            }
+          },
+          "number": 353,
+          "rule": {
+            "id": "js/http-to-file-access",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-10T03:42:37Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/calendar-browser-acceptance.mjs"
+            }
+          },
+          "number": 348,
+          "rule": {
+            "id": "js/http-to-file-access",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-03T23:48:24Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "src/backend/utils/packageRegistryClient.ts"
+            }
+          },
+          "number": 228,
+          "rule": {
+            "id": "js/file-access-to-http",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-03T23:48:24Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "src/backend/utils/packageRegistryClient.ts"
+            }
+          },
+          "number": 225,
+          "rule": {
+            "id": "js/file-access-to-http",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-03T23:48:24Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "src/backend/utils/packageRegistryClient.ts"
+            }
+          },
+          "number": 224,
+          "rule": {
+            "id": "js/file-access-to-http",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-03T23:48:24Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "src/backend/services/telemetry/index.ts"
+            }
+          },
+          "number": 222,
+          "rule": {
+            "id": "js/file-access-to-http",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-03T23:48:24Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "src/backend/services/ollama/index.ts"
+            }
+          },
+          "number": 221,
+          "rule": {
+            "id": "js/file-access-to-http",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-03T23:48:24Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "src/backend/services/ollama/index.ts"
+            }
+          },
+          "number": 220,
+          "rule": {
+            "id": "js/file-access-to-http",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-03T23:48:24Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "src/backend/services/model/testConnection.ts"
+            }
+          },
+          "number": 219,
+          "rule": {
+            "id": "js/file-access-to-http",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-03T23:48:24Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "src/backend/services/model/testConnection.ts"
+            }
+          },
+          "number": 218,
+          "rule": {
+            "id": "js/file-access-to-http",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-03T23:48:24Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "src/backend/services/model/testConnection.ts"
+            }
+          },
+          "number": 217,
+          "rule": {
+            "id": "js/file-access-to-http",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-03T23:48:24Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "scripts/persona-goal-acceptance/public-fixture-server.mjs"
+            }
+          },
+          "number": 145,
+          "rule": {
+            "id": "js/stack-trace-exposure",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-03T23:48:24Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "src/backend/services/runtimeEnvironment.ts"
+            }
+          },
+          "number": 137,
+          "rule": {
+            "id": "js/identity-replacement",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        },
+        {
+          "created_at": "2026-10-03T23:48:24Z",
+          "most_recent_instance": {
+            "location": {
+              "path": "src/backend/services/runtimeEnvironment.ts"
+            }
+          },
+          "number": 136,
+          "rule": {
+            "id": "js/identity-replacement",
+            "security_severity_level": "medium",
+            "severity": "warning"
+          }
+        }
+      ],
+      "mergeRules": {
+        "pullRequest": true,
+        "approvals": 0,
+        "requiredChecks": 0
+      },
+      "contributors": {
+        "since": "2026-08-30",
+        "mergedPullRequests": 429,
+        "outsideHumans": 1
+      },
+      "maintainers": {
+        "withWriteAccess": 2,
+        "outsideHumans": 0
+      }
+    },
+    "soak": null
+  },
+  "verdicts": {
+    "checks": [
+      {
+        "id": "evidence-revision-bound",
+        "question": "Is every piece of evidence tied to the one release commit?",
+        "kind": "source-check",
+        "status": "met",
+        "evidence": "The tag, the npm packages, the image and the installer all name commit 174ffaf0 in signed build records; nothing contradicts.",
+        "source": "release evidence page v3.48.10.md"
+      },
+      {
+        "id": "evidence-reproducible",
+        "question": "Can anyone rebuild the evidence page from saved answers?",
+        "kind": "source-check",
+        "status": "met",
+        "evidence": "Every answer the collector read is saved in v3.48.10.answers.json; a test rebuilds the page from it and fails on any hand edit.",
+        "source": "scripts/collect-release-evidence.test.mjs"
+      },
+      {
+        "id": "evidence-redacted",
+        "question": "Is the evidence free of keys, tokens and personal contact data?",
+        "kind": "source-check",
+        "status": "met",
+        "evidence": "No token, key, password, private key or e-mail address in the page, its JSON or its saved answers.",
+        "source": "findSecrets in scripts/collect-release-evidence.mjs"
+      },
+      {
+        "id": "critical-issues",
+        "question": "Is any issue marked critical still open?",
+        "kind": "source-check",
+        "status": "met",
+        "evidence": "No open issue carries \"!!!!---CRITICAL---!!!!\", \"priority: critical\", \"urgent\", \"vulnerability\".",
+        "source": "GitHub issues"
+      },
+      {
+        "id": "alerts-at-release",
+        "question": "Were critical or high security alerts open when the release shipped?",
+        "kind": "security-review",
+        "status": "not-met",
+        "evidence": "Code scanning: 3 critical and 28 high open at release; dependencies: 0 critical and 0 high.",
+        "source": "release evidence page v3.48.10.md, \"Security alerts\""
+      },
+      {
+        "id": "alerts-triaged",
+        "question": "Does every open critical or high alert have a fix or a written reason?",
+        "kind": "security-review",
+        "status": "not-met",
+        "evidence": "There is no alert-triage.json at the assessed commit, so open alerts have no written reasons.",
+        "source": "docs/security/alert-triage.json, npm run check:security-response"
+      },
+      {
+        "id": "docs-no-unsupported-claims",
+        "question": "Do README, project status and SECURITY.md avoid claims the evidence does not back, and still list every audited feature?",
+        "kind": "source-check",
+        "status": "met",
+        "evidence": "No unsupported claim, and all audited features are still listed.",
+        "source": "scripts/check-docs-claims.mjs"
+      },
+      {
+        "id": "docs-limits-visible",
+        "question": "Are experimental capabilities and unsupported profiles marked in README and project status?",
+        "kind": "source-check",
+        "status": "not-met",
+        "evidence": "README.md does not say that shared or team use (several users on one FLUJO, #212) is not supported yet. Add one line that names the limit. docs/project-status.md never marks Meetings as experimental. Add it to the status table with \"Experimental\". docs/project-status.md never marks Waves as experimental. Add it to the status table with \"Experimental\".",
+        "source": "scripts/check-docs-claims.mjs"
+      },
+      {
+        "id": "status-page-current",
+        "question": "Was the scorecard status page checked on or after the release date?",
+        "kind": "source-check",
+        "status": "not-met",
+        "evidence": "docs/quality/scorecard-status.md says \"Checked on unknown\"; the release was published 2026-11-21.",
+        "source": "docs/quality/scorecard-status.md"
+      },
+      {
+        "id": "release-ci",
+        "question": "Did the release workflows and source tests pass on the exact release commit?",
+        "kind": "source-check",
+        "status": "met",
+        "evidence": "CI: verify.yml: success (push); 12 of 13 jobs passed, skipped: diagnostic Persona memory profile (not release acceptance). CI: publish-npm.yml: success (workflow_dispatch, attempt 3); 5 of 6 jobs passed, skipped: diagnose-oidc. CI: publish-image.yml: success (workflow_dispatch); 3 of 3 jobs passed. CI: installer.yml: success (workflow_dispatch, attempt 2); 8 of 9 jobs passed, skipped: Fresh Windows installer and first launch. Tests: ci stage: 13473 of 13486 tests passed in 1151 suites; 0 failed, 13 skipped; floor 12185 tests. Tests: isolated stage: 206 of 206 tests passed in 16 suites; 0 failed, 0 skipped; floor 186 tests.",
+        "source": "release evidence page v3.48.10.md, \"CI on this exact commit\""
+      },
+      {
+        "id": "full-checks",
+        "question": "Did the full pull-request checks and scorecard source checks run on the release commit?",
+        "kind": "source-check",
+        "status": "not-met",
+        "evidence": "CI: verify-full.yml: Did not run on this commit; release-evidence.yml starts it after each release. CI: scorecard-source.yml: Did not run on this commit; release-evidence.yml starts it after each release.",
+        "source": ".github/workflows/release-evidence.yml starts both after each release"
+      },
+      {
+        "id": "provenance",
+        "question": "Do the npm packages, image and installer carry signed build records and dependency lists on the release page?",
+        "kind": "shipped-artifact",
+        "status": "not-met",
+        "evidence": "npm SBOM and checksums on the release page: Not attached: source-lock.sbom.cdx.json, release-evidence.json, SHA256SUMS. Releases made before the release workflow attached them (#565) keep them only in GitHub's signed store and the 30-day workflow artifact. The signed npm build record still names the SBOM's SHA-256 (9b069943a6b8...).",
+        "source": "release evidence page v3.48.10.md"
+      },
+      {
+        "id": "installer-code-signing",
+        "question": "Is the Windows installer code-signed (Authenticode)?",
+        "kind": "shipped-artifact",
+        "status": "not-met",
+        "evidence": "flujo-setup.exe has no Authenticode signature, so Windows shows its publisher as unknown. Its bytes are still covered by the signed build record and installer-SHA256SUMS.",
+        "source": "release evidence page v3.48.10.md"
+      },
+      {
+        "id": "installed-acceptance",
+        "question": "Did each shipped form (npm, image, installer) pass install, backup, restart, upgrade and restore checks in its release workflow?",
+        "kind": "shipped-artifact",
+        "status": "not-met",
+        "evidence": "npm package: .github/workflows/publish-npm.yml has no installed-artifact check at this commit; Docker image: .github/workflows/publish-image.yml has no installed-artifact check at this commit; Windows installer: .github/workflows/installer.yml has no installed-artifact check at this commit.",
+        "source": "scripts/packaged-acceptance.mjs in publish-npm.yml, publish-image.yml, installer.yml"
+      },
+      {
+        "id": "offline-soak",
+        "question": "Does the full 28-day offline Persona soak pass its validator on the assessed commit (append p95 < 150 ms, peak memory <= 768 MB, growth <= 256 MB)?",
+        "kind": "offline-simulation",
+        "status": "not-met",
+        "evidence": "No soak result for 174ffaf0.",
+        "source": "scripts/run-persona-soak.mjs, scripts/validate-persona-soak-artifacts.mjs"
+      },
+      {
+        "id": "live-runs",
+        "question": "Has a staged run with real models (bounded smoke, then 7 and 28 elapsed days) passed?",
+        "kind": "live-provider",
+        "status": "not-met",
+        "evidence": "No live run is recorded. The contract's spend limit for such runs is 0 USD, so none may start; Personas stay marked experimental (checked above).",
+        "source": "docs/quality/scorecard-foundation.json, budget live-spend"
+      },
+      {
+        "id": "pilot-weekly-users",
+        "question": "Do ten or more independent people use FLUJO every week for eight weeks?",
+        "kind": "human-study",
+        "status": "not-met",
+        "evidence": "The pilot sheets list 0 testers over 0 weeks; 0 used FLUJO in every week.",
+        "source": "docs/pilots/product-fit/tracking-sheet.csv"
+      },
+      {
+        "id": "pilot-first-run",
+        "question": "Do eight of ten new users finish a first model-plus-MCP run within 15 minutes without help?",
+        "kind": "human-study",
+        "status": "not-met",
+        "evidence": "The first-run sheet lists 0 new users; 0 finished within 15 minutes without help.",
+        "source": "docs/pilots/product-fit/first-run-sheet.csv"
+      },
+      {
+        "id": "outside-contributors",
+        "question": "Did three or more people outside the project get changes merged in the last 90 days?",
+        "kind": "human-study",
+        "status": "not-met",
+        "evidence": "429 pull requests merged since 2026-08-30; 1 by people outside the project (the owner, flujo-app and bots do not count).",
+        "source": "GitHub search: merged pull requests"
+      },
+      {
+        "id": "backup-maintainers",
+        "question": "Do two or more people besides the owner hold write access to maintain and release?",
+        "kind": "human-study",
+        "status": "not-met",
+        "evidence": "2 accounts can write; 0 are people besides the owner.",
+        "source": "GitHub collaborators"
+      },
+      {
+        "id": "second-human-core-change",
+        "question": "Did someone besides the owner and its agents change the execution or MCP core in the last 90 days?",
+        "kind": "human-study",
+        "status": "not-met",
+        "evidence": "297 commits changed src/backend/execution or src/backend/services/mcp since 2026-08-30; 0 came from someone outside the project.",
+        "source": "git log on the core paths"
+      },
+      {
+        "id": "security-responder",
+        "question": "Are a named security responder and a backup recorded?",
+        "kind": "human-study",
+        "status": "not-met",
+        "evidence": "SECURITY.md names 0 people besides the project's own accounts on its \"Security responders:\" line; a responder and a backup make two.",
+        "source": "SECURITY.md, line \"Security responders: @handle, @handle\""
+      },
+      {
+        "id": "independent-security-review",
+        "question": "Has an independent threat-model review with zero open high or critical findings been published?",
+        "kind": "security-review",
+        "status": "not-met",
+        "evidence": "SECURITY.md lists no independent security review.",
+        "source": "SECURITY.md, section \"Independent security review\""
+      },
+      {
+        "id": "merge-gate",
+        "question": "Do the merge rules on main stop a change whose checks fail?",
+        "kind": "source-check",
+        "status": "not-met",
+        "evidence": "main requires a pull request, 0 approvals and 0 passing checks.",
+        "source": "GitHub rules for main; docs/security/main-merge-rules.md"
+      },
+      {
+        "id": "hot-spots",
+        "question": "Are the hot-spot files the audit named no larger than when the split was planned?",
+        "kind": "source-check",
+        "status": "not-met",
+        "evidence": "runFlow.ts 3852 lines (planned at 3540), ModelHandler.ts 5167 lines (planned at 4375), index.ts 4144 lines (planned at 3577).",
+        "source": "scripts/release-reassessment.mjs HOT_SPOTS"
+      },
+      {
+        "id": "lint-exceptions",
+        "question": "Has the list of lint exceptions shrunk since it was introduced?",
+        "kind": "source-check",
+        "status": "not-met",
+        "evidence": "No eslint-suppressions.json at this commit; 802 on 2026-11-25.",
+        "source": "eslint-suppressions.json, npm run lint:ratchet"
+      },
+      {
+        "id": "shared-profile",
+        "question": "Does a shared or team profile pass two-user isolation and an independent security review?",
+        "kind": "security-review",
+        "status": "not-met",
+        "evidence": "Shared or team use is not supported: multi-user ownership is deferred (#212), and the docs say so (checked above).",
+        "source": "docs/project-status.md"
+      }
+    ],
+    "rows": [
+      {
+        "id": "product-fit",
+        "name": "Idea / product fit",
+        "audit": "A−",
+        "checks": [
+          "pilot-weekly-users",
+          "pilot-first-run",
+          "docs-no-unsupported-claims"
+        ],
+        "aMinusShown": false,
+        "verdict": "A− not confirmed: 2 of 3 checks not met"
+      },
+      {
+        "id": "feature-surface",
+        "name": "Feature surface",
+        "audit": "A−",
+        "checks": [
+          "installed-acceptance",
+          "release-ci",
+          "docs-no-unsupported-claims"
+        ],
+        "aMinusShown": false,
+        "verdict": "A− not confirmed: 1 of 3 checks not met"
+      },
+      {
+        "id": "engineering",
+        "name": "Engineering discipline",
+        "audit": "B+",
+        "checks": [
+          "release-ci",
+          "full-checks",
+          "provenance",
+          "merge-gate",
+          "alerts-triaged",
+          "security-responder"
+        ],
+        "aMinusShown": false,
+        "verdict": "Below A−: held at the audit grade B+ until every check is met"
+      },
+      {
+        "id": "code-health",
+        "name": "Code health",
+        "audit": "B−",
+        "checks": [
+          "hot-spots",
+          "lint-exceptions",
+          "second-human-core-change",
+          "critical-issues"
+        ],
+        "aMinusShown": false,
+        "verdict": "Below A−: held at the audit grade B− until every check is met"
+      },
+      {
+        "id": "security",
+        "name": "Security",
+        "audit": "C+",
+        "checks": [
+          "alerts-at-release",
+          "alerts-triaged",
+          "installer-code-signing",
+          "independent-security-review"
+        ],
+        "aMinusShown": false,
+        "verdict": "Below A−: held at the audit grade C+ until every check is met"
+      },
+      {
+        "id": "maturity",
+        "name": "Maturity / stability",
+        "audit": "C",
+        "checks": [
+          "offline-soak",
+          "installed-acceptance",
+          "live-runs",
+          "critical-issues"
+        ],
+        "aMinusShown": false,
+        "verdict": "Below A−: held at the audit grade C until every check is met"
+      },
+      {
+        "id": "community",
+        "name": "Community / bus factor",
+        "audit": "D",
+        "checks": [
+          "outside-contributors",
+          "backup-maintainers",
+          "second-human-core-change"
+        ],
+        "aMinusShown": false,
+        "verdict": "Below A−: held at the audit grade D until every check is met"
+      },
+      {
+        "id": "docs",
+        "name": "Docs honesty",
+        "audit": "A",
+        "checks": [
+          "docs-no-unsupported-claims",
+          "docs-limits-visible",
+          "status-page-current",
+          "evidence-revision-bound"
+        ],
+        "aMinusShown": false,
+        "verdict": "A not confirmed: 2 of 4 checks not met"
+      },
+      {
+        "id": "production",
+        "name": "Production readiness",
+        "audit": "C−",
+        "checks": [
+          "installed-acceptance",
+          "installer-code-signing",
+          "shared-profile"
+        ],
+        "aMinusShown": false,
+        "verdict": "Below A−: held at the audit grade C− until every check is met"
+      }
+    ],
+    "acceptance": [
+      {
+        "id": "evidence",
+        "text": "Evidence is reproducible, redacted, revision-bound and clearly separates source tests, shipped-artifact checks, simulations, live runs and human usability observations.",
+        "status": "met",
+        "checks": [
+          "evidence-reproducible",
+          "evidence-redacted",
+          "evidence-revision-bound"
+        ]
+      },
+      {
+        "id": "no-critical",
+        "text": "No open critical regression or unresolved high-severity finding exists within a claimed supported profile.",
+        "status": "not-met",
+        "checks": [
+          "critical-issues",
+          "alerts-at-release",
+          "alerts-triaged"
+        ]
+      },
+      {
+        "id": "nine-rows",
+        "text": "All nine scorecard dimensions are explicitly reassessed at A− or above; disagreements or unmet human/operational gates keep #563 open.",
+        "status": "not-met",
+        "detail": "0 of 9 rows show their A− criteria met."
+      },
+      {
+        "id": "preserved",
+        "text": "Product-fit/feature/docs grades are preserved without unsupported marketing claims or hidden scope reduction.",
+        "status": "met",
+        "checks": [
+          "docs-no-unsupported-claims"
+        ]
+      },
+      {
+        "id": "limits-visible",
+        "text": "Remaining experimental capabilities and deferred profiles are visible and accepted by the reviewer as consistent with the rubric.",
+        "status": "not-met",
+        "checks": [
+          "docs-limits-visible"
+        ]
+      }
+    ],
+    "scope": [
+      {
+        "id": "reconcile",
+        "text": "Reconcile source, npm/container/installer provenance, full CI and installed-artifact acceptance.",
+        "status": "not-met",
+        "checks": [
+          "release-ci",
+          "full-checks",
+          "provenance",
+          "installed-acceptance"
+        ]
+      },
+      {
+        "id": "soak",
+        "text": "The full offline soak and validator pass at the assessed revision with unchanged limits.",
+        "status": "not-met",
+        "checks": [
+          "offline-soak"
+        ]
+      },
+      {
+        "id": "live",
+        "text": "Stage live-provider acceptance from a bounded smoke to 7 and 28 elapsed days.",
+        "status": "not-met",
+        "checks": [
+          "live-runs"
+        ]
+      },
+      {
+        "id": "docs-current",
+        "text": "README, project status and security docs updated from the evidence.",
+        "status": "not-met",
+        "checks": [
+          "status-page-current",
+          "docs-limits-visible"
+        ]
+      }
+    ]
+  }
+}

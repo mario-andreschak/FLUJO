@@ -3,9 +3,9 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import {
-  EVIDENCE_DIRECTORY, SOURCE_METHODS, answersFile, collectReleaseEvidence, countOpenAlerts, decodeStatement, formatRecording,
-  liveSources, main, normalizeAlert, parseChecksums, recordingSources, renderEvidencePage, replaySources, summarizeJestResults,
-  summarizeStatement, withRetry,
+  EVIDENCE_DIRECTORY, SOURCE_METHODS, answersFile, authenticodeOf, collectReleaseEvidence, countOpenAlerts, decodeStatement, findSecrets,
+  formatRecording, liveSources, main, normalizeAlert, parseChecksums, recordingSources, renderEvidencePage, replaySources,
+  summarizeJestResults, summarizeStatement, withRetry,
 } from './collect-release-evidence.mjs';
 
 // The recorded answers for 3.48.10 are the fixture: they were read from GitHub,
@@ -56,7 +56,8 @@ test('3.48.10 is tied to one commit and tree, with signed builds for npm, image 
   assert.equal(check(evidence, 'npm-sbom-release').status, 'missing', 'this release predates attaching the SBOM to the release page');
   assert.match(check(evidence, 'npm-sbom-release').detail, /signed npm build record still names the SBOM/);
   assert.equal(check(evidence, 'ci-verify-full').status, 'missing');
-  assert.equal(check(evidence, 'installer-code-signing').status, 'not-checked');
+  assert.equal(check(evidence, 'installer-code-signing').status, 'missing', 'the 3.48.10 installer carries no Authenticode signature');
+  assert.match(check(evidence, 'installer-code-signing').detail, /no Authenticode signature/);
   assert.ok(evidence.tests.find((stage) => stage.stage === 'ci').tests.total >= 12_185);
   assert.equal(evidence.npm.length, 5);
   assert.deepEqual(evidence.readErrors, []);
@@ -304,4 +305,56 @@ test('live sources only read: GitHub through gh GET calls, the registries throug
     for (const flag of ['-X', '--method', '-f', '-F', '--field', '--raw-field', '--input']) assert.ok(!rest.includes(flag), `gh ${sub} ${flag}`);
   }
   assert.ok(requests.every(([method]) => ['GET', 'HEAD'].includes(method)));
+});
+
+test('committed evidence never holds a key, token, password or e-mail address', () => {
+  for (const file of readdirSync(directory).filter((name) => /^v\d+\.\d+\.\d+\./.test(name))) {
+    assert.deepEqual(findSecrets(readFileSync(`${directory}${file}`, 'utf8')), [], file);
+  }
+  assert.deepEqual(findSecrets(`token ghp_${'a'.repeat(36)} and someone@example.org`), ['GitHub token', 'e-mail address']);
+  assert.deepEqual(findSecrets('flujo-ai@3.48.10.tgz by 1+flujo-app@users.noreply.github.com'), []);
+});
+
+test('the collector refuses to write evidence that would publish a secret', async () => {
+  const answers = answersWith((value) => { value['commit("174ffaf034532b1ec52e483724563309e1fc9693")'].value.subject = 'Bump (owner@example.org)'; });
+  const leaked = `${directory}../../../.tmp-evidence-secret.answers.json`;
+  const { writeFileSync, rmSync } = await import('node:fs');
+  writeFileSync(leaked, formatRecording({ ...recording, answers }));
+  try {
+    await assert.rejects(main(['--version', '3.48.10', '--replay', leaked], { log: () => {} }), /Refusing to publish evidence that contains: e-mail address/);
+  } finally {
+    rmSync(leaked, { force: true });
+  }
+});
+
+test('the Authenticode slot of a Windows program is read without Windows', () => {
+  const program = (certificate) => {
+    const bytes = Buffer.alloc(0x400);
+    bytes.writeUInt16LE(0x5a4d, 0);
+    bytes.writeUInt32LE(0x80, 0x3c);
+    bytes.writeUInt32LE(0x00004550, 0x80);
+    bytes.writeUInt16LE(0x10b, 0x80 + 24);
+    if (certificate) {
+      const slot = 0x80 + 24 + 96 + 32;
+      bytes.writeUInt32LE(0x300, slot);
+      bytes.writeUInt32LE(0x40, slot + 4);
+      bytes.writeUInt16LE(0x0002, 0x300 + 6);
+    }
+    return bytes;
+  };
+  assert.deepEqual(authenticodeOf(program(false)), { portableExecutable: true, signed: false, certificateBytes: 0 });
+  assert.deepEqual(authenticodeOf(program(true)), { portableExecutable: true, signed: true, certificateBytes: 0x40 });
+  assert.deepEqual(authenticodeOf(Buffer.from('not a program')), { portableExecutable: false, signed: false, certificateBytes: 0 });
+});
+
+test('a signed installer is OK; an installer that cannot be downloaded is not checked', async () => {
+  const signed = await collect(answersWith((answers) => {
+    answers['installerSignature("v3.48.10","flujo-setup.exe")'].value = { portableExecutable: true, signed: true, certificateBytes: 9000 };
+  }));
+  assert.equal(check(signed, 'installer-code-signing').status, 'ok');
+  const unread = await collect(answersWith((answers) => {
+    answers['installerSignature("v3.48.10","flujo-setup.exe")'] = { error: 'release download answered HTTP 502' };
+  }));
+  assert.equal(check(unread, 'installer-code-signing').status, 'not-checked');
+  assert.match(check(unread, 'installer-code-signing').detail, /HTTP 502/);
 });
