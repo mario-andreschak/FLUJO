@@ -259,6 +259,7 @@ export const RELEASE_GATE_EXCEPTIONS = Object.freeze({
   'pages.yml/deploy': 'Publishes the project website from main; it is not a downloadable release.',
   'publish-cloud-worker.yml/publish': 'Advances the separate cloud-worker channel after smoke-testing the exact image it pushes; it is not a release.',
   'publish-npm.yml/diagnose-oidc': 'Only checks the npm trusted-publisher token exchange; it never publishes.',
+  'release-evidence.yml/attach': 'Adds read-only evidence and reassessment pages to a release that already exists; it publishes no installable file.',
 });
 
 /**

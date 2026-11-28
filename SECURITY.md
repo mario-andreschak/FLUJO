@@ -76,5 +76,6 @@ unresolved high-severity issues remain visible until remediation is verified.
 
 None yet. An outside threat-model review of an installed release, with zero open
 high or critical findings, is still missing ([#578](https://github.com/mario-andreschak/FLUJO/issues/578)).
-When one is published, add it here as a list item, `- [Reviewer, date](link to the
-report)`; the release reassessment looks for such an item after every release.
+When one is published, add it here as a list item that links the report, in the
+form `- [Reviewer, date](https://...)`. The release reassessment looks for such an
+item after every release.

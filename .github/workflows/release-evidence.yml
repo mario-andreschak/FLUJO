@@ -123,10 +123,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 330
     permissions:
-      contents: write
+      contents: read
       actions: read
       security-events: read
       issues: read
+    outputs:
+      written: ${{ steps.reassess.outputs.written }}
     env:
       GH_TOKEN: ${{ github.token }}
       VERSION: ${{ needs.release.outputs.version }}
@@ -157,20 +159,14 @@ jobs:
           echo "code=$?" >> "$GITHUB_OUTPUT"
           test -f "$OUT/v$VERSION.json"
       - name: Reassess the release
+        id: reassess
         run: |
           OUT="$RUNNER_TEMP/release-evidence"
           mkdir -p "$RUNNER_TEMP/persona-soak"
           node scripts/release-reassessment.mjs --evidence "$OUT/v$VERSION.json" --source "$COMMIT" \
             --soak "$RUNNER_TEMP/persona-soak" --out "$OUT"
           cat "$OUT/v$VERSION.reassessment.md" >> "$GITHUB_STEP_SUMMARY"
-      - name: Attach the pages to the release
-        run: |
-          OUT="$RUNNER_TEMP/release-evidence"
-          gh release upload "v$VERSION" --repo "$GITHUB_REPOSITORY" --clobber \
-            "$OUT/v$VERSION.md#Release evidence (page)" "$OUT/v$VERSION.json#Release evidence (data)" \
-            "$OUT/v$VERSION.answers.json#Release evidence (saved answers)" \
-            "$OUT/v$VERSION.reassessment.md#Release reassessment (page)" \
-            "$OUT/v$VERSION.reassessment.json#Release reassessment (data)"
+          echo "written=true" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
@@ -182,3 +178,29 @@ jobs:
         env:
           COLLECT_CODE: ${{ steps.collect.outputs.code }}
         run: test "$COLLECT_CODE" = 0
+
+  # Only this job may write, and it only adds the five pages to the release that already exists.
+  attach:
+    needs: [release, reassess]
+    if: always() && needs.reassess.outputs.written == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.release.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: release-evidence-${{ needs.release.outputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-evidence
+      - name: Attach the evidence and reassessment pages to the release
+        run: |
+          OUT="$RUNNER_TEMP/release-evidence"
+          gh release upload "v$VERSION" --repo "$GITHUB_REPOSITORY" --clobber \
+            "$OUT/v$VERSION.md#Release evidence (page)" "$OUT/v$VERSION.json#Release evidence (data)" \
+            "$OUT/v$VERSION.answers.json#Release evidence (saved answers)" \
+            "$OUT/v$VERSION.reassessment.md#Release reassessment (page)" \
+            "$OUT/v$VERSION.reassessment.json#Release reassessment (data)"

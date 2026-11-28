@@ -184,7 +184,7 @@ test('the release evidence workflow runs after every npm release and needs nobod
   const workflow = parse(readFileSync(new URL('../.github/workflows/release-evidence.yml', import.meta.url), 'utf8'));
   assert.deepEqual(workflow.on.workflow_run, { workflows: ['Publish npm release'], types: ['completed'] });
   assert.deepEqual(workflow.permissions, { contents: 'read' });
-  const { release, soak, reassess } = workflow.jobs;
+  const { release, soak, reassess, attach } = workflow.jobs;
   const text = (job) => job.steps.map((step) => `${step.run ?? ''} ${JSON.stringify(step.with ?? {})}`).join('\n');
   assert.match(text(release), /gh workflow run "\$workflow" --repo "\$GITHUB_REPOSITORY" --ref "v\$VERSION"/);
   assert.match(text(release), /verify-full\.yml scorecard-source\.yml/);
@@ -194,8 +194,13 @@ test('the release evidence workflow runs after every npm release and needs nobod
   assert.match(text(reassess), /wait-for-release-checks\.mjs --commit "\$COMMIT"/);
   assert.match(text(reassess), /collect-release-evidence\.mjs --version "\$VERSION"/);
   assert.match(text(reassess), /release-reassessment\.mjs --evidence "\$OUT\/v\$VERSION\.json" --source "\$COMMIT"/);
-  assert.match(text(reassess), /gh release upload "v\$VERSION"/);
-  assert.deepEqual(Object.keys(reassess.permissions).sort(), ['actions', 'contents', 'issues', 'security-events']);
+  assert.equal(reassess.permissions.contents, 'read', 'the reviewer itself can change nothing');
+  assert.match(text(attach), /gh release upload "v\$VERSION"/);
+  assert.deepEqual(attach.permissions, { contents: 'write', actions: 'read' });
+  assert.equal(attach.steps.length, 2, 'the writing job only downloads the pages and attaches them');
+  for (const [id, job] of Object.entries(workflow.jobs)) {
+    if (id !== 'attach') assert.notEqual(job.permissions?.contents, 'write', `${id} must not write`);
+  }
   for (const job of Object.values(workflow.jobs)) {
     for (const step of job.steps) if (step.uses) assert.match(step.uses, /@[0-9a-f]{40} ?$|@[0-9a-f]{40}$/, `${step.uses} is pinned to a commit`);
   }
