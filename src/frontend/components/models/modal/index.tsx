@@ -422,6 +422,10 @@ export const ModelModal = ({ open, model, onSave, onClose, onReload }: ModelModa
   if (currentProfile.id === 'codex' && discoveredEfforts?.length) {
     configurationCapabilities.effortLevels = discoveredEfforts as NonNullable<typeof configurationCapabilities.effortLevels>;
   }
+  // Codex lists each model's speed tiers; offer Fast exactly where it does.
+  if (currentProfile.id === 'codex' && listedModel?.serviceTiers) {
+    configurationCapabilities.priority = listedModel.serviceTiers.includes('priority');
+  }
   // `agy models` lists every level a model offers; the CLI refuses any other.
   if (currentProfile.adapter === 'antigravity-cli' && listedModel && configurationCapabilities.effortLevels) {
     const offered = configurationCapabilities.effortLevels.filter(level => discoveredEfforts?.includes(level));

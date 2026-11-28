@@ -71,6 +71,14 @@ it('accepts future IDs and advertised capabilities, drops hidden/invalid models 
   ]);
 });
 
+it('keeps the speed tiers each model lists, so Fast is offered only where Codex offers it', () => {
+  expect(normalizeCodexModels([
+    { model: 'fast-capable', serviceTiers: [{ id: 'priority', name: 'Fast', description: '1.5x speed' }, { id: 'Bad Tier' }, null] },
+    { model: 'standard-only', serviceTiers: [] },
+    { model: 'older-cli' },
+  ]).map(row => [row.id, row.serviceTiers])).toEqual([['fast-capable', ['priority']], ['standard-only', []], ['older-cli', undefined]]);
+});
+
 it('uses the CLI runtime window and effective percentage, with direct catalogue metadata taking precedence', () => {
   const rows = normalizeCodexModels([{ model: 'gpt-6-luna' }, { model: 'future', contextWindow: 2_000_000 }], [
     { slug: 'gpt-6-luna', context_window: 272_000, effective_context_window_percent: 95 },

@@ -131,6 +131,8 @@ export interface NormalizedModel {
   name: string;
   /** Account/client-advertised reasoning options. */
   reasoningEfforts?: string[];
+  /** Codex speed tiers the model lists (for example `priority`, shown as Fast). */
+  serviceTiers?: string[];
   description?: string;
   /** Provider-advertised input context limit, in tokens. */
   contextWindow?: number;

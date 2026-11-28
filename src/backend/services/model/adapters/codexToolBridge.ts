@@ -54,8 +54,9 @@ export async function startCodexToolBridge(
   const token = randomBytes(16).toString('hex');
   const path = `/mcp/${token}`;
   let boundNativeThreadId: string | undefined;
+  const active = new Set<AbortController>();
 
-  const buildServer = (): Server => {
+  const buildServer = (requestSignal: AbortSignal): Server => {
     const server = new Server(
       { name: 'flujo', version: '1.0.0' },
       { capabilities: { tools: {} }, ...(instructions ? { instructions } : {}) },
@@ -69,7 +70,7 @@ export async function startCodexToolBridge(
         ...(t.annotations ? { annotations: t.annotations } : {}),
       })),
     }));
-    server.setRequestHandler(CallToolRequestSchema, async (req): Promise<CallToolResult> => {
+    server.setRequestHandler(CallToolRequestSchema, async (req, extra): Promise<CallToolResult> => {
       const tool = tools.find(t => t.name === req.params.name);
       if (!tool) {
         return { content: [{ type: 'text', text: `Unknown tool: ${req.params.name}` }], isError: true };
@@ -88,7 +89,7 @@ export async function startCodexToolBridge(
           else boundNativeThreadId = meta!.threadId as string;
         }
         return await tool.handler((req.params.arguments ?? {}) as Record<string, unknown>,
-          requireStableToolIds ? semanticId : undefined);
+          requireStableToolIds ? semanticId : undefined, AbortSignal.any([extra.signal, requestSignal]));
       } catch (err) {
         // Surface handler failures as tool errors instead of a JSON-RPC fault,
         // so the model can react to them like any other failed call.
@@ -108,8 +109,14 @@ export async function startCodexToolBridge(
       return;
     }
     // Stateless MCP per request (same pattern as /mcp-proxy): a fresh
-    // Server+transport pair, torn down when the response settles.
-    const server = buildServer();
+    // Server+transport pair, torn down when the response settles. When Codex
+    // goes away before the answer (cancelled, stopped, lost connection) or
+    // the bridge closes, the tool call is told through its signal.
+    const request = new AbortController();
+    const abandon = () => { if (!res.writableFinished) request.abort(); };
+    res.once('close', abandon);
+    active.add(request);
+    const server = buildServer(request.signal);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
@@ -138,6 +145,8 @@ export async function startCodexToolBridge(
         res.end(JSON.stringify({ error: 'Internal bridge error.' }));
       }
     } finally {
+      active.delete(request);
+      res.off('close', abandon);
       try { await transport.close(); } catch { /* already closed */ }
       try { await server.close(); } catch { /* already closed */ }
     }
@@ -164,6 +173,7 @@ export async function startCodexToolBridge(
     },
     close: () =>
       new Promise<void>((resolve) => {
+        for (const request of active) request.abort();
         // Sever keep-alive connections too, or close() waits for the (dead)
         // codex subprocess's sockets to time out.
         httpServer.closeAllConnections?.();
