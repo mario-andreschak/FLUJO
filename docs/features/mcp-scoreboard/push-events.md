@@ -36,7 +36,7 @@ extension, on by default in the normal automation editor.
 | Capability negotiation | Reads `capabilities.extensions["io.modelcontextprotocol/events"]` (and earlier draft keys); declares itself in each request's `_meta` | `serverSupportsEvents` in `src/backend/services/mcp/serverEvents.ts` | `__tests__/mcp/mcpEventsPushPoll.test.ts`, `__tests__/scheduler/mcpEventsDraft.test.ts` |
 | Mode choice by the client | Picks push, then poll, then webhook from each event's `delivery` list; the user can change it | `preferredMcpEventDelivery` in `src/shared/types/plannedExecution/plannedExecution.ts`, `McpEventPanel.tsx` | `__tests__/mcp/mcpEventsPushPoll.test.ts` |
 | Resume and dedup | Saves the cursor per subscription after acceptance (and from heartbeats, `active`, subscribe answers); dedups by `eventId` | `resumeCursor`, `withEventCursor`, `admitMcpEvents` in `mcpEventDelivery.ts` | `__tests__/scheduler/mcpEventPushPollTriggers.test.ts`, `__tests__/scheduler/mcpEventSchedulerLifecycle.test.ts` |
-| Liveness and reconnect | Dead after three silent heartbeats; reconnect with random jitter and growing waits; heals on the next success | `armMcpEventStream` | `__tests__/scheduler/mcpEventPushPollTriggers.test.ts` |
+| Liveness and reconnect | Dead after three silent heartbeats; reconnect with random jitter and growing waits; heals on the next success; a connection that stopped answering is replaced | `armMcpEventStream`, `src/backend/services/mcp/liveConnection.ts` | `__tests__/scheduler/mcpEventPushPollTriggers.test.ts`, `__tests__/mcp/realEventSource.test.ts` (a separate server process, killed, restarted and hung) |
 | Streamable HTTP routing headers | `Mcp-Name` and `Mcp-Param-*` from `x-mcp-header` (Base64 form when needed); invalid annotations leave the event out of the list | `eventRequestHeaders`, `eventHeaderDeclarations` in `serverEvents.ts` | `__tests__/mcp/mcpEventsPushPoll.test.ts` |
 | Payloads are untrusted | Event content reaches the model only inside the labelled untrusted data block, also when steered into a chat | `composeTriggerPrompt` in `src/backend/services/scheduler/triggerPrompt.ts` | `__tests__/scheduler/mcpEventSteering.test.ts` |
 | Not experimental | Available to everyone in **Automations → A tool server reports an event**; no feature switch | `src/frontend/components/PlannedExecutions/McpEventPanel.tsx` | `__tests__/scheduler/mcpEventSchedulerLifecycle.test.ts` |
@@ -55,6 +55,4 @@ User guide: [docs/features/mcp-events.md](../mcp-events.md).
 
 ## Still to do by a person
 
-- Try push and poll with a real third-party server that implements the Beta extension, once
-  one is published (the tests use servers built on the official SDK).
 - FLUJO is not listed on ismcpgoodyet.com. Asking the maintainers to add it is Mario's call.
