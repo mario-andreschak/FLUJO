@@ -83,7 +83,7 @@ const writeChains = new Map<string, Promise<unknown>>();
  * unreadable inbox for an empty one and saves over every other entry.
  */
 async function loadForChange(): Promise<PendingApprovalsFile> {
-  const file = await retryTransientFileOperation(() => loadItem<PendingApprovalsFile>(KEY, {}));
+  const file = await retryTransientFileOperation(() => loadItem<PendingApprovalsFile>(KEY, {}), { label: 'pending-approvals-read' });
   return file && typeof file === 'object' ? file : {};
 }
 
@@ -105,7 +105,7 @@ async function mutate(change: (file: PendingApprovalsFile) => boolean): Promise<
       const file = await loadForChange();
       if (!change(file)) return;
       await lock.assertOwned();
-      await retryTransientFileOperation(() => saveItem(KEY, file));
+      await retryTransientFileOperation(() => saveItem(KEY, file), { label: 'pending-approvals-save' });
     });
   });
   const run = (writeChains.get(workspace) ?? Promise.resolve())

@@ -120,6 +120,44 @@ tester.run('no-adhoc-startup-error-match', rules['no-adhoc-startup-error-match']
   ],
 });
 
+tester.run('no-hand-rolled-file-retry', rules['no-hand-rolled-file-retry'], {
+  valid: [
+    "await retryTransientFileOperation(() => fs.readFile(file, 'utf8'), { label: 'storage-read' });",
+    "await replaceFileWithRetry(temporary, target, { label: 'workspace-metadata-replace' });",
+    // Telling the user a folder is not readable is not a retry.
+    "try { await fs.readdir(dir); } catch (error) { if (error.code === 'EACCES' || error.code === 'EPERM') return forbidden(); }",
+    // A live process the caller may not signal is still alive.
+    "function alive(pid) { try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } }",
+    // Renaming a directory onto an existing one fails with EPERM on Windows: a collision, not a lock.
+    "while (true) { try { await fs.rename(candidate, lock); return; } catch (error) { if (!['EEXIST', 'ENOTEMPTY', 'EPERM', 'EACCES'].includes(error.code)) throw error; } await wait(); }",
+    // A loop over directory entries that skips unreadable ones.
+    "for (const name of names) { try { await read(name); } catch (error) { if (error.code === 'EACCES') continue; throw error; } }",
+    // A function defined inside a loop is not part of that loop's retry.
+    "for (let i = 0; i < 3; i++) { handlers.push(() => { try { stop(); } catch (error) { return error.code === 'EPERM'; } }); }",
+  ],
+  invalid: [
+    { code: "const RETRYABLE = new Set(['EPERM', 'EACCES', 'EBUSY']);", errors: [{ messageId: 'retryCode', data: { code: 'EBUSY' } }] },
+    { code: "if (code === `EMFILE`) await sleep(10);", errors: [{ messageId: 'retryCode', data: { code: 'EMFILE' } }] },
+    { code: "type Busy = 'EAGAIN';", errors: [{ messageId: 'retryCode', data: { code: 'EAGAIN' } }] },
+    {
+      code: "for (let attempt = 0; ; attempt++) { try { await fs.rename(a, b); break; } catch (error) { if (attempt >= 14 || !['EPERM', 'EACCES'].includes(error.code)) throw error; await sleep(5); } }",
+      errors: [{ messageId: 'retryLoop' }],
+    },
+    {
+      code: "while (true) { try { return await fs.unlink(file); } catch (error) { if (error.code !== 'EPERM') throw error; await delay(25); } }",
+      errors: [{ messageId: 'retryLoop' }],
+    },
+    {
+      code: "do { try { return JSON.parse(await fs.readFile(file, 'utf8')); } catch (error) { if (!isTransientFileError(error)) throw error; } await sleep(50); } while (tries++ < 3);",
+      errors: [{ messageId: 'retryLoop' }],
+    },
+    {
+      code: "for (let attempt = 0; attempt < 5; attempt++) { try { await fs.rm(dir, { recursive: true }); return; } catch (error) { if (error.code === 'EBUSY' || error.code === 'EPERM') continue; throw error; } }",
+      errors: [{ messageId: 'retryLoop' }, { messageId: 'retryCode', data: { code: 'EBUSY' } }],
+    },
+  ],
+});
+
 tester.run('single-tool-approval-gate', rules['single-tool-approval-gate'], {
   valid: [
     'const on = requireApprovalOf(state.requireApproval);',

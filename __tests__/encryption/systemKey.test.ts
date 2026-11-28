@@ -347,6 +347,24 @@ describe('Settings route for the recovery key', () => {
     expect((await route.POST(remote)).status).toBe(403);
   });
 
+  it('remembers the saved recovery key while a reader briefly holds the key record', async () => {
+    const fake = fakeStore();
+    const { secure, systemKey } = await modules(fake.store);
+    await secure.encryptWithPassword('sk-held-record');
+    const realRename = fs.rename.bind(fs);
+    let held = 0;
+    jest.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (String(to).endsWith('system-key.json') && held < 3) {
+        held += 1;
+        throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
+      }
+      return realRename(from, to);
+    });
+    await expect(systemKey.markRecoveryKeySaved()).resolves.toBe(true);
+    expect(held).toBe(3);
+    expect(typeof (await record()).recoveryKeySavedAt).toBe('number');
+  });
+
   it('refuses while the credentials are locked', async () => {
     const fake = fakeStore();
     const first = await modules(fake.store);

@@ -4,6 +4,7 @@ import { getHeapStatistics } from 'node:v8';
 import { pendingAllocationBytes, setAllocationReservation } from './allocationReservations';
 import { getFlowRunAdmissionDiagnostics } from './runAdmission';
 import { ConversationPublicationError, isConversationPublicationError } from './conversationPublicationError';
+import { fileErrorCode, isTransientFileError, retryTransientFileOperation } from '@/utils/transientFileRetry';
 export { ConversationPublicationError, isConversationPublicationError } from './conversationPublicationError';
 
 const MiB = 1024 * 1024;
@@ -305,7 +306,8 @@ export async function flushConversationPublication(key: string): Promise<void> {
   if (fence) throw fence;
 }
 
-const TRANSIENT_ERRNO = new Set(['EBUSY', 'EPERM', 'EACCES', 'EAGAIN', 'EMFILE', 'ENFILE', 'ETIMEDOUT', 'EIO', 'ENOSPC']);
+/** Beyond short-lived file locks: a slow network drive, a flaky disk, a disk that is briefly full. */
+const PRESSURE_ERRNO = new Set(['ETIMEDOUT', 'EIO', 'ENOSPC']);
 const TRANSIENT_NAMES = new Set(['PersonaRuntimeLockTimeoutError', 'WorkspaceSnapshotTimeoutError']);
 export const CONVERSATION_PUBLICATION_RETRY_DELAYS_MS: readonly number[] = Object.freeze([100, 300, 900]);
 
@@ -313,7 +315,7 @@ function transientPublicationFailure(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   if (TRANSIENT_NAMES.has(error.name)) return true;
   if (isConversationPublicationError(error)) return error.code !== 'CONVERSATION_PUBLICATION_DATA';
-  return TRANSIENT_ERRNO.has((error as NodeJS.ErrnoException).code ?? '');
+  return isTransientFileError(error) || PRESSURE_ERRNO.has(fileErrorCode(error) ?? '');
 }
 
 /**
@@ -322,15 +324,10 @@ function transientPublicationFailure(error: unknown): boolean {
  * Each attempt starts as a clean transaction: the log writer rolls back or
  * newline-terminates a partial append, so a retry never concatenates onto it.
  */
-export async function retryConversationPublication<T>(attempt: () => Promise<T>): Promise<T> {
-  for (let tries = 0; ; tries++) {
-    try { return await attempt(); }
-    catch (error) {
-      const delay = CONVERSATION_PUBLICATION_RETRY_DELAYS_MS[tries];
-      if (delay === undefined || !transientPublicationFailure(error)) throw error;
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
-  }
+export function retryConversationPublication<T>(attempt: () => Promise<T>): Promise<T> {
+  return retryTransientFileOperation(() => attempt(), {
+    label: 'conversation-save', delaysMs: CONVERSATION_PUBLICATION_RETRY_DELAYS_MS, isTransient: transientPublicationFailure,
+  });
 }
 /**
  * Group commit: append one item to the conversation's newest still-unstarted

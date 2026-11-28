@@ -58,24 +58,26 @@ test('rejects a parent junction or symlink before opening policy bytes', async (
   await expect(readOwnerPolicy(path.join(alias, 'policy.json'))).rejects.toThrow('Invalid owner policy path');
   expect(open).not.toHaveBeenCalled();
 });
-test('rejects replacement between path admission and open, and closes its descriptor', async () => {
+test('refuses a policy replaced between path admission and open at every look, closing every descriptor', async () => {
+  let generation = 0;
   const watched = watchPolicyHandle({ beforeOpen: () => {
-    fs.renameSync(filename, `${filename}.old`);
+    fs.renameSync(filename, `${filename}.old${generation++}`);
     fs.writeFileSync(filename, JSON.stringify(policy), { mode: 0o600 });
   } });
   await expect(readOwnerPolicy(filename)).rejects.toThrow('Owner policy changed');
-  expect(watched.opened).toBe(1);
+  expect(watched.opened).toBe(4);
   expect(watched.read).not.toHaveBeenCalled();
-  expect(watched.close).toHaveBeenCalledTimes(1);
+  expect(watched.close).toHaveBeenCalledTimes(4);
 });
-test.each(['replace', 'grow'])('rejects %s during a read and closes its descriptor', async action => {
+test.each(['replace', 'grow'])('reads again from scratch after a %s during a read, closing the first descriptor', async action => {
+  const updated = { ...policy, ownerId: 'rewritten' };
   const watched = watchPolicyHandle({ afterFirstRead: () => {
     if (action === 'replace') {
       fs.renameSync(filename, `${filename}.old`);
-      fs.writeFileSync(filename, JSON.stringify(policy), { mode: 0o600 });
+      fs.writeFileSync(filename, JSON.stringify(updated), { mode: 0o600 });
     } else fs.appendFileSync(filename, ' ');
   } });
-  await expect(readOwnerPolicy(filename)).rejects.toThrow('Owner policy changed');
-  expect(watched.read).toHaveBeenCalled();
-  expect(watched.close).toHaveBeenCalledTimes(1);
+  expect(await readOwnerPolicy(filename)).toEqual(action === 'replace' ? updated : policy);
+  expect(watched.opened).toBe(2);
+  expect(watched.close).toHaveBeenCalledTimes(2);
 });

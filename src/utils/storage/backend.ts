@@ -4,6 +4,7 @@ import path from 'path';
 import { randomUUID, createHash } from 'node:crypto';
 import { withConversationLogReadAdmission, type ConversationReadReservation } from '@/backend/execution/flow/conversationLogReadAdmission';
 import { readPlainFile } from '@/utils/readPlainFile';
+import { replaceFileWithRetry, retryTransientFileOperation } from '@/utils/transientFileRetry';
 import { readPersonaRecordText, type PersonaRecordText } from './readPersonaRecord';
 import { PersonaShardIdentityError } from './personaShardIdentity';
 import { StorageKey } from '../../shared/types/storage';
@@ -115,38 +116,9 @@ export async function verifyStorage(): Promise<void> {
 // still write concurrently.
 const writeChains = new Map<string, Promise<unknown>>();
 
-// Windows has no share-mode equivalent of POSIX's "rename over an open file is
-// fine": libuv opens files WITHOUT FILE_SHARE_DELETE, so while any reader in
-// any process holds the target open — including our own concurrent
-// loadItem/loadCollectionItem calls — MoveFileEx refuses to replace it and
-// rename fails with EPERM. Measured on a plain fs.readFile poller against this
-// exact write path, ~85% of renames fail on the first try; the conflict clears
-// as soon as the reader's handle closes, which is typically single-digit
-// milliseconds. So the rename is retried rather than treated as fatal.
-//
-// The schedule is front-loaded (first retry after ~5ms, not 25ms) because most
-// conflicts are one read away from clearing, then backs off exponentially so a
-// genuinely busy file does not spin. Jitter keeps two writers racing for the
-// same target from re-colliding in lockstep on every attempt.
-const RETRYABLE_RENAME_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
-const MAX_RENAME_ATTEMPTS = 15;
-const MAX_RENAME_BACKOFF_MS = 100;
-
-async function renameWithRetry(tmpPath: string, filePath: string, validate: () => Promise<void>): Promise<void> {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      await validate();
-      await fs.rename(tmpPath, filePath);
-      return;
-    } catch (renameError) {
-      const code = (renameError as NodeJS.ErrnoException).code;
-      if (attempt >= MAX_RENAME_ATTEMPTS || !code || !RETRYABLE_RENAME_CODES.has(code)) {
-        throw renameError;
-      }
-      const backoff = Math.min(MAX_RENAME_BACKOFF_MS, 5 * 2 ** (attempt - 1));
-      await new Promise(resolve => setTimeout(resolve, backoff + Math.random() * 10));
-    }
-  }
+/** Reads a stored file, waiting out a short-lived lock by antivirus, the indexer or a writer's rename. */
+function readStoredText(filePath: string): Promise<string> {
+  return retryTransientFileOperation(() => fs.readFile(filePath, 'utf8'), { label: 'storage-read' });
 }
 
 type ConversationJson = { conversation: true; value: unknown };
@@ -233,7 +205,7 @@ export async function writeFileAtomic(filePath: string, data: string | Conversat
           throw error;
         }
       }
-      await renameWithRetry(tmpPath, filePath, async () => {
+      await replaceFileWithRetry(tmpPath, filePath, { label: 'storage-replace', beforeAttempt: async () => {
         const witnesses = await Promise.allSettled([
           fs.lstat(tmpPath, { bigint: true }),
           fs.lstat(dirPath, { bigint: true }),
@@ -263,7 +235,7 @@ export async function writeFileAtomic(filePath: string, data: string | Conversat
           await authority(() => assertBundledFlujoWorkloadEffectCurrent());
         }
         renameStarted = true;
-      });
+      } });
       created = false;
       published = true;
       if (typeof data !== 'string') recordConversationSnapshotCommit();
@@ -387,7 +359,7 @@ export async function loadItemForBackup<T>(key: StorageKey, defaultValue: T): Pr
   await ensureStorageDir();
   let content: string;
   try {
-    content = await fs.readFile(filePath, 'utf8');
+    content = await readStoredText(filePath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return defaultValue;
     throw error;
@@ -406,7 +378,7 @@ export async function loadItem<T>(key: StorageKey, defaultValue: T): Promise<T> 
   try {
     await ensureStorageDir();
     const filePath = getFilePath(key);
-    const content = await fs.readFile(filePath, 'utf-8');
+    const content = await readStoredText(filePath);
 
     // An empty/whitespace-only file is almost always a botched/interrupted
     // write (the symptom the atomic write above prevents going forward), not
@@ -869,7 +841,7 @@ export async function listAllShardedCollectionItems<T>(
       || entry.name.includes('.corrupted.') || entry.name.endsWith('.bak')) continue;
     const recordId = entry.name.slice(0, -'.json'.length);
     assertSafeCollectionId(recordId);
-    const content = await fs.readFile(path.join(collectionDir, entry.name), 'utf8');
+    const content = await readStoredText(path.join(collectionDir, entry.name));
     let parsed: { personaId?: unknown };
     try {
       parsed = JSON.parse(content) as { personaId?: unknown };
@@ -1015,7 +987,7 @@ export async function loadCollectionItem<T>(collection: string, id: string, defa
   }
   const filePath = getCollectionItemPath(collection, id);
   try {
-    const content = await fs.readFile(filePath, 'utf-8');
+    const content = await readStoredText(filePath);
 
     // An empty/whitespace-only file is almost always a botched write, not real
     // corruption; treat as absent so the caller can re-create it cleanly.
@@ -1089,7 +1061,7 @@ export async function listCollectionItems<T>(collection: string): Promise<T[]> {
     if (entry.includes('.tmp.') || entry.includes('.corrupted.') || entry.endsWith('.bak')) continue;
     const filePath = path.join(dirPath, entry);
     try {
-      const content = await fs.readFile(filePath, 'utf-8');
+      const content = await readStoredText(filePath);
       if (content.trim().length === 0) {
         log.warn(`Collection item file ${filePath} is empty; skipping.`);
         continue;
@@ -1130,7 +1102,7 @@ export async function listCollectionItemEntriesStrict<T>(
     const id = entry.slice(0, -'.json'.length);
     assertSafeCollectionId(id);
     const filePath = path.join(dirPath, entry);
-    const content = await fs.readFile(filePath, 'utf8');
+    const content = await readStoredText(filePath);
     if (content.trim().length === 0) {
       throw new Error(`Authoritative collection item ${JSON.stringify(`${collection}/${id}`)} is empty.`);
     }
@@ -1175,7 +1147,7 @@ export async function listCollectionItemsWithStats<T>(
     const filePath = path.join(dirPath, entry);
     try {
       const [content, stats] = await Promise.all([
-        fs.readFile(filePath, 'utf-8'),
+        readStoredText(filePath),
         fs.stat(filePath),
       ]);
       if (content.trim().length === 0) {
@@ -1214,7 +1186,7 @@ export async function migrateArrayFileToCollection<T>(
   const legacyPath = getFilePath(key);
   let content: string;
   try {
-    content = await fs.readFile(legacyPath, 'utf-8');
+    content = await readStoredText(legacyPath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0; // nothing to migrate
     throw error;
