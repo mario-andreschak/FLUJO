@@ -17,7 +17,8 @@ fixing this page is a welcome first pull request.
   comes with it. The app and the test runner refuse older versions with a message
   that explains how to update.
 - **Git.**
-- About **2 GB of free disk space** (the installed packages take 1.4 GB).
+- About **5 GB of free disk space**. The installed packages take 1.4 GB; with the
+  pages the app compiles on its first start, a clone took 4 GB on Linux.
 - About **8 GB of memory**. The type check and the app's first start each use
   about 4 GB, more than Node.js allows itself on a computer with less than 16 GB.
   `npm run typecheck` and the app launcher raise that limit to fit your computer,
