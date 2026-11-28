@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { formatUnbuiltMcpMessage, unbuiltMcpPackages } = require('./bundled-mcp-build.cjs');
 
 const REQUIRED_TEST_ARTIFACTS = Object.freeze([
   {
@@ -168,35 +169,12 @@ function assertSupportedTestRuntime(version, executable) {
   throw error;
 }
 
-/** Bundled MCP packages under `mcp-servers/` whose `dist/index.js` has not been built yet. */
-function unbuiltMcpPackages(rootDir) {
-  const serversRoot = path.join(path.resolve(rootDir), 'mcp-servers');
-  let entries;
-  try {
-    entries = fs.readdirSync(serversRoot, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  return entries
-    .filter((entry) => entry.isDirectory() && fs.existsSync(path.join(serversRoot, entry.name, 'package.json')))
-    .filter((entry) => !fs.existsSync(path.join(serversRoot, entry.name, 'dist', 'index.js')))
-    .map((entry) => entry.name)
-    .sort();
-}
-
-function formatUnbuiltMcpNote(names) {
-  return `Note: the bundled MCP packages are not built yet (${names.join(', ')}). `
-    + 'Tests that create a workspace fail with "ENOENT ... mcp-servers/<name>/dist" until you run `npm run build:mcp` once.';
-}
-
 module.exports = {
   REQUIRED_TEST_ARTIFACTS,
   assertLocalTestDependencies,
   assertSupportedTestRuntime,
   formatDependencyError,
-  formatUnbuiltMcpNote,
   inspectLocalTestDependencies,
-  unbuiltMcpPackages,
   unsupportedTestRuntime,
 };
 
@@ -207,7 +185,7 @@ if (require.main === module) {
     const result = assertLocalTestDependencies(root);
     process.stdout.write(`Local test dependencies are complete in ${result.root}.\n`);
     const unbuilt = unbuiltMcpPackages(root);
-    if (unbuilt.length > 0) process.stdout.write(`${formatUnbuiltMcpNote(unbuilt)}\n`);
+    if (unbuilt.length > 0) process.stdout.write(`${formatUnbuiltMcpMessage(unbuilt, root)}\n`);
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;

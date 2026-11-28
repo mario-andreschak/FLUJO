@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { bundledMcpEntry } from '../helpers/bundledMcpEntry';
 
 jest.setTimeout(45_000);
 
@@ -31,12 +32,7 @@ function browserToolContent(value: unknown): BrowserToolContentItem[] {
 }
 
 async function connectBrowser(dataDir: string): Promise<Client> {
-  const entry = path.resolve('mcp-servers/browser/dist/index.js');
-  try {
-    await fs.access(entry);
-  } catch {
-    throw new Error('Browser capture process tests require built MCP artifacts. Run npm run build:mcp, then npm run test:isolated.');
-  }
+  const entry = bundledMcpEntry('browser');
   const client = new Client({ name: 'browser-capture-recording-test', version: '1.0.0' }, { capabilities: {} });
   const transport = new StdioClientTransport({
     command: process.execPath,
