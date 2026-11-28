@@ -9,24 +9,9 @@
       "count": 1
     }
   },
-  "src/app/api/mcp-registry/route.ts": {
-    "flujo/no-workaround-comment": {
-      "count": 1
-    }
-  },
   "src/app/v1/chat/completions/chatCompletionService.ts": {
     "flujo/no-double-cast": {
       "count": 2
-    }
-  },
-  "src/app/v1/chat/conversations/[conversationId]/debug/continue/route.ts": {
-    "flujo/no-workaround-comment": {
-      "count": 1
-    }
-  },
-  "src/app/v1/chat/conversations/route.ts": {
-    "flujo/no-workaround-comment": {
-      "count": 1
     }
   },
   "src/backend/execution/flow/buildNodeContext.ts": {

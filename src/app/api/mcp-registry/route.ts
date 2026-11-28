@@ -71,7 +71,8 @@ function setCached(key: string, body: unknown): void {
  *
  * The browser talks to this route instead of registry.modelcontextprotocol.io
  * directly so we are independent of the registry's CORS policy, can cache, and
- * can work around the HTTP/1.1 issue described at http2GetJson.
+ * can talk to it over HTTP/2, the only protocol its API answers reliably
+ * (see http2GetJson in src/backend/utils/registryClient.ts).
  *
  * Query parameters (all optional, passed through):
  *   search — bounded capability/name discovery (iconsOnly remains exact metadata)
