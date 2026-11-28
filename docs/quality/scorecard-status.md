@@ -6,10 +6,12 @@ Checked on **2026-11-25** against the source on `main` at `32890f24` (version
 independent A− or better on all nine rows of the external audit.
 
 This page awards no grade. It lists what exists in the code today, what is still
-missing for A−, and which issue owns each missing piece. Only an independent
-reviewer can grade ([#578](https://github.com/mario-andreschak/FLUJO/issues/578)).
-The measurable targets behind each row are in the
-[scorecard foundation contract](scorecard-foundation.md).
+missing for A−, and which issue owns each missing piece. Grades come from the
+[release reassessment](independent-reassessment.md) (#578), which now runs after
+every release and judges each row against the
+[scorecard foundation contract](scorecard-foundation.md). Its latest result
+(2026-11-28, release 3.48.10): 0 of 9 rows at A−; the grades and reasons are on
+that page.
 
 ## Summary
 
@@ -22,7 +24,7 @@ The measurable targets behind each row are in the
 | Security | C+ | Credentials and login are protected only if the owner opts in; shared use is not isolated; scanner alerts in MCP code; no outside security review | **No owner** for the defaults (see below), [#565](https://github.com/mario-andreschak/FLUJO/issues/565), [#573](https://github.com/mario-andreschak/FLUJO/issues/573)–[#575](https://github.com/mario-andreschak/FLUJO/issues/575), [#578](https://github.com/mario-andreschak/FLUJO/issues/578) | Mostly yes, except the outside review |
 | Maturity / stability | C | Long real-model runs; installed restart and backup checks; experimental features still experimental; open bug reports | [#570](https://github.com/mario-andreschak/FLUJO/issues/570), [#578](https://github.com/mario-andreschak/FLUJO/issues/578), single bug issues | Yes, but long runs need elapsed time and a provider budget |
 | Community / bus factor | D | Two more human maintainers; three or more outside contributors over 90 days | [#576](https://github.com/mario-andreschak/FLUJO/issues/576), [#577](https://github.com/mario-andreschak/FLUJO/issues/577), [#661](https://github.com/mario-andreschak/FLUJO/issues/661) | No: needs people |
-| Docs honesty | A | Keep README, status, security and changelog in step with the code; an outside review of the published [release evidence](release-evidence/README.md) | [#565](https://github.com/mario-andreschak/FLUJO/issues/565), [#578](https://github.com/mario-andreschak/FLUJO/issues/578) | Yes, except the outside review |
+| Docs honesty | A | Keep README, status, security and changelog in step with the code; the reassessment found two limits not shown in 3.48.10 (fixed on the cleanup branch, now checked in CI) | [#565](https://github.com/mario-andreschak/FLUJO/issues/565), [#578](https://github.com/mario-andreschak/FLUJO/issues/578) | Yes |
 | Production readiness | C− | Installed operation checked on each install method; multi-user and team isolation | [#570](https://github.com/mario-andreschak/FLUJO/issues/570), [#573](https://github.com/mario-andreschak/FLUJO/issues/573)–[#575](https://github.com/mario-andreschak/FLUJO/issues/575) under deferred [#212](https://github.com/mario-andreschak/FLUJO/issues/212) | Mostly yes, but #212 is deferred by the owner |
 
 **Honest overall picture:** no row that started below A− can be shown at A−
@@ -173,10 +175,14 @@ not kept current.
   Gaps it shows for 3.48.10: the SBOM was not attached to the release page,
   the full checks and the clean-Windows first-launch job did not run, and the
   installer workflow has no code-signing step.
-- **Missing:** an outside reviewer's grades (#578; see the
-  [reassessment package](independent-reassessment.md)). SECURITY.md was
-  corrected on the cleanup branch (#565). This row drops if pages go stale, so
-  refresh this page whenever a child issue changes state.
+- **Reassessed on 2026-11-28 (#578):** the [release reassessment](independent-reassessment.md)
+  found that 3.48.10's project status page did not mark Meetings and Waves as
+  experimental and its README never said shared or team use is not supported.
+  Both are fixed on the cleanup branch, and `npm run check:docs-claims` (run in CI)
+  now fails on a missing limit, a "production-ready" style claim or a feature
+  dropped from the README. SECURITY.md was corrected on the cleanup branch (#565).
+  This row drops if pages go stale, so refresh this page whenever a child issue
+  changes state.
 
 ### Production readiness (C−)
 
@@ -210,9 +216,9 @@ not kept current.
 - [ ] Find two more human maintainers and outside contributors (#576).
 - [ ] Run the product-fit pilot with real users (#577).
 - [ ] Run the human maintenance exercise (#661).
-- [ ] Ask an independent reviewer to regrade one exact release (#578). What to
-      send, who counts as independent and the steps are in the
-      [reassessment package](independent-reassessment.md).
+- [x] Regrade one exact release (#578): done automatically after every release by
+      `release-evidence.yml`; the [release reassessment](independent-reassessment.md)
+      has the latest grades. An outside person may still add a report there.
 - [ ] Decide whether shared or team use (#212) stays deferred. While it does, the
       production-readiness row can only be graded for single-owner use.
 

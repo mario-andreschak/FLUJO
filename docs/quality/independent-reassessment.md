@@ -1,172 +1,146 @@
-# Independent reassessment package (#578)
+# Release reassessment (#578)
 
-The [external audit](https://github.com/mario-andreschak/FLUJO/issues/563)
-graded FLUJO on nine rows. [Epic #563](https://github.com/mario-andreschak/FLUJO/issues/563)
-asks for A− or better on every row. Only a person outside the project can give
-that grade. This page is what we hand that person: what to look at, which
-release, the nine rows and the questions to answer.
+The [external audit](https://github.com/mario-andreschak/FLUJO/issues/563) graded
+FLUJO on nine rows. [#578](https://github.com/mario-andreschak/FLUJO/issues/578)
+asks for evidence tied to one exact release and a fresh assessment of all nine
+rows, with A− or better on each before epic #563 can close.
 
-Nothing on this page is a grade. The project's own view of each row is in the
-[scorecard status](scorecard-status.md); treat it as the project's claims, to
-be checked.
+The reassessment no longer waits for anyone. After every npm release,
+`.github/workflows/release-evidence.yml`:
 
-## Who can review
+1. starts the full pull-request checks and the scorecard source checks on the
+   release tag;
+2. runs the 28-day offline Persona soak on the release commit;
+3. collects the [release evidence page](release-evidence/README.md);
+4. runs the automated reviewer, `scripts/release-reassessment.mjs`, which checks
+   every acceptance point of #578 and the A− criteria of each row, and records a
+   verdict with its evidence;
+5. attaches both pages to the GitHub release.
 
-The reviewer must be independent:
+A row reaches A− only when every check behind it is met. A check that needs
+people, elapsed time or money reads where its result is recorded (see "What code
+cannot supply") and stays "Not met" until it exists. Nobody is asked to run it.
 
-- not Mario, not the `flujo-app` account, and not any AI agent or bot run for
-  the project (the automated source review recorded in the
-  [foundation contract](scorecard-foundation.md) does not count);
-- no paid work for, or ownership in, FLUJO in the last 12 months, unless it is
-  written in the report;
-- no commits, reviews or issue triage in this repository in the last 90 days;
-- comfortable reading a Node.js and TypeScript code base and judging the
-  security of a local app that starts programs (MCP servers) on its host.
+## Latest result: release 3.48.10
 
-If the reviewer uses AI tools, the report says which and for what. The grades
-and reasons must be the reviewer's own.
+Pages: [evidence](release-evidence/v3.48.10.md) ·
+[reassessment](release-evidence/v3.48.10.reassessment.md). Assessed on
+2026-11-28 at the release commit `174ffaf0`.
 
-## Which release
-
-The review is of **one exact release**: its commit, its npm packages, its
-Docker image digest and its Windows installer, as listed on its
-[release evidence page](release-evidence/README.md).
-
-| Release | Evidence | Note |
+| #578 acceptance point | Verdict for 3.48.10 | On the cleanup bundle (next release) |
 | --- | --- | --- |
-| 3.48.10 (2026-11-21) | [v3.48.10.md](release-evidence/v3.48.10.md) | Latest release today. Built before the SBOM was attached to release pages and before the current cleanup work |
-| Next release after the cleanup bundle reaches `main` | collect with `npm run evidence:release -- --version <x.y.z> --out docs/quality/release-evidence` | Recommended for the review: it carries the security, release and documentation fixes made for #565, #573 and #576 |
+| Evidence is reproducible, redacted, tied to the release commit, and keeps source tests, shipped-artifact checks, simulations, live runs and human use apart | **Met** | Met |
+| No open critical regression or unresolved high-severity finding | **Not met**: 3 critical and 28 high code-scanning alerts were open when it shipped, with no written reasons | Fixed or reasoned: all 77 open alerts have a fix or a current written reason; they close on GitHub once the bundle is released and scanned |
+| All nine rows at A− or above | **Not met**: 0 of 9 | Not met: 0 of 9 (see the rows below) |
+| Product-fit, feature and docs grades kept without marketing claims or hidden scope cuts | **Met** | Met |
+| Experimental capabilities and unsupported profiles visible | **Not met**: the project status page did not mark Meetings and Waves as experimental, and the README never said shared or team use is not supported | **Fixed** in this bundle |
 
-## What the reviewer gets
-
-| Topic | Material |
-| --- | --- |
-| The assessed release | Its release evidence page; the source at the exact commit; the npm packages, image and installer it names |
-| The original audit and the targets | Epic [#563](https://github.com/mario-andreschak/FLUJO/issues/563) (original grades and reasons); [scorecard foundation contract](scorecard-foundation.md) and its [JSON](scorecard-foundation.json) (criteria and numeric targets per row) |
-| The project's own account | [Scorecard status](scorecard-status.md); [project status](../project-status.md); [README](../../README.md); [changelog](../../CHANGELOG.md) |
-| Security | [SECURITY.md](../../SECURITY.md); [vulnerability response](../security/vulnerability-response.md); [alert triage](../security/alert-triage.json); [owner access](../security/owner-access-v1.md); [private encryption profiles](../security/private-encryption-profiles-v1.md); [MCP execution consent](../security/mcp-execution-consent-v1.md); [MCP execution profiles](../security/mcp-execution-profiles.md); [main merge rules](../security/main-merge-rules.md) |
-| Architecture and code health | [Architecture overview](../architecture/README.md); [execution module boundaries](../architecture/execution-module-boundaries.md); [multi-user contracts](../architecture/multi-user-contracts.md) |
-| Operations and releases | [Production operations](../operations/production-operations.md); [release distribution verification](../release-distribution-verification.md); [npm release](../npm-release.md); [Windows installer checklist](../windows-installer-release-checklist.md) |
-| People | [Contributing](../../CONTRIBUTING.md); [maintainership](../contributing/maintainership.md); [product-fit pilot kit](../pilots/product-fit/README.md) |
-
-The repository is public, so no account is needed to read code, CI runs, the
-npm registry or the image. Open security alert details are visible only to
-maintainers; the evidence page gives their counts and `alert-triage.json` gives
-a written reason for each one.
-
-## Kinds of evidence, kept apart
-
-The reviewer should weigh each kind for what it is. For 3.48.10:
-
-| Kind | Where it is | State for 3.48.10 |
+| #578 scope item | Verdict for 3.48.10 | On the cleanup bundle |
 | --- | --- | --- |
-| Source tests | Release evidence page: CI and Tests | 13,473 of 13,486 tests passed on the release commit, 0 failed, 13 skipped (each skip needs a written reason in `test-baseline.json`) |
-| Shipped-artifact checks | Release evidence page: npm, image, installer | Signed build records name the release commit for all npm packages, the image and the installer. No recorded run of the main user journeys on the installed packages (#572). The clean-Windows first-launch job did not run for this release. On the cleanup branch, #570 adds backup, restart, upgrade and restore checks on each shipped form inside the release workflows, so later evidence pages show them as jobs |
-| Offline simulations | `persona-soak.yml`, started by hand with the commit to test | Not run on the 3.48.10 commit. Must be run with `commit_sha` set to the assessed commit |
-| Live runs with real models | None | The contract's spend limit for such runs is zero |
-| Human use and usability | Product-fit pilot (#577) | Not started |
+| Source, npm, image and installer provenance; full CI; installed-artifact checks | Not met: the full checks never ran on the release commit, the SBOM was not on the release page, no installed-artifact checks in the release workflows, installer not code-signed | Release workflows now run the installed checks (#570), attach the SBOM (#565) and start the full checks (this change). Code signing is still missing |
+| Full offline soak and validator pass at the assessed commit | Not met: never run on 3.48.10 | Runs on every release now; see "The offline soak" below |
+| Live runs with real models (bounded smoke, then 7 and 28 days) | Not met: not allowed, the contract's spend limit is 0 USD | Unchanged; Personas stay marked experimental |
+| README, project status and security docs follow the evidence | Not met: no scorecard status page at the release commit | Met |
 
-## The nine rows and the questions
+## The nine rows
 
-For each row, give a grade, the reasons, the evidence used and what would raise
-it. The criteria behind each row are in the foundation contract.
+"Machine verdict" is what the reviewer script reports for 3.48.10. "Grade today"
+is this review's judgment, with the reasons; it is not higher than the evidence
+allows.
 
-| Row | Audit grade | Look at first |
+| Row | Audit | Machine verdict | Grade today | Why | What would raise it |
+| --- | --- | --- | --- | --- | --- |
+| Idea / product fit | A− | A− not confirmed (2 of 3 checks not met) | A− (not confirmed) | MCP-first local hub is still a real niche and no claim overstates it. But no one outside the project has recorded repeated use: the pilot sheets are empty, and 1 outside person merged a change in 90 days | Ten pilot users for eight weeks and 8 of 10 new users finishing a first run within 15 minutes, recorded in the pilot sheets |
+| Feature surface | A− | A− not confirmed (1 of 3) | A− (not confirmed) | Every audited feature is still in the README and the release CI passed (13,473 of 13,486 tests, 0 failed). The installed npm, image and installer forms were not exercised by 3.48.10's release workflows | The next release passes the installed checks the bundle adds to all three release workflows |
+| Engineering discipline | B+ | Below A− (5 of 6 not met) | B+ | Strong: every shipped byte carries a signed build record naming one commit, and the evidence page proves it. Weak: `main` accepts merges with 0 approvals and 0 required checks, the full checks were started by hand and never ran on the release, no named security responder | Required checks on `main`; full checks on every release (now automatic); a responder and backup named in SECURITY.md |
+| Code health | B− | Below A− (3 of 4 not met) | B− | Lint exceptions fell from 802 to 635 on the bundle, but the audit's hot spots grew: runFlow.ts 4,048 lines, ModelHandler.ts 5,274, mcp/index.ts 4,294 on the bundle (3,540 / 4,375 / 3,577 when the split was planned). No one outside the project has changed the core | The #571 split lands and the hot spots shrink below their planned sizes; a second person changes the execution or MCP core |
+| Security | C+ | Below A− (4 of 4 not met) | C+ | 3 critical and 28 high alerts were open at release; the installer has no Windows code signature; no outside security review exists. On the bundle every open alert has a fix or a written reason, and one more real alert found here was fixed | A release with no open critical or high alert; a code-signed installer; a published outside review listed in SECURITY.md |
+| Maturity / stability | C | Below A− (3 of 4 not met) | C | No soak and no installed recovery checks ran for 3.48.10; no live runs are allowed; Personas, Meetings and Waves stay experimental | A release whose soak and installed recovery checks pass (both automatic now); live runs need an authorized budget |
+| Community / bus factor | D | Below A− (3 of 3 not met) | D | 429 pull requests merged in 90 days, 1 from someone outside the project; 2 accounts can write, both the project's own | Two more people with write access who have done a release and recovery drill; three outside contributors in 90 days |
+| Docs honesty | A | A not confirmed (2 of 4 not met) | A− for 3.48.10, A on the bundle | No unsupported claim, and the evidence page is exact. But at 3.48.10 two limits were not shown where readers look (Meetings and Waves not marked experimental in the project status; shared use not named as unsupported in the README), and there was no status page | Fixed in the bundle; the docs check now runs on every push |
+| Production readiness | C− | Below A− (3 of 3 not met) | C− | Single owner only; shared or team use is deferred (#212); installed checks absent from 3.48.10's release; installer unsigned | Installed checks passing on a release (automatic now); a signed installer; #212 for shared use |
+
+**Overall:** no row can be shown at A− today, for 3.48.10 or for the bundle.
+#578's own rule keeps epic #563 open while any row is below A−.
+
+## What this review fixed
+
+- **Experimental limits not shown.** `docs/project-status.md` now marks Meetings
+  and Waves as experimental and names shared or team use as not supported; the
+  README says the same. `scripts/check-docs-claims.mjs` (run in CI through
+  `npm run test:checks`) keeps it that way and also stops "production-ready" style
+  claims and silent feature removals.
+- **One more high alert without a reason.** Code-scanning alert #433 (a file race
+  in a test fixture, `__tests__/mcp/fixtures/trustedHostFingerprint.ts`) had no fix
+  or reason. The fixture now reads each file through one open handle, with the same
+  fingerprint as before; `alert-triage.json` records it until the next scan.
+- **Hand steps in the release checklist.** Starting `verify-full.yml`,
+  `scorecard-source.yml` and the soak by hand, collecting the page and finding a
+  reviewer are now one workflow that runs after every release.
+- **Code signing checked by hand.** The collector now reads the installer's
+  Authenticode slot itself: 3.48.10's installer has no signature.
+- **Leaks.** The collector refuses to write evidence that holds a key, token,
+  password or e-mail address; the committed pages are scanned on every run.
+
+## The offline soak
+
+The full 28-day Persona soak (20 activities a day, seed 459, learning on) and its
+validator are the contract's offline gate. It last passed in CI on 2026-10-25 and
+never ran on 3.48.10. This review ran it on the bundle:
+
+- On this Windows machine (shared by about a dozen agent sessions), it stopped on
+  simulated day 1: "Dispatch batch ... pump exceeded 30000 ms of wall-clock time".
+  A shorter run showed each step finishing normally but slowly; the same 30-second
+  limit per batch holds on the Linux runner the contract names.
+- On Linux (WSL, like the CI runner), the result is in the #578 status comment of
+  2026-11-28.
+
+From the next release on, the workflow runs the soak on the release commit and the
+reassessment page shows its numbers (worst daily append p95, peak memory, growth).
+
+## What code cannot supply
+
+These checks stay "Not met" until people, time or money provide the result. Each
+check reads the place named here after every release; nothing else has to happen.
+
+| Missing | Check | Where the result is read |
 | --- | --- | --- |
-| Idea / product fit | A− | README, product-fit pilot kit, #577 |
-| Feature surface | A− | Installed release, feature map, project status |
-| Engineering discipline | B+ | Release evidence page, CI workflows, main merge rules, vulnerability response |
-| Code health | B− | Architecture docs, the largest files, lint exception list |
-| Security | C+ | SECURITY.md, the security docs above, the installed defaults, alert triage |
-| Maturity / stability | C | Project status, open bug reports, operations guide |
-| Community / bus factor | D | Commit and pull-request authors, maintainership, contributing |
-| Docs honesty | A | Whether README, project status, changelog and security docs match what the release does |
-| Production readiness | C− | Operations guide, worker mode, Docker image, multi-user contracts |
+| Ten weekly pilot users for eight weeks; 8 of 10 new users finishing within 15 minutes | `pilot-weekly-users`, `pilot-first-run` | `docs/pilots/product-fit/tracking-sheet.csv`, `first-run-sheet.csv` |
+| Three outside contributors in 90 days | `outside-contributors` | Merged pull requests on GitHub |
+| Two backup maintainers | `backup-maintainers` | Write access on GitHub |
+| A second person changing the core | `second-human-core-change` | Git history of `src/backend/execution` and `src/backend/services/mcp` |
+| Security responder and backup | `security-responder` | The `Security responders:` line in SECURITY.md |
+| Outside security review | `independent-security-review` | A list item under "Independent security review" in SECURITY.md |
+| Windows code signature | `installer-code-signing` | The installer on the release page (needs a paid certificate with identity checks) |
+| Checks required before merging to `main` | `merge-gate` | GitHub rules for `main` (the owner chose fast merges; see [main merge rules](../security/main-merge-rules.md)) |
+| Live runs with real models | `live-runs` | Not allowed while the contract's spend limit is 0 USD |
+| Shared or team use | `shared-profile` | Deferred by the owner (#212) |
 
-Questions per row:
+## Who reviewed
 
-1. **Idea / product fit.** Is an MCP-first local hub still a real gap next to
-   the alternatives the audit named? Is there any sign of repeated use by people
-   other than the author?
-2. **Feature surface.** Install the release (npm, Docker or Windows installer).
-   Do the main journeys work: connect a model, add an MCP server, build and run
-   an agent, use the debugger and an approval, call the OpenAI-compatible API and
-   the MCP proxy? Which fail, and on which install method?
-3. **Engineering discipline.** Does the evidence page tie the shipped bytes to
-   one commit that passed CI? Can a failing change still reach `main`? Is the
-   vulnerability response real (targets, triage, private reporting)?
-4. **Code health.** Can a newcomer find and change the execution and MCP code?
-   Do the module boundaries hold? Are the largest files a risk?
-5. **Security.** With the installed defaults, who can reach the app and read
-   saved credentials? Do owner login, encryption passphrase, MCP consent and
-   container isolation work as described? Are the 3 critical and 28 high open
-   code-scanning alerts at release real problems? Report any finding privately
-   first, through [SECURITY.md](../../SECURITY.md).
-6. **Maturity / stability.** Does the release stay up under normal use, recover
-   after a restart and restore from a backup? Are experimental features clearly
-   marked?
-7. **Community / bus factor.** Who besides Mario and the project's bots can
-   maintain, review and release? What happens if Mario is away for a month?
-8. **Docs honesty.** Does every claim in the README, project status and security
-   docs hold for this release? Name any claim the evidence does not support.
-9. **Production readiness.** For which use is the release ready: one owner on
-   one machine, a worker, or a shared team server? What is missing for the next
-   step?
+This review was done on 2026-11-28 by an AI agent session that did not write the
+code under review, using only public data and the repository. It is not the human
+outside opinion the audit asked for, and the pages say so. If an outside person
+reviews a release, their report goes on #578 unchanged, any disagreement is
+recorded here, and a disagreement keeps #563 open.
 
-Also answer: is the evidence page reproducible (run
-`npm run evidence:release -- --version <x.y.z>` and the `gh attestation verify`
-commands it lists), and is anything on it wrong?
+## Commands this review ran
 
-## Known gaps before the review starts
+```sh
+npm run evidence:release -- --version latest --out docs/quality/release-evidence      # 22 OK, 4 missing, 1 needs attention, 0 contradictions
+npm run reassess:release -- --evidence docs/quality/release-evidence/v3.48.10.json --source v3.48.10 --out docs/quality/release-evidence
+npm run reassess:release -- --evidence docs/quality/release-evidence/v3.48.10.json --source <bundle commit>   # the "cleanup bundle" column
+npm run check:docs-claims          # found the three missing limits, then passed
+npm run check:security-response    # 77 open alerts, all with a current written reason
+node scripts/run-persona-soak.mjs --days=28 --activities-per-day=20 --with-learning --seed=459 --commit=<bundle commit>
+```
 
-So the reviewer does not spend time finding what is already known (all from
-the 3.48.10 evidence page and the scorecard status):
+## Rerun it
 
-- The full pull-request checks (`verify-full.yml`) and the scorecard source
-  checks did not run on the release commit; both are started by hand.
-- The installer workflow has no code-signing step, so Windows will treat the
-  installer as unsigned.
-- The npm SBOM, `release-evidence.json` and `SHA256SUMS` were not attached to
-  the 3.48.10 release page. They are signed and stored by GitHub; releases made
-  after the #565 change reaches `main` attach them.
-- 3 critical and 28 high code-scanning alerts were open when 3.48.10 shipped.
-  Every alert open today has a fix or a written reason in
-  [alert-triage.json](../security/alert-triage.json) on the cleanup branch.
-- `main` accepts merges without passing checks or an approval
-  ([main merge rules](../security/main-merge-rules.md) explains the choice).
-- A fresh local install has no login on `localhost` and protects saved
-  credentials with a public default password unless the owner sets one.
-- Almost all commits come from Mario and the project's bots; there is no second
-  human maintainer.
+```sh
+npm run evidence:release -- --version <x.y.z> --out docs/quality/release-evidence
+npm run reassess:release -- --evidence docs/quality/release-evidence/v<x.y.z>.json --source v<x.y.z> --soak <soak-artifacts> --out docs/quality/release-evidence
+```
 
-## The report
-
-Ask for one report with:
-
-- the reviewer's name or handle, date, and any ties to the project;
-- the exact release and commit assessed, and how it was installed;
-- per row: grade, reasons, evidence used, what would raise it;
-- security findings with severity (sent privately first if high or critical);
-- anything on the evidence page or in the docs that is wrong.
-
-The project publishes the report unchanged, as a comment on
-[#578](https://github.com/mario-andreschak/FLUJO/issues/578), including grades
-below A− and disagreements. Then the scorecard status page is updated from it.
-Any row below A−, or any open disagreement, keeps #563 open.
-
-## Checklist for Mario
-
-Automation cannot do these steps:
-
-- [ ] Pick the release to assess (recommended: the first release after the
-      cleanup bundle is on `main`). Before collecting its evidence, start
-      `verify-full.yml`, `scorecard-source.yml`, `persona-soak.yml`
-      (`commit_sha` = the release commit) and the clean-Windows installer job
-      (`installer.yml` with `clean_windows`) on that commit.
-- [ ] Collect and commit its evidence page:
-      `npm run evidence:release -- --version <x.y.z> --out docs/quality/release-evidence`.
-- [ ] Find a reviewer who meets "Who can review" and agree scope, time and any
-      fee. A fee is your decision; nothing here commits money.
-- [ ] Send them the link to this page and the release evidence page.
-- [ ] Post their report unchanged on #578 and ask an agent to update the
-      scorecard status from it.
+Or start `release-evidence.yml` with the version; it does all of the above and
+attaches the pages to the release.

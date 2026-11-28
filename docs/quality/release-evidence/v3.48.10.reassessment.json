@@ -1,7 +1,7 @@
 {
   "inputs": {
     "schemaVersion": 1,
-    "assessedAt": "2026-11-28T02:06:52.662Z",
+    "assessedAt": "2026-11-28T02:39:42.608Z",
     "command": "npm run reassess:release -- --evidence docs/quality/release-evidence/v3.48.10.json --source v3.48.10",
     "source": {
       "ref": "v3.48.10",

@@ -19,14 +19,19 @@ export function fingerprintTrustedHostSource(sourceRoot: string): string {
   const visit = (directory: string): void => {
     const before = fs.lstatSync(directory, { bigint: true });
     tree.update(JSON.stringify(['directory', path.relative(root, directory).split(path.sep).join('/'), String(before.mode)]));
-    const names = fs.readdirSync(directory).sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
-    for (const name of names) {
-      const filename = path.join(directory, name);
-      const stat = fs.lstatSync(filename, { bigint: true });
-      if (stat.isSymbolicLink()) throw new Error('Fixture sources contain no links.');
-      if (stat.isDirectory()) { visit(filename); continue; }
-      const content = createHash('sha256').update(fs.readFileSync(filename)).digest('hex');
-      tree.update(JSON.stringify(['file', path.relative(root, filename).split(path.sep).join('/'), String(stat.mode), content]));
+    const entries = fs.readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+    for (const entry of entries) {
+      const filename = path.join(directory, entry.name);
+      if (entry.isSymbolicLink()) throw new Error('Fixture sources contain no links.');
+      if (entry.isDirectory()) { visit(filename); continue; }
+      const descriptor = fs.openSync(filename, 'r');
+      try {
+        const stat = fs.fstatSync(descriptor, { bigint: true });
+        const content = createHash('sha256').update(fs.readFileSync(descriptor)).digest('hex');
+        tree.update(JSON.stringify(['file', path.relative(root, filename).split(path.sep).join('/'), String(stat.mode), content]));
+      } finally {
+        fs.closeSync(descriptor);
+      }
     }
   };
   visit(root);
