@@ -52,16 +52,6 @@ export async function materializeModelTurn(
   // conversation transcript.
   const finalMessages: FlujoChatMessage[] = [...messages];
 
-  // // Check if content already starts with a heading pattern like "## ... says:"
-  // const hasHeadingPattern = /^## .+says:\s*\n\n/i.test(content);
-  
-  // // Format content with prefix only if it doesn't already have a heading pattern
-  // const prefixedContent = modelDisplayName && !hasHeadingPattern
-  //   ? `## ${nodeDisplayName} - ${modelDisplayName} (${modelTechnicalName}) says:\n\n${content}`
-  //   : content;
-  
-  const prefixedContent = content;
-
   // Extract provider-reported token usage, if present, so the UI can show
   // per-message and aggregated token/cost figures.
   //
@@ -137,12 +127,12 @@ export async function materializeModelTurn(
     });
     const assistantContent = generatedImageParts.length
       ? [
-          ...(prefixedContent
-            ? [{ type: 'text' as const, text: prefixedContent }]
+          ...(content
+            ? [{ type: 'text' as const, text: content }]
             : []),
           ...generatedImageParts,
         ]
-      : prefixedContent;
+      : content;
 
     // Create the assistant message with timestamp and ID
     const projectedMcpToolCalls = projectMcpToolCalls(completionToolCalls);

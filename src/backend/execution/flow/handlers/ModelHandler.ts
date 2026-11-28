@@ -273,7 +273,6 @@ export class ModelHandler {
     };
 
     // Fetch model information for display name (and the model's own maxTurns / maxTokens caps)
-    let modelDisplayName = '';
     let modelTechnicalName = '';
     let modelMaxTurns: number | undefined;
     let modelMaxTokens: number | undefined;
@@ -288,7 +287,6 @@ export class ModelHandler {
     try {
       const model = input.modelCatalogAdmission?.model ?? await modelService.getModel(modelId);
       if (model) {
-        modelDisplayName = model.displayName || model.name;
         modelTechnicalName = model.name;
         modelMaxTurns = model.maxTurns;
         modelMaxTokens = model.maxTokens;
@@ -1698,15 +1696,5 @@ export class ModelHandler {
     input: ToolCallProcessingInput
   ): Promise<Result<ToolCallProcessingResult>> {
     return traceSpan('tool.process', () => withSubflowOutputConsumption(() => processToolCallsAdmitted(input)));
-  }
-
-  /**
-   * Check if response has tool calls - pure function
-   */
-  private static hasToolCalls(response: ModelCallResult): boolean {
-    return !!(
-      response.fullResponse?.choices?.[0]?.message?.tool_calls &&
-      response.fullResponse.choices[0].message.tool_calls.length > 0
-    );
   }
 }
