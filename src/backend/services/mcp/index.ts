@@ -1,8 +1,10 @@
 import { scopedRegistry } from './serviceRegistries';
+import { readServerStatus } from './serverStatus';
+import * as serviceSkills from './serviceSkills';
 import { ensureManagedServerRootDir, resolveEnvForSave, resolveHeadersForSave, resolveOAuthSecretForSave } from './serverConfigSave';
 import { subscribeModernResource, retireModernSubscriptions } from './modernSubscriptions';
 import { completeRequiredUrlElicitations, requiredUrlElicitationsOf } from './elicitation';
-import { mcpAppsEnabled, mcpSkillsEnabled } from '@/shared/utils/mcpClientFeatures';
+import { mcpAppsEnabled } from '@/shared/utils/mcpClientFeatures';
 import { getHarnessExecution, replayHarnessTool, harnessResourceSnapshot } from '@/backend/services/harness/executionScope';
 import { assertBundledFlujoWorkloadEffectCurrent, BundledFlujoWorkloadError } from '../security/bundledFlujoWorkload';
 import { executionApprovalFailure } from './executionApproval';
@@ -14,7 +16,6 @@ import { collectMcpDiagnosticSecrets, createMcpDiagnosticRedactor } from "@/util
 import { createLogger } from "@/utils/logger";
 import { bindToCurrentWorkspace, DEFAULT_WORKSPACE, getCurrentWorkspace } from "@/utils/workspace";
 import { runWithConcurrency } from "./utils/boundedConcurrency";
-import { MCP_APPS_EXTENSION_ID } from './appsProtocol';
 import { isProtectedExecutionServer } from '@/backend/execution/extensions';
 import { assertExecutionExtensionCurrent, assertExecutionServerConfig, assertExecutionToolDispatch, executionExtensionProtectedServer, executionProtectedServerConfig, type ExecutionExtensionContext } from '@/backend/execution/extensions';
 import { assertMcpIsolationDispatch } from './isolation';
@@ -32,8 +33,6 @@ import {
   MCPToolResponse as ToolResponse,
   MCPStdioOAuthStatus,
   type MCPShutdownReceipt,
-  MCP_SKILLS_EXTENSION_ID,
-  parseMcpSkillUri,
   type McpGetSkillResult,
   type McpLoadedSkill,
   type McpReadSkillDirectoryResult,
@@ -43,8 +42,6 @@ import {
 } from "@/shared/types/mcp";
 import { TestConnectionEvent } from "@/shared/types/streaming";
 import { loadServerConfigs, saveConfig } from "./config";
-import { hasOAuthIssuer } from "./oauth";
-import { readOAuthTokens } from './oauthCredentialStorage';
 import {
   beginConnect,
   beginTeardown,
@@ -77,16 +74,6 @@ import {
   listServerPrompts as listPrompts,
   getPrompt as getPromptFn,
 } from "./prompts";
-import {
-  McpSkillsUnsupportedError,
-  getMcpSkill,
-  getMcpSkillsCapability,
-  listMcpSkills,
-  loadVerifiedMcpSkill,
-  readMcpSkillDirectory,
-  readVerifiedMcpSkillResource,
-} from "./skills";
-import { getApprovedMcpSkill } from "./skillApprovalRegistry";
 import { resolveRuntimeHomeIsolation } from "./runtimeHomeIsolation";
 import { noteStdioConnectFailure, takeClassicHandshakeRetry } from "./stdioNegotiation";
 import {
@@ -188,15 +175,6 @@ import {
   serverSupportsExternalAuthorization,
 } from "./externalAuthorization";
 import { revokeMcpAppRuntimeBrokerForServer } from '@/backend/mcpApps/runtimeBroker';
-
-function mcpFailure<T>(response: MCPServiceResponse): MCPServiceResponse<T> {
-  return {
-    success: false,
-    error: response.error,
-    statusCode: response.statusCode,
-    errorType: response.errorType,
-  };
-}
 
 // Define a type for tool arguments
 type ToolArgs = Record<string, unknown>;
@@ -2915,175 +2893,42 @@ export class MCPService {
     }
   }
 
-  private async prepareMcpSkillsClient(
-    serverName: string,
-  ): Promise<MCPServiceResponse<{ client: Client; capability: McpSkillsExtensionCapability }>> {
-    if (isProtectedExecutionServer(serverName)) return { success: false, error: 'execution_protocol_surface_forbidden' };
-    const config = await this.getServerConfig(serverName);
-    if (!config) {
-      return { success: false, error: `MCP server '${serverName}' was not found.`, statusCode: 404 };
-    }
-    if (config.disabled) {
-      return {
-        success: false,
-        error: `Server '${serverName}' is disabled. Enable it on the MCP page to use it.`,
-        statusCode: 409,
-        errorType: "disabled",
-      };
-    }
-    if (!mcpSkillsEnabled(config)) {
-      return {
-        success: false,
-        error: `MCP Skills are disabled for server '${serverName}'.`,
-        statusCode: 409,
-        errorType: "skills_disabled",
-      };
-    }
-
-    const connect = await this.connectServer(serverName);
-    if (!connect.success) {
-      return {
-        success: false,
-        error: connect.error || `Failed to connect to MCP server '${serverName}'.`,
-        statusCode: connect.statusCode || 502,
-      };
-    }
-
-    const client = this.getClient(serverName);
-    const capability = getMcpSkillsCapability(client, true);
-    if (!client || !capability) {
-      return {
-        success: false,
-        error: `Server '${serverName}' does not advertise ${MCP_SKILLS_EXTENSION_ID}.`,
-        statusCode: 404,
-        errorType: "skills_unsupported",
-      };
-    }
-    return { success: true, data: { client, capability } };
+  /** The service members the skills functions use. */
+  private skillsHost(): serviceSkills.McpSkillsHost {
+    return {
+      getServerConfig: (name) => this.getServerConfig(name),
+      connectServer: (name) => this.connectServer(name),
+      getClient: (name) => this.getClient(name),
+      forceReconnect: (name) => this.forceReconnect(name),
+      getServerSkill: (name, uri) => this.getServerSkill(name, uri),
+    };
   }
 
   async getServerProxyCapabilities(serverName: string): Promise<{
     skillsCapability?: McpSkillsExtensionCapability;
     appsCapability?: Record<string, unknown>;
   }> {
-    const config = await this.getServerConfig(serverName);
-    if (!config || config.disabled) return {};
-    const connect = await this.connectServer(serverName);
-    if (!connect.success) return {};
-    // Read both negotiated extensions from the same freshly checked connection.
-    // There is no asynchronous work between these metadata reads.
-    const client = this.getClient(serverName);
-    const skillsCapability = getMcpSkillsCapability(
-      client, mcpSkillsEnabled(config) && !isProtectedExecutionServer(serverName),
-    );
-    const capabilities = client?.getServerCapabilities() as
-      | { extensions?: Record<string, unknown> }
-      | undefined;
-    const apps = capabilities?.extensions?.[MCP_APPS_EXTENSION_ID];
-    const appsCapability = apps && typeof apps === 'object' && !Array.isArray(apps)
-      ? { ...(apps as Record<string, unknown>) }
-      : undefined;
-    return { skillsCapability, appsCapability };
+    return serviceSkills.getServerProxyCapabilities(this.skillsHost(), serverName);
   }
 
   async getServerSkillsCapability(
     serverName: string,
   ): Promise<McpSkillsExtensionCapability | undefined> {
-    const prepared = await this.prepareMcpSkillsClient(serverName);
-    return prepared.success ? prepared.data?.capability : undefined;
+    return serviceSkills.getServerSkillsCapability(this.skillsHost(), serverName);
   }
 
   async listServerSkills(
     serverName: string,
     cursor?: string,
   ): Promise<McpServerSkillsResult> {
-    const config = await this.getServerConfig(serverName);
-    if (!config || config.disabled || !mcpSkillsEnabled(config)) {
-      return {
-        resultType: "complete",
-        skills: [],
-        serverName,
-        availability: "disabled",
-        ...(!config ? { error: `MCP server '${serverName}' was not found.` } : {}),
-      };
-    }
-
-    const prepared = await this.prepareMcpSkillsClient(serverName);
-    if (!prepared.success || !prepared.data) {
-      return {
-        resultType: "complete",
-        skills: [],
-        serverName,
-        availability:
-          prepared.errorType === "skills_unsupported" ? "unsupported" : "available",
-        ...(prepared.errorType === "skills_unsupported" ? {} : { error: prepared.error }),
-      };
-    }
-
-    const attempt = async (client: Client) => listMcpSkills(client, true, cursor);
-    try {
-      const result = await attempt(prepared.data.client);
-      return {
-        ...result,
-        serverName,
-        availability: "available",
-        capability: prepared.data.capability,
-      };
-    } catch (error) {
-      if (error instanceof BundledFlujoWorkloadError || error instanceof McpRuntimeAuthorityRetirementError) throw error;
-      if (error instanceof McpSkillsUnsupportedError) {
-        return {
-          resultType: "complete",
-          skills: [],
-          serverName,
-          availability: "unsupported",
-        };
-      }
-
-      const reconnect = await this.forceReconnect(serverName);
-      if (reconnect.success) {
-        const retryClient = this.getClient(serverName);
-        try {
-          const result = await attempt(retryClient as Client);
-          const capability = getMcpSkillsCapability(retryClient, true);
-          return {
-            ...result,
-            serverName,
-            availability: "available",
-            ...(capability ? { capability } : {}),
-          };
-        } catch (retryError) {
-          error = retryError;
-        }
-      }
-
-      return {
-        resultType: "complete",
-        skills: [],
-        serverName,
-        availability: "available",
-        error: error instanceof Error ? error.message : "Failed to list MCP Skills.",
-      };
-    }
+    return serviceSkills.listServerSkills(this.skillsHost(), serverName, cursor);
   }
 
   async getServerSkill(
     serverName: string,
     uri: string,
   ): Promise<MCPServiceResponse<McpGetSkillResult>> {
-    const prepared = await this.prepareMcpSkillsClient(serverName);
-    if (!prepared.success || !prepared.data) return mcpFailure(prepared);
-
-    try {
-      return { success: true, data: await getMcpSkill(prepared.data.client, true, uri) };
-    } catch (error) {
-      if (error instanceof BundledFlujoWorkloadError || error instanceof McpRuntimeAuthorityRetirementError) throw error;
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : "Failed to get MCP Skill.",
-        statusCode: error instanceof McpSkillsUnsupportedError ? 404 : 502,
-      };
-    }
+    return serviceSkills.getServerSkill(this.skillsHost(), serverName, uri);
   }
 
   async readServerSkillDirectory(
@@ -3091,22 +2936,7 @@ export class MCPService {
     uri: string,
     cursor?: string,
   ): Promise<MCPServiceResponse<McpReadSkillDirectoryResult>> {
-    const prepared = await this.prepareMcpSkillsClient(serverName);
-    if (!prepared.success || !prepared.data) return mcpFailure(prepared);
-
-    try {
-      return {
-        success: true,
-        data: await readMcpSkillDirectory(prepared.data.client, true, uri, cursor),
-      };
-    } catch (error) {
-      if (error instanceof BundledFlujoWorkloadError || error instanceof McpRuntimeAuthorityRetirementError) throw error;
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : "Failed to read MCP Skill directory.",
-        statusCode: error instanceof McpSkillsUnsupportedError ? 404 : 502,
-      };
-    }
+    return serviceSkills.readServerSkillDirectory(this.skillsHost(), serverName, uri, cursor);
   }
 
   async readVerifiedSkillResource(
@@ -3114,29 +2944,7 @@ export class MCPService {
     skillUri: string,
     resourceUri: string,
   ): Promise<MCPServiceResponse<McpVerifiedSkillResource>> {
-    const prepared = await this.prepareMcpSkillsClient(serverName);
-    if (!prepared.success || !prepared.data) return mcpFailure(prepared);
-    const skill = await this.getServerSkill(serverName, skillUri);
-    if (!skill.success || !skill.data) return mcpFailure(skill);
-
-    try {
-      return {
-        success: true,
-        data: await readVerifiedMcpSkillResource(
-          prepared.data.client,
-          true,
-          skill.data.skill,
-          resourceUri,
-        ),
-      };
-    } catch (error) {
-      if (error instanceof BundledFlujoWorkloadError || error instanceof McpRuntimeAuthorityRetirementError) throw error;
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : "Failed to verify MCP Skill resource.",
-        statusCode: 422,
-      };
-    }
+    return serviceSkills.readVerifiedSkillResource(this.skillsHost(), serverName, skillUri, resourceUri);
   }
 
   async loadVerifiedSkill(
@@ -3144,64 +2952,7 @@ export class MCPService {
     skillUri: string,
     conversationId: string,
   ): Promise<MCPServiceResponse<McpLoadedSkill>> {
-    const prepared = await this.prepareMcpSkillsClient(serverName);
-    if (!prepared.success || !prepared.data) return mcpFailure(prepared);
-    const skill = await this.getServerSkill(serverName, skillUri);
-    if (!skill.success || !skill.data) return mcpFailure(skill);
-
-    if (skill.data.skill.resources === "dynamic") {
-      return {
-        success: false,
-        error: "Dynamic MCP Skills cannot be integrity-verified.",
-        statusCode: 422,
-      };
-    }
-
-    const normalizedSkillUri = parseMcpSkillUri(skill.data.skill.uri).normalizedUri;
-    const manifest = skill.data.skill.resources.find(
-      (resource) => resource.uri === normalizedSkillUri,
-    );
-    if (!manifest) {
-      return {
-        success: false,
-        error: "MCP Skill manifest metadata is missing.",
-        statusCode: 422,
-      };
-    }
-
-    const approval = getApprovedMcpSkill({
-      conversationId,
-      serverName,
-      skillUri: normalizedSkillUri,
-      manifestDigest: manifest.digest,
-    });
-    if (!approval) {
-      return {
-        success: false,
-        error: "This MCP Skill is not approved for the current conversation and manifest digest.",
-        statusCode: 403,
-        errorType: "skills_approval_required",
-      };
-    }
-
-    try {
-      return {
-        success: true,
-        data: await loadVerifiedMcpSkill(
-          prepared.data.client,
-          true,
-          serverName,
-          skill.data.skill,
-        ),
-      };
-    } catch (error) {
-      if (error instanceof BundledFlujoWorkloadError || error instanceof McpRuntimeAuthorityRetirementError) throw error;
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : "Failed to load MCP Skill.",
-        statusCode: 422,
-      };
-    }
+    return serviceSkills.loadVerifiedSkill(this.skillsHost(), serverName, skillUri, conversationId);
   }
 
   /**
@@ -3645,208 +3396,16 @@ export class MCPService {
   /**
    * Get the connection status of an MCP server
    */
-  async getServerStatus(serverName: string): Promise<{
-    status: string;
-    message?: string;
-    errorCode?: string;
-    requiresApproval?: boolean;
-    stderrOutput?: string;
-    stdioOAuth?: MCPStdioOAuthStatus;
-  }> {
-    // Get the config directly from storage
-    const config = await this.getServerConfig(serverName);
-    if (!config) {
-      log.warn(`getServerStatus: Server ${serverName} not found`);
-      return {
-        status: "error",
-        message: `Server ${serverName} configuration not found. The server may have been deleted or not properly configured.`,
-      };
-    }
-
-    if (config.disabled) {
-      log.debug(`getServerStatus: Server ${serverName} is disabled`);
-      return { status: "disconnected" };
-    }
-
-    // A live client is authoritative: a server may be connected with a static
-    // Authorization header even when an earlier OAuth-capability probe persisted
-    // oauthScopes. In that mixed state, missing FLUJO-managed OAuth tokens must not
-    // override the proven working connection with a stale auth-required badge.
-    const hasLiveClient = !!this.getClient(serverName);
-    const approvalFailure = this.approvalFailures.get(serverName);
-    if (!hasLiveClient && approvalFailure) {
-      return { status: 'requires_approval', message: approvalFailure.error,
-        errorCode: approvalFailure.errorCode, requiresApproval: true };
-    }
-
-    // Check if this is a disconnected streamable server that requires OAuth but has no tokens
-    if (config.transport === "streamable") {
-      const streamableConfig = config as MCPStreamableConfig;
-      if (
-        !hasLiveClient &&
-        streamableConfig.oauthScopes &&
-        streamableConfig.oauthScopes.length > 0
-      ) {
-        // This server requires OAuth authentication
-        const tokens = await readOAuthTokens(streamableConfig);
-        if (
-          !tokens ||
-          !hasOAuthIssuer(tokens) ||
-          !tokens.access_token
-        ) {
-          log.info(
-            `getServerStatus: Server ${serverName} requires OAuth authentication but has no valid tokens`,
-          );
-          return {
-            status: "requires_authentication",
-            message:
-              "OAuth authentication required. Click the authenticate button to complete the OAuth flow.",
-          };
-        }
-
-        // An expired access token only means "re-authenticate" when there is no refresh
-        // token to renew it with. With a refresh_token stored, the next connection attempt
-        // refreshes silently (see MCPOAuthClientProvider.tokens), so fall through to the
-        // real connection state instead of flashing the auth badge after every restart.
-        const issuedAt = (tokens as typeof tokens & { issued_at?: number }).issued_at;
-        if (
-          !tokens.refresh_token &&
-          tokens.expires_in &&
-          issuedAt
-        ) {
-          const expiresIn = tokens.expires_in;
-          const currentTime = Math.floor(Date.now() / 1000);
-          const expirationTime = issuedAt + expiresIn;
-
-          if (currentTime >= expirationTime) {
-            log.info(
-              `getServerStatus: OAuth tokens for ${serverName} have expired and no refresh token is available`,
-            );
-            return {
-              status: "requires_authentication",
-              message: "OAuth tokens have expired. Please re-authenticate.",
-            };
-          }
-        }
-      }
-    }
-
-    // Get any stderr logs for this server
-    const stderrLogs = this.stderrLogs.get(serverName) || [];
-    const stderrOutput = stderrLogs.join("\n").trim();
-    // The last persisted connection failure (survives the per-attempt stderr buffer reset).
-    const persistedError = this.lastConnectionError.get(serverName);
-    let stdioOAuth: MCPStdioOAuthStatus | undefined;
-
-    if (hasLiveClient) {
-      const client = this.getClient(serverName);
-      if (serverSupportsExternalAuthorization(client)) {
-        try {
-          stdioOAuth = await getExternalAuthorizationStatus(client, serverName);
-          if (stdioOAuth.blockingAuthorization) {
-            const requiredAuthorization = stdioOAuth.blockingAuthorization;
-            return {
-              status: "requires_authentication",
-              message:
-                requiredAuthorization.message ||
-                `${requiredAuthorization.label} authorization is required before this server can be used by unattended flows.`,
-              stderrOutput: stderrOutput || undefined,
-              stdioOAuth,
-            };
-          }
-        } catch (authorizationError) {
-          if (authorizationError instanceof BundledFlujoWorkloadError) throw authorizationError;
-          const detail =
-            authorizationError instanceof Error
-              ? authorizationError.message
-              : String(authorizationError);
-          return {
-            status: "error",
-            message: `Connected, but the mcp-stdio-oauth readiness check failed: ${detail}`,
-            stderrOutput: stderrOutput || undefined,
-          };
-        }
-      }
-    }
-
-    // Check if the client exists — via getClient so a closed/aborted connection reads
-    // as "not connected" instead of lying "connected" until something trips over it.
-    // The map itself is shared across module instances, so a client connected by the
-    // startup instance is visible here without any adoption step.
-    const clientExists = hasLiveClient || !!this.getClient(serverName);
-
-    if (clientExists) {
-      log.info(`getServerStatus: Server ${serverName} is connected`);
-      return {
-        status: "connected",
-        stderrOutput: stderrOutput || undefined,
-        ...(stdioOAuth ? { stdioOAuth } : {}),
-      };
-    } else {
-      // The backend may still be bringing this server up - either an attempt is
-      // in flight right now, or the initial startup sweep hasn't reached it yet
-      // (it's still queued). Report a transient "connecting" state so the MCP page
-      // shows a spinner and keeps polling, instead of the misleading
-      // "configured but not connected" error the user would otherwise see for the
-      // first few seconds after launch. A server that has already recorded a real
-      // connection failure falls through to that error even during startup.
-      const startupPending =
-        this.isStartingUp() && !this.lastConnectionError.has(serverName);
-      if (this.connectingServers.has(serverName) || startupPending) {
-        log.info(`getServerStatus: Server ${serverName} is still connecting`);
-        return {
-          status: "connecting",
-          message: "Server is starting up. This may take a few moments.",
-        };
-      }
-
-      // Check if stderr contains OAuth authentication errors
-      if (
-        stderrOutput &&
-        (stderrOutput.includes("OAuth authentication required") ||
-          stderrOutput.includes("invalid_token"))
-      ) {
-        log.info(
-          `getServerStatus: OAuth authentication error detected for ${serverName}`,
-        );
-        return {
-          status: "requires_authentication",
-          message:
-            "OAuth authentication required. Please complete the OAuth flow.",
-          stderrOutput: stderrOutput,
-        };
-      }
-
-      // Use the live stderr output if present, otherwise the last persisted connection
-      // error. HTTP transports fail inside connect() and produce no live stderr, so the
-      // persisted error is what makes the real reason visible here.
-      const effectiveError = stderrOutput || persistedError;
-      if (effectiveError) {
-        log.info(
-          `getServerStatus: Using ${stderrOutput ? "stderr output" : "persisted connection error"} as error message for ${serverName}`,
-        );
-        return {
-          status: "error",
-          message: effectiveError,
-          stderrOutput: stderrOutput || undefined,
-        };
-      }
-
-      // No stderr and no persisted error. We deliberately do NOT spawn the server process
-      // here to "capture an error" — that direct-execution probe ran with a 5s timeout PER
-      // disconnected stdio server and was the dominant cost of loading the /mcp page (N
-      // servers x up to 5s). The connection itself (and its real error) is established by
-      // connectServer / the on-demand reconnect in listServerTools & callTool, which is
-      // where errors get persisted. Just report the generic state instantly.
-      log.info(
-        `getServerStatus: No specific error details available for ${serverName}`,
-      );
-      return {
-        status: "error",
-        message: `Server ${serverName} is configured but not connected. The server process may have crashed or been terminated.`,
-        stderrOutput: undefined,
-      };
-    }
+  async getServerStatus(serverName: string): ReturnType<typeof readServerStatus> {
+    return readServerStatus({
+      getServerConfig: (name) => this.getServerConfig(name),
+      getClient: (name) => this.getClient(name),
+      isStartingUp: () => this.isStartingUp(),
+      approvalFailures: () => this.approvalFailures,
+      stderrLogs: () => this.stderrLogs,
+      lastConnectionError: () => this.lastConnectionError,
+      connectingServers: () => this.connectingServers,
+    }, serverName);
   }
 
   /**

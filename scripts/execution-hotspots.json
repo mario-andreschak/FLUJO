@@ -48,10 +48,12 @@
     },
     {
       "file": "src/backend/services/mcp/index.ts",
-      "maxLines": 3997,
+      "maxLines": 3556,
       "modules": [
         "src/backend/services/mcp/serviceRegistries.ts",
-        "src/backend/services/mcp/serverConfigSave.ts"
+        "src/backend/services/mcp/serverConfigSave.ts",
+        "src/backend/services/mcp/serverStatus.ts",
+        "src/backend/services/mcp/serviceSkills.ts"
       ]
     }
   ],
