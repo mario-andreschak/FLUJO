@@ -261,9 +261,50 @@ export function assertReleaseSweepReportsOnly(workflow) {
   }
 }
 
+const SWEEP_MAX_JOB_MINUTES = 120;
+
+/**
+ * The release sweep runs after every published release with no switch to turn it on (#1449: no flags), needs
+ * only the built-in GITHUB_TOKEN, files for real (the reporter's own cap and dedup keep that safe) and is bounded
+ * in time (docs/release-sweep.md).
+ */
+export function assertReleaseSweepRunsByDefault(workflow) {
+  if (!workflow) return;
+  const fail = (message) => { throw new Error(`release-sweep.yml ${message}`); };
+  const trigger = workflow.on?.workflow_run;
+  if (!trigger?.workflows?.includes('Publish npm release') || !trigger.types?.includes('completed')) {
+    fail('must start when a "Publish npm release" run completes, so every release is swept without anyone starting it.');
+  }
+  const text = JSON.stringify(workflow);
+  if (/\bvars\./.test(text)) {
+    fail('must not depend on repository variables: the sweep runs after every release by default, with no switch to set (#1449). '
+      + 'Remove the vars. condition instead of asking for a setting.');
+  }
+  if (/\bsecrets\./.test(text)) {
+    fail('must need nothing but the built-in token: use ${{ github.token }} with the issues: write permission, never a secret.');
+  }
+  const jobs = Object.entries(workflow.jobs ?? {});
+  for (const [id, job] of jobs) {
+    const minutes = job['timeout-minutes'];
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > SWEEP_MAX_JOB_MINUTES) {
+      fail(`/${id} must set timeout-minutes between 1 and ${SWEEP_MAX_JOB_MINUTES}, so a stuck sweep ends on its own.`);
+    }
+  }
+  const filers = jobs.filter(([, job]) => job.permissions?.issues === 'write');
+  const filing = filers.flatMap(([id, job]) => (job.steps ?? []).filter((step) => /release-sweep\/report-issues\.mjs/.test(step.run ?? ''))
+    .map((step) => ({ id, job, step })));
+  if (filers.length !== 1 || filing.length !== 1 || !/(?:^|\s)--file(?:\s|$)/.test(filing[0].step.run)
+      || filing[0].step.if !== undefined || filing[0].job.if !== undefined || filing[0].step['continue-on-error']) {
+    fail('must have exactly one job with issues: write, and it must run report-issues.mjs with --file on every run. '
+      + 'Filing is safe by default (fingerprints, dedup, a cap per run); do not make it conditional.');
+  }
+  if (!/--total-timeout \d+/.test(text)) fail('must pass --total-timeout to run.mjs, so the sweep writes its report before the job time runs out.');
+}
+
 export function assertFullWorkflowContract(workflows, { mainIntegration = false } = {}) {
   assertInstallerProvenance(workflows['installer.yml']);
   assertReleaseSweepReportsOnly(workflows['release-sweep.yml']);
+  assertReleaseSweepRunsByDefault(workflows['release-sweep.yml']);
   assertReleaseVerificationGates(workflows);
   assertPackagedAcceptance(workflows, { mainIntegration });
   const releaseSteps = workflows['verify.yml']?.jobs?.['release-safety']?.steps ?? [];
