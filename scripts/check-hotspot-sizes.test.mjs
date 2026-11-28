@@ -4,8 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import {
-  CONTRACT_FILE, GUIDE, countLines, describeProblems, findRaisedCeilings, findSizeProblems, findUndocumentedModules,
-  lowerCeilings, run,
+  CONTRACT_FILE, GUIDE, countLines, describeProblems, findMissingGuideFiles, findRaisedCeilings, findSizeProblems,
+  findUndocumentedModules, guideFileNames, lowerCeilings, run,
 } from './check-hotspot-sizes.mjs';
 
 const hotspots = [{ file: 'src/a.ts', maxLines: 10 }, { file: 'src/b.ts', maxLines: 5 }];
@@ -44,6 +44,7 @@ test('the message says how to fix the cause', () => {
     [{ file: 'src/c.ts', before: 3, after: 4 }],
   );
   assert.match(text, /Move the new code into a module/);
+  assert.match(text, /move a nearby block of the same kind out with it/);
   assert.match(text, /Do not raise the ceiling/);
   assert.match(text, /npm run check:hotspots -- --write/);
   assert.match(text, /src\/c\.ts {2}3 -> 4/);
@@ -88,12 +89,50 @@ test('run fails until a listed module is named in the guide', () => {
     mkdirSync(path.join(cwd, 'src'));
     mkdirSync(path.join(cwd, path.dirname(GUIDE)), { recursive: true });
     writeFileSync(path.join(cwd, 'src', 'a.ts'), 'one\n');
+    writeFileSync(path.join(cwd, 'src', 'aPart.ts'), '// Part of a.\n');
     writeFileSync(path.join(cwd, CONTRACT_FILE), JSON.stringify({ hotspots: [{ file: 'src/a.ts', maxLines: 1, modules: ['src/aPart.ts'] }] }));
     const env = { HOTSPOT_BASE: 'no-such-commit' };
     const errors = [];
     assert.equal(run({ cwd, env, argv: [], log: () => {}, error: (line) => errors.push(line) }), 1);
     assert.match(errors.join('\n'), /src\/aPart\.ts/);
     writeFileSync(path.join(cwd, GUIDE), '| `aPart.ts` | Owns part of a |\n');
+    assert.equal(run({ cwd, env, argv: [], log: () => {}, error: () => {} }), 0);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('the guide names files by path, by folder or next to a big file, outside code blocks', () => {
+  const guide = [
+    'Paths: `src/x/full.ts`, `flow/aTest.test.ts`, `init.ts`, `chatGoalStore.ts` in `src/goals/`, `.ts`, `use client`.',
+    '`aPart.ts` sits next to its big file. `model:dispatch` is an event, `@/utils/realpath` an alias.',
+    '```sh',
+    'node scripts/only-in-a-code-block.mjs `inBlock.ts`',
+    '```',
+  ].join('\n');
+  assert.deepEqual(guideFileNames(guide), ['src/x/full.ts', 'flow/aTest.test.ts', 'init.ts', 'chatGoalStore.ts', 'aPart.ts']);
+  const files = new Set(['src/x/full.ts', '__tests__/flow/aTest.test.ts', 'src/goals/chatGoalStore.ts', 'src/big/aPart.ts', 'src/backend/init.ts']);
+  const listed = [{ file: 'src/big/big.ts', maxLines: 9, modules: ['src/big/aPart.ts'] }];
+  assert.deepEqual(findMissingGuideFiles(listed, guide, (file) => files.has(file)), ['init.ts']);
+  const text = describeProblems([], [], [], ['init.ts']);
+  assert.match(text, /names files that do not exist/);
+  assert.match(text, /path from the repository root/);
+});
+
+test('run fails while the guide names a file that does not exist', () => {
+  const cwd = mkdtempSync(path.join(os.tmpdir(), 'flujo-hotspots-'));
+  try {
+    mkdirSync(path.join(cwd, 'scripts'));
+    mkdirSync(path.join(cwd, 'src'));
+    mkdirSync(path.join(cwd, path.dirname(GUIDE)), { recursive: true });
+    writeFileSync(path.join(cwd, 'src', 'a.ts'), 'one\n');
+    writeFileSync(path.join(cwd, CONTRACT_FILE), JSON.stringify({ hotspots: [{ file: 'src/a.ts', maxLines: 1 }] }));
+    writeFileSync(path.join(cwd, GUIDE), 'The run lives in `a.ts`; recovery in `gone.ts`.\n');
+    const env = { HOTSPOT_BASE: 'no-such-commit' };
+    const errors = [];
+    assert.equal(run({ cwd, env, argv: [], log: () => {}, error: (line) => errors.push(line) }), 1);
+    assert.match(errors.join('\n'), /gone\.ts/);
+    writeFileSync(path.join(cwd, GUIDE), 'The run lives in `a.ts`.\n');
     assert.equal(run({ cwd, env, argv: [], log: () => {}, error: () => {} }), 0);
   } finally {
     rmSync(cwd, { recursive: true, force: true });

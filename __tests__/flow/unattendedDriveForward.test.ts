@@ -200,6 +200,36 @@ describe('unattended drive-forward (#218/#339)', () => {
     expect(result.sharedState.currentNodeId).toBe(FOLLOWUP);
   });
 
+  it.each([
+    ['schedule', 'chat', false],
+    ['chat', 'schedule', true],
+  ] as const)(
+    'a %s conversation continued by a %s run keeps its origin and takes attendance from the new run',
+    async (origin, source, unattended) => {
+      const conversationId = `continued-${origin}-by-${source}`;
+      conversationStates.set(conversationId, {
+        trackingInfo: { executionId: `${origin}-run`, startTime: 1, nodeExecutionTracker: [] },
+        messages: [],
+        flowId: FLOW_ID,
+        conversationId,
+        title: 'Continued conversation',
+        currentNodeId: PROCESS,
+        status: 'completed',
+        source: origin,
+        unattended: !unattended,
+        createdAt: 1,
+        updatedAt: 1,
+      } as SharedState);
+
+      const result = await runFlow({ flowId: FLOW_ID, conversationId, prompt: 'carry on', mode: 'conversation', source });
+
+      expect(result.status).toBe('completed');
+      expect(result.sharedState.source).toBe(origin);
+      expect(result.sharedState.unattended).toBe(unattended);
+      expect(result.sharedState.currentNodeId).toBe(unattended ? FOLLOWUP : PROCESS);
+    },
+  );
+
   it('does not auto-advance into a terminal one-way Subflow sub-agent', async () => {
     getFlowMock.mockResolvedValue({
       ...flowGraph,
