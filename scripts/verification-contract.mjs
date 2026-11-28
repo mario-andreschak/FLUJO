@@ -11,9 +11,10 @@ export const FULL_CHECK_NAMES = Object.freeze([
   'dependency-security', 'CodeQL (javascript-typescript)', 'CodeQL (actions)', 'verification',
 ]);
 
+/** Every fixed prerequisite, and any further job the gate lists, must succeed. */
 export function assertFullDependencyResults(needs) {
   if (!needs || typeof needs !== 'object' || Array.isArray(needs)) throw new Error('Missing verification dependencies.');
-  for (const id of FULL_JOB_IDS) {
+  for (const id of new Set([...FULL_JOB_IDS, ...Object.keys(needs)])) {
     if (needs[id]?.result !== 'success') {
       throw new Error(`Required verification job ${id} concluded ${needs[id]?.result ?? 'missing'}.`);
     }

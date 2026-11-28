@@ -99,7 +99,7 @@ test('a missed reopen replays the full conversation in the same call and saves t
 });
 
 test.each([
-  ['the setting is off', { sessionResume: false }, false],
+  ['the node passes a scoped view of the conversation', { sessionResume: false }, false],
   ['the instructions changed', { messages: true }, true],
   ['the key changed', { apiKey: 'other-key' }, true],
 ])('%s: the full conversation is replayed', async (_name, change, keepsHome) => {
@@ -133,4 +133,23 @@ test('a conversation node already in use runs in a one-off home with the full co
   mockRun.mockImplementationOnce(nativeTurn('apple'));
   await new AntigravityCliAdapter().createCompletion(input(secondTurn));
   expect(mockRun.mock.calls[2][0].resumeConversationId).toBe(recorded[0].conversation);
+});
+
+test('the chosen effort reaches the CLI and a changed effort starts a fresh conversation', async () => {
+  const model = { id: 'antigravity', name: 'gemini-3.1-pro', ApiKey: 'key', provider: 'antigravity-cli', adapter: 'antigravity-cli', reasoningEffort: 'low' } as CompletionInput['model'];
+  const secondTurn = await completeFirstTurn({ model });
+  expect(mockRun.mock.calls[0][0].effort).toBe('low');
+  mockRun.mockImplementationOnce(nativeTurn('apple'));
+  await new AntigravityCliAdapter().createCompletion(input(secondTurn, { model: { ...model, reasoningEffort: 'high' } }));
+  expect(mockRun.mock.calls[1][0].effort).toBe('high');
+  expect(mockRun.mock.calls[1][0].resumeConversationId).toBeUndefined();
+  expect(mockRun.mock.calls[1][0].prompt).toContain('Remember the word apple.');
+});
+
+test('a model name that already carries a level never gets a separate effort', async () => {
+  mockRun.mockImplementationOnce(nativeTurn('Noted.'));
+  await new AntigravityCliAdapter().createCompletion(input(firstTurn, {
+    model: { id: 'antigravity', name: 'gemini-3.1-pro-high', ApiKey: 'key', provider: 'antigravity-cli', adapter: 'antigravity-cli', reasoningEffort: 'low' },
+  }));
+  expect(mockRun.mock.calls[0][0].effort).toBeUndefined();
 });

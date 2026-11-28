@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { ChildProcess } from 'node:child_process';
+import { spawnSync, type ChildProcess } from 'node:child_process';
 import type { CompletionInput } from '@/backend/services/model/adapters/types';
 import type { AntigravityCliRuntime } from '@/backend/services/model/adapters/antigravityCliRuntime';
 
@@ -59,6 +59,8 @@ jest.mock('@/backend/services/statistics', () => ({ classifyStatisticsError: () 
 
 import { AntigravityCliAdapter } from '@/backend/services/model/adapters/antigravityCliAdapter';
 import { resolveAntigravityCliEntry } from '@/backend/services/model/adapters/antigravityCliProcess';
+import { fetchAntigravityCliModels } from '@/backend/services/model/adapters/antigravityCliDiscovery';
+import { ANTIGRAVITY_EFFORT_LEVELS } from '@/shared/types/model/antigravityEffort';
 import { FlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
 
 type GenAiRequest = {
@@ -69,6 +71,7 @@ type GenAiRequest = {
     parametersJsonSchema?: { properties?: Record<string, unknown> };
   }> }>;
   systemInstruction?: unknown;
+  generationConfig?: { thinkingConfig?: Record<string, unknown> };
 };
 
 function nativeMcpCall(body: GenAiRequest, args: { ServerName: string; ToolName: string; Arguments: object }, summary: string, action: string) {
@@ -324,38 +327,125 @@ describe('Antigravity pinned native executable integration', () => {
     }
   }, 45_000);
 
-  it('reopens the saved native conversation on the next turn and sends only the new message', async () => {
+  it('keeps one CLI conversation over several turns and a FLUJO restart after a crash, counting each turn once', async () => {
+    // The stand-in answers from what the CLI actually sent it, like a real model would.
     const endpoint = await startFakeGenAi((body, res, streaming) => {
       const said = JSON.stringify(body.contents ?? []);
-      respond(res, streaming, [{ text: said.includes('Which word') ? 'apple' : 'Noted.' }]);
+      // The CLI adds its own notes after the question; FLUJO's question is framed.
+      const asked = (body.contents ?? []).flatMap(content => (content.parts ?? []).map(part => part.text ?? ''))
+        .filter(text => text.includes('<flujo_request>')).at(-1) ?? '';
+      const reply = asked.includes('Which word') ? said.includes('the word pear') ? 'pear' : said.includes('the word apple') ? 'apple' : 'unknown'
+        : asked.includes('Which number') ? said.includes('the number 7') ? '7' : 'unknown' : 'Noted.';
+      respond(res, streaming, [{ text: reply }]);
     });
     mockGenAiBaseUrl = endpoint.url;
-    const session = { conversationId: 'flujo-conversation', nodeId: 'process-node', sessionResume: true };
-    const firstMessages = [{ role: 'user' as const, content: 'Remember the word apple.' }];
+    const sessionsRoot = path.join(mockFixtureRoot, 'db', 'antigravity-cli-runtime', 'sessions');
+    const savedSession = async () => {
+      const records = (await fs.readdir(sessionsRoot)).filter(name => name.endsWith('.json'));
+      expect(records).toHaveLength(1);
+      const file = path.join(sessionsRoot, records[0]);
+      return { file, ...JSON.parse(await fs.readFile(file, 'utf8')) as { conversationId: string } };
+    };
+    type Messages = CompletionInput['messages'];
+    let adapter = new AntigravityCliAdapter();
+    const turn = async (history: Messages, text: string) => {
+      const before = endpoint.requests.length;
+      const messages = [...history, { role: 'user', content: text }] as Messages;
+      const result = await adapter.createCompletion(input({ conversationId: 'flujo-conversation', nodeId: 'process-node', sessionResume: true, messages }));
+      // What the model saw for this question: each earlier message once means only the new one was sent.
+      const request = endpoint.requests.slice(before).find(sent => JSON.stringify(sent.contents ?? []).includes(text));
+      const texts = (request?.contents ?? []).flatMap(content => (content.parts ?? []).map(part => part.text ?? ''));
+      const seen = (needle: string) => texts.filter(sentText => sentText.includes(needle)).length;
+      return { reply: String(result.completion.choices[0].message.content).trim(), total: result.completion.usage?.total_tokens,
+        history: [...messages, ...result.transcript!] as Messages, seen, home: mockRuntime!.home };
+    };
     try {
-      const first = await new AntigravityCliAdapter().createCompletion(input({ ...session, messages: firstMessages }));
-      const firstHome = mockRuntime!.home;
-      expect(path.dirname(firstHome)).toBe(path.join(mockFixtureRoot, 'db', 'antigravity-cli-runtime', 'sessions'));
-      const modelRequests = endpoint.requests.length;
-      const second = await new AntigravityCliAdapter().createCompletion(input({ ...session,
-        messages: [...firstMessages, ...first.transcript!, { role: 'user', content: 'Which word?' }] as CompletionInput['messages'] }));
-      expect(mockRuntime!.home).toBe(firstHome);
-      expect(second.completion.choices[0].message.content).toContain('apple');
-      const resumed = endpoint.requests.slice(modelRequests).find(request => JSON.stringify(request.contents ?? []).includes('Which word'));
-      const texts = (resumed?.contents ?? []).flatMap(content => (content.parts ?? []).map(part => `${content.role}:${part.text ?? ''}`));
-      expect(texts.filter(text => text.includes('Remember the word apple.'))).toHaveLength(1);
-      expect(texts.filter(text => text.includes('Which word?'))).toHaveLength(1);
-      expect(texts.some(text => text.startsWith('model:') && text.includes('Noted.'))).toBe(true);
-      // The native result counts the whole conversation; FLUJO reports this turn only.
-      expect(second.completion.usage?.total_tokens).toBe(first.completion.usage?.total_tokens);
-      expect(mockNativeChildren).toHaveLength(2);
+      const first = await turn([], 'Remember the word apple.');
+      expect(path.dirname(first.home)).toBe(sessionsRoot);
+      const conversation = (await savedSession()).conversationId;
+      const second = await turn(first.history, 'Remember the number 7.');
+      expect(second.seen('Remember the word apple.')).toBe(1);
+      const third = await turn(second.history, 'Which word?');
+      expect(third.reply).toBe('apple');
+      expect([third.seen('Remember the word apple.'), third.seen('Remember the number 7.'), third.seen('Which word?')]).toEqual([1, 1, 1]);
+      expect((await savedSession()).conversationId).toBe(conversation);
+
+      // FLUJO stops without releasing the session (a crash), then starts again as a new process.
+      const { file } = await savedSession();
+      const crashed = spawnSync(process.execPath, ['-e', '']).pid;
+      await fs.writeFile(file.replace(/\.json$/, '.lock'), JSON.stringify({ pid: crashed, at: Date.now() }));
+      jest.resetModules();
+      const restarted = jest.requireActual<typeof import('@/backend/services/model/adapters/antigravityCliAdapter')>('@/backend/services/model/adapters/antigravityCliAdapter');
+      adapter = new restarted.AntigravityCliAdapter();
+      const fourth = await turn(third.history, 'Which number?');
+      expect(fourth.reply).toBe('7');
+      expect(fourth.home).toBe(first.home);
+      expect([fourth.seen('Remember the word apple.'), fourth.seen('Which word?'), fourth.seen('Which number?')]).toEqual([1, 1, 1]);
+      expect((await savedSession()).conversationId).toBe(conversation);
+      await expect(fs.stat(file.replace(/\.json$/, '.lock'))).rejects.toMatchObject({ code: 'ENOENT' });
+
+      // An edited earlier message cannot continue the CLI's copy; the whole chat is sent to a new one.
+      const edited = fourth.history.map(message => message.content === 'Remember the word apple.' ? { ...message, content: 'Remember the word pear.' } : message) as Messages;
+      const fifth = await turn(edited, 'Which word?');
+      expect(fifth.reply).toBe('pear');
+      expect([fifth.seen('Remember the word pear.'), fifth.seen('Remember the word apple.')]).toEqual([1, 0]);
+      expect((await savedSession()).conversationId).not.toBe(conversation);
+
+      // The CLI reports totals for the whole conversation; each turn is counted once.
+      const totals = [first, second, third, fourth, fifth].map(each => each.total);
+      expect(totals[0]).toBeGreaterThan(0);
+      expect(new Set(totals)).toEqual(new Set([totals[0]]));
+      expect(mockNativeChildren).toHaveLength(5);
       for (const child of mockNativeChildren) expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+      // The copied sign-in file never stays behind in the kept home.
+      await expect(fs.stat(path.join(first.home, '.gemini', 'antigravity-cli', 'antigravity-oauth-token'))).rejects.toMatchObject({ code: 'ENOENT' });
     } catch (error) {
       throw new Error(String(error) + '; synthetic CLI diagnostics: ' + mockStderr + '; native stream: ' + mockStdout);
     } finally {
       await endpoint.close();
     }
-  }, 60_000);
+  }, 180_000);
+
+  it('offers exactly the effort levels the real CLI lists for each model and passes the chosen one to it', async () => {
+    const binary = await resolveAntigravityCliEntry();
+    const usage = spawnSync(binary, ['--help'], { encoding: 'utf8', windowsHide: true, timeout: 60_000, env: { ...process.env, AGY_CLI_DISABLE_AUTO_UPDATE: 'true' } });
+    expect(`${usage.stdout}${usage.stderr}`).toContain(`(${ANTIGRAVITY_EFFORT_LEVELS.join('|')})`);
+    const endpoint = await startFakeGenAi((_body, res, streaming) => respond(res, streaming, [{ text: 'Effort probe answered.' }]));
+    mockGenAiBaseUrl = endpoint.url;
+    const run = (name: string, effort: string) => new AntigravityCliAdapter().createCompletion(input({
+      model: { ...input().model, name, reasoningEffort: effort as CompletionInput['model']['reasoningEffort'] },
+      messages: [{ role: 'user', content: 'Effort probe.' }],
+    }));
+    try {
+      const models = await fetchAntigravityCliModels('synthetic-local-key');
+      const withLevels = models.filter(model => model.reasoningEfforts?.length);
+      expect(withLevels.length).toBeGreaterThan(0);
+      for (const model of withLevels) {
+        const listed = model.reasoningEfforts!;
+        expect(listed.every(level => (ANTIGRAVITY_EFFORT_LEVELS as readonly string[]).includes(level))).toBe(true);
+        const missing = ANTIGRAVITY_EFFORT_LEVELS.find(level => !listed.includes(level))!;
+        // The CLI's own refusal names the levels it has for this model: they must be FLUJO's list.
+        const refusal = await run(model.id, missing).then(() => '', (error: Error) => error.message);
+        expect(refusal).toMatch(new RegExp(`^This Antigravity model has no "${missing}" effort level\\. It offers `));
+        expect(/It offers ([a-z, ]+)\./.exec(refusal)?.[1].split(', ').sort()).toEqual([...listed].sort());
+      }
+      // Each level of the model with the most levels runs, and reaches the model request.
+      const widest = [...withLevels].sort((a, b) => b.reasoningEfforts!.length - a.reasoningEfforts!.length)[0];
+      const thinkingByLevel = new Map<string, string>();
+      for (const level of widest.reasoningEfforts!) {
+        const before = endpoint.requests.length;
+        const result = await run(widest.id, level);
+        expect(result.completion.choices[0].message.content).toContain('Effort probe answered.');
+        thinkingByLevel.set(level, JSON.stringify([...new Set(endpoint.requests.slice(before).map(sent => JSON.stringify(sent.generationConfig?.thinkingConfig ?? null)))].sort()));
+      }
+      const levels = widest.reasoningEfforts!;
+      expect(thinkingByLevel.get(levels[0])).not.toBe(thinkingByLevel.get(levels[levels.length - 1]));
+    } catch (error) {
+      throw new Error(String(error) + '; synthetic CLI diagnostics: ' + mockStderr + '; native stream: ' + mockStdout);
+    } finally {
+      await endpoint.close();
+    }
+  }, 240_000);
 
   it.each(['approval_denied', 'stale_fence'])('prevents native MCP dispatch after %s', async mode => {
     const approval = jest.fn(async () => mode !== 'approval_denied');

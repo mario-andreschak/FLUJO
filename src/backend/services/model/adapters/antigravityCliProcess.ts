@@ -4,6 +4,7 @@ import * as nodeModule from 'node:module';
 import path from 'node:path';
 import { AntigravityCliEventDecoder, type AntigravityCliEvent } from './antigravityCliEvents';
 import { ANTIGRAVITY_CLI_TIMEOUT_MS, ANTIGRAVITY_LOGIN_INSTRUCTIONS, type AntigravityCliRuntime } from './antigravityCliRuntime';
+import { isAntigravityEffort, type AntigravityEffort } from '@/shared/types/model/antigravityEffort';
 
 function nativeRuntime(): {
   findBinary(): string | undefined; resolveBinary(): Promise<string>; supportedVersion(version: string): boolean; versionError(version: string): Error;
@@ -75,6 +76,30 @@ export function prepareAntigravityCliPrompt(prompt: string): string {
   // conversation text from being mistaken for a command or standalone directive.
   return prompt.startsWith(REQUEST_OPEN) && prompt.endsWith(REQUEST_CLOSE)
     ? prompt : `${REQUEST_OPEN}${prompt}${REQUEST_CLOSE}`;
+}
+
+/**
+ * The CLI refuses a model or effort it cannot resolve before it starts a
+ * conversation. Explain it in FLUJO's words; only the effort levels, checked
+ * against the CLI's vocabulary, are taken from its text.
+ */
+export function antigravityModelSelectionError(diagnostic: string): Error | undefined {
+  if (!/^invalid model selection\b/.test(diagnostic)) return undefined;
+  const missing = /has no "([a-z]+)" effort \(available: ([a-z]+(?:, [a-z]+)*)\)/.exec(diagnostic);
+  const offered = missing?.[2].split(', ');
+  if (missing && isAntigravityEffort(missing[1]) && offered?.every(isAntigravityEffort)) {
+    return new Error(`This Antigravity model has no "${missing[1]}" effort level. It offers ${offered.join(', ')}. Choose one of them in the model settings.`);
+  }
+  if (/conflicts with --effort/.test(diagnostic)) {
+    return new Error('This Antigravity model name already includes an effort level. Choose the name without the level to pick an effort, or clear the effort setting.');
+  }
+  if (/--effort is not supported for model/.test(diagnostic)) {
+    return new Error('This Antigravity model has no effort levels. Clear the effort setting in the model settings.');
+  }
+  if (/is not recognized as a known model/.test(diagnostic)) {
+    return new Error('The Antigravity CLI does not know this model. Reload the model list and choose a listed model.');
+  }
+  return new Error('The Antigravity CLI refused this model selection. Reload the model list and check the model and effort settings.');
 }
 
 export function antigravityCliFailureHint(diagnostic: string): string {
@@ -157,11 +182,14 @@ export async function runAntigravityCli(options: {
   onEvent(event: AntigravityCliEvent): void; timeoutMs?: number; onStarted?: () => Promise<void>;
   /** Reopen this saved conversation. The prompt is sent only after init confirms it. */
   resumeConversationId?: string;
+  /** One of the levels `agy models` lists for the model. */
+  effort?: AntigravityEffort;
 }): Promise<void> {
   if (options.signal.aborted) throw antigravityCliAbortError();
   await assertHostAccess('command-line-model');
   const resumeId = options.resumeConversationId;
   if (resumeId !== undefined && !/^[A-Za-z0-9][A-Za-z0-9-]{0,127}$/.test(resumeId)) throw new AntigravityResumeMissError();
+  if (options.effort !== undefined && !isAntigravityEffort(options.effort)) throw new Error('Unsupported Antigravity effort level.');
   const entry = await resolveAntigravityCliEntry();
   if (options.signal.aborted) throw antigravityCliAbortError();
   const timeoutMs = options.timeoutMs ?? ANTIGRAVITY_CLI_TIMEOUT_MS;
@@ -173,7 +201,8 @@ export async function runAntigravityCli(options: {
       '--agent', 'flujo', '--disable-slash-commands', '--print-timeout', `${Math.ceil(timeoutMs / 1000)}s`,
       '--log-file', path.join(options.runtime.home, 'agy.log'),
       ...(resumeId ? ['--conversation', resumeId] : []),
-      ...(options.model && options.model !== 'default' ? ['--model', options.model] : [])], {
+      ...(options.model && options.model !== 'default' ? ['--model', options.model] : []),
+      ...(options.effort ? ['--effort', options.effort] : [])], {
       cwd: options.runtime.workingDirectory, env: options.runtime.env as NodeJS.ProcessEnv,
       shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -208,7 +237,11 @@ export async function runAntigravityCli(options: {
     const deadline = setTimeout(() => fail(new Error('Antigravity CLI execution deadline exceeded.')), timeoutMs);
     deadline.unref();
     const decoder = new AntigravityCliEventDecoder(event => {
-      if (event.event === 'result' && typeof event.result.error === 'string') resultDiagnostic = event.result.error.slice(0, 4096);
+      if (event.event === 'result' && typeof event.result.error === 'string') {
+        resultDiagnostic = event.result.error.slice(0, 4096);
+        const selection = event.result.status === 'SUCCESS' ? undefined : antigravityModelSelectionError(resultDiagnostic);
+        if (selection) throw selection;
+      }
       // An unknown conversation silently starts a new one. Check init first,
       // so a delta prompt never reaches a conversation without its history.
       if (resumeId && !inputSent) {
