@@ -237,7 +237,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     resumingPausedLogicalRun, resetPersonaPromptPrefix, personaInstructionContext, personaCoreAppRefs,
   });
   const { ensureRunStarted, finalizeRun } = createRunStatistics({
-    state: () => sharedState, input, logicalRunId, effectiveConvId, startTime,
+    state: () => sharedState, input, logicalRunId, effectiveConvId, startTime, runFlow,
   });
 
   if ((sharedState.runDepth ?? 0) > MAX_SUBFLOW_DEPTH) {

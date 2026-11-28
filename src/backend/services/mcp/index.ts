@@ -1,4 +1,4 @@
-import { scopedRegistry } from './serviceRegistries';
+import { liveClient, scopedRegistry } from './serviceRegistries';
 import { readServerStatus } from './serverStatus';
 import * as serviceSkills from './serviceSkills';
 import { isUnparsableStdioLine, transportForHostInspection } from './transportInspection';
@@ -91,7 +91,6 @@ import {
   formatErrorChain,
   isAuthRequiredError,
   isOAuthAuthenticationError,
-  isClientConnectionClosed,
   isTransientStreamError,
 } from "@/utils/mcp/utils";
 import { probeOAuthSupport } from "@/utils/mcp/oauthProbe";
@@ -428,33 +427,9 @@ export class MCPService {
     return this.toolSchemaHashes.get(`${serverName}\0${toolName}`);
   }
 
-  /**
-   * Get a client by server name
-   */
+  /** The live client of a server; a closed one is removed and reported as missing. */
   getClient(serverName: string): Client | undefined {
-    const client = this.clients.get(serverName);
-
-    // A client whose connection is already closed (transport detached, or its abort
-    // signal fired — e.g. torn down elsewhere between polls) can never serve another
-    // request: HTTP transports would reject every call instantly with AbortError
-    // "This operation was aborted". Evict it and report "no client" so every caller's
-    // existing missing-client path (callTool's pre-call reconnect, listWithReconnect,
-    // scheduleConnectionRetry) rebuilds a fresh connection instead of reusing a corpse.
-    // The map is shared across instances, so if another instance already replaced the
-    // entry with a fresh client, we naturally see the fresh one here — never evict it.
-    if (client && isClientConnectionClosed(client)) {
-      log.warn(
-        `getClient: client for ${serverName} has a closed/aborted connection — evicting it`,
-      );
-      this.clients.delete(serverName);
-      return undefined;
-    }
-
-    log.debug(
-      `getClient: Looking for client: ${serverName}`,
-      client ? "Found" : "Not found",
-    );
-    return client;
+    return liveClient(serverName);
   }
 
   /**

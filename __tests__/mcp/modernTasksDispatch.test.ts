@@ -1,5 +1,8 @@
-jest.mock('@/backend/services/mcp', () => ({ mcpService: { getClient: jest.fn() } }));
-import { mcpService } from '@/backend/services/mcp';
+jest.mock('@/backend/services/mcp/serviceRegistries', () => ({
+  ...jest.requireActual('@/backend/services/mcp/serviceRegistries'),
+  liveClient: jest.fn(),
+}));
+import { liveClient } from '@/backend/services/mcp/serviceRegistries';
 import { Client as SplitClient, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import type { Client as LegacyClient } from '@modelcontextprotocol/sdk/client/index.js';
 import { createMcpHandler, Server } from '@modelcontextprotocol/server';
@@ -100,7 +103,7 @@ async function fixture(mode: Mode = 'task', advertised = true) {
     clientInfo: { name: 'dispatch-host', version: '1' }, clientCapabilities: {},
   });
   await client.connect(transport);
-  jest.mocked(mcpService.getClient).mockReturnValue(client as unknown as LegacyClient);
+  jest.mocked(liveClient).mockReturnValue(client as unknown as LegacyClient);
   return { client, legacy: client as unknown as LegacyClient, wire,
     async close() { await closeTasksExtensionSession(client); await client.close(); await handler.close(); },
   };

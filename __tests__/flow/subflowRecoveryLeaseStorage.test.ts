@@ -2,7 +2,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promises as fs, type BigIntStats } from 'node:fs';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
-import { reportSubflowRunOutcome, type SubflowRunOutcome } from '@/backend/execution/flow/subflowRecovery';
+import { reportSubflowRunOutcome, type SubflowRunner, type SubflowRunOutcome } from '@/backend/execution/flow/subflowRecovery';
 import { getCurrentWorkspace, getWorkspaceDbDir, runWithWorkspace, workspaceCacheKey } from '@/utils/workspace';
 import type { SharedState, SubflowInvocation } from '@/backend/execution/flow/types';
 
@@ -18,9 +18,7 @@ jest.mock('@/backend/execution/flow/persistConversationState', () => {
     persistConversationState: (...args: Parameters<Persistence['persistConversationState']>) => persistConversationStateMock(...args),
   };
 });
-jest.mock('@/backend/execution/flow/runFlow', () => ({
-  runFlow: (input: unknown) => runFlowMock(input),
-}));
+const runFlow: SubflowRunner = (input) => runFlowMock(input);
 
 function deferred() {
   let resolve!: () => void;
@@ -138,7 +136,7 @@ describe('parent resume lease with real storage', () => {
   const hasPendingOwner = () => pendingReports.size > 0 || workspaces.some(workspace =>
     runWithWorkspace(workspace, () => global.__flujo_subflow_parent_resume_leases?.has(workspaceCacheKey('lease-invocation')) ?? false));
   const reportOutcome = (outcome: SubflowRunOutcome) => {
-    const report = reportSubflowRunOutcome(outcome);
+    const report = reportSubflowRunOutcome(outcome, runFlow);
     pendingReports.add(report);
     // Observe settlement without creating an unhandled rejected cleanup promise.
     void report.then(() => pendingReports.delete(report), () => pendingReports.delete(report));

@@ -6,7 +6,6 @@ import {
   WorkspaceMutationError,
   assertWorkspaceRoots,
   createWorkspace,
-  deleteWorkspace,
   listWorkspaces,
   renameWorkspace,
   runWithWorkspace,
@@ -18,6 +17,7 @@ import {
   getWorkspaceLayoutStatus,
   waitForWorkspaceLayoutReady,
 } from '@/backend/services/workspace/layoutReadiness';
+import { deleteWorkspace } from '@/backend/services/workspace/workspaceDeletion';
 import {
   accountRequestUser, accountsDamagedResponse, denialResponse, unknownWorkspaceResponse, type AccountRequestUser,
 } from '@/backend/services/accounts/requestAccess';

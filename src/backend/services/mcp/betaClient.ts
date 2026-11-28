@@ -2,6 +2,7 @@ import { registerTaskInputHandler, dispatchTaskInputRequest } from './taskInputH
 import { mcpAppsEnabled, mcpSkillsEnabled, mcpAppRuntimeBrokerEnabled } from '@/shared/utils/mcpClientFeatures';
 import { getCurrentWorkspace, bindToCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
 import { registerTasksExtensionClient } from './tasksExtensionSession';
+import { liveClient } from './serviceRegistries';
 import { MCP_SKILLS_EXTENSION_ID } from '@/shared/types/mcp';
 import { InputResponseV2Schema } from '@modelcontextprotocol/ext-tasks/core/v2';
 import { getElicitationContext } from './elicitationContext';
@@ -183,10 +184,7 @@ export function createNewBetaClient(
 
   // Register the declared host identity before discovery. Only connections
   // that negotiated 2026-07-28 can later create the raw extension channel.
-  const isAuthorityCurrent = bindToCurrentWorkspace(async () => {
-    const { mcpService } = await import('@/backend/services/mcp');
-    return mcpService.getClient(config.name) === (client as unknown as Client);
-  });
+  const isAuthorityCurrent = bindToCurrentWorkspace(async () => liveClient(config.name) === (client as unknown as Client));
   registerTasksExtensionClient(client, {
     endpointId: workspaceCacheKey(config.name), clientInfo, clientCapabilities,
     authorizeLateTaskCancellation: isAuthorityCurrent,

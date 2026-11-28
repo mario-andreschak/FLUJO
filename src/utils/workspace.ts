@@ -806,15 +806,20 @@ export async function updateWorkspaceRoots(
 }
 
 
-/** Permanently delete a non-default workspace and all of its owned data. */
-export async function deleteWorkspace(workspace: string): Promise<void> {
-  return withWorkspaceNamespaceMutation(() => deleteWorkspaceWithinNamespaceLock(workspace));
+/**
+ * Permanently remove a non-default workspace and all of its owned data.
+ * `stopWorkspace` runs inside that workspace first and must stop everything
+ * that still uses its files; `deleteWorkspace` in
+ * `src/backend/services/workspace/workspaceDeletion.ts` supplies it.
+ */
+export async function removeWorkspace(workspace: string, stopWorkspace: () => Promise<void>): Promise<void> {
+  return withWorkspaceNamespaceMutation(() => removeWorkspaceWithinNamespaceLock(workspace, stopWorkspace));
 }
 
 /** A just-stopped MCP server or the indexer can still hold a file in the tree: about 1.5 s in total. */
 const WORKSPACE_DELETE_RETRY_DELAYS_MS: readonly number[] = Object.freeze([100, 200, 400, 800]);
 
-async function deleteWorkspaceWithinNamespaceLock(workspace: string): Promise<void> {
+async function removeWorkspaceWithinNamespaceLock(workspace: string, stopWorkspace: () => Promise<void>): Promise<void> {
   const name = assertValidWorkspaceName(workspace);
   if (name === DEFAULT_WORKSPACE) {
     throw new WorkspaceMutationError(
@@ -823,17 +828,7 @@ async function deleteWorkspaceWithinNamespaceLock(workspace: string): Promise<vo
     );
   }
   const dir = await resolveManagedWorkspace(name);
-  const { stopAndDrainPersonaGoalRuntime } = await import('@/backend/services/enduringAgents/goalRuntime');
-  await runWithWorkspace(name, () => stopAndDrainPersonaGoalRuntime());
-  const { mcpService } = await import('@/backend/services/mcp');
-  const disconnected = await runWithWorkspace(name, () => mcpService.disconnectAll('workspace deletion'));
-  const unconfirmed = new Set(disconnected.failed);
-  for (const receipt of disconnected.shutdownReceipts) {
-    if (receipt.exitOutcome === 'unknown' || receipt.isolation?.cleanupOutcome === 'unknown') unconfirmed.add(receipt.serverName);
-  }
-  if (unconfirmed.size > 0) {
-    throw new Error(`Cannot delete workspace while ${unconfirmed.size} MCP server(s) remain open.`);
-  }
+  await runWithWorkspace(name, stopWorkspace);
   await retryTransientFileOperation(() => fs.rm(dir, { recursive: true, force: true }), {
     label: 'workspace-delete', delaysMs: WORKSPACE_DELETE_RETRY_DELAYS_MS,
   });

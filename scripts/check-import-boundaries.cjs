@@ -130,10 +130,13 @@ function directImports(root, file, config, cache) {
  * Code split out of runFlow.ts, ModelHandler.ts or the MCP service index.ts
  * (#571) must not import its big file back. A module the big file imports, or
  * a module listed as split out of it, may not import that file, not even
- * lazily or for a type. Existing two-way imports are listed with a reason in
- * `backImportDebt` and fail once they are gone, like the layer debt above.
+ * lazily or for a type. There are no exceptions: pass what the module needs in
+ * as a parameter, or move the shared part into its own module.
  */
 function inspectHotspotImports(root, contract) {
+  if ('backImportDebt' in contract) {
+    throw new Error('The hotspot no-import-back rule has no exceptions. Remove backImportDebt from scripts/execution-hotspots.json; pass what the module needs in as a parameter, or move the shared part into its own module.');
+  }
   const config = loadConfig(root);
   const sameFile = (file) => (ts.sys.useCaseSensitiveFileNames ? file : file.toLowerCase());
   const cache = ts.createModuleResolutionCache(root, sameFile, config.options);
@@ -162,20 +165,7 @@ function inspectHotspotImports(root, contract) {
       }
     }
   }
-  const key = ({ from, to }) => JSON.stringify([sameFile(from), sameFile(to)]);
-  const allowed = new Set();
-  for (const entry of contract.backImportDebt ?? []) {
-    if (!entry.reason?.trim() || !entry.from || !entry.to) {
-      throw new Error('Every hotspot back-import exception needs from, to and a removal reason.');
-    }
-    allowed.add(key(entry));
-  }
-  const present = new Set(backImports.map(key));
-  return {
-    missing,
-    violations: backImports.filter((edge) => !allowed.has(key(edge))),
-    stale: (contract.backImportDebt ?? []).filter((edge) => !present.has(key(edge))),
-  };
+  return { missing, violations: backImports };
 }
 
 function main() {
@@ -193,10 +183,9 @@ function main() {
   for (const edge of hotspots.violations) {
     process.stderr.write(`${edge.from}:${edge.line} must not import ${edge.to}: it was split out of that file or is used by it. Pass what it needs in as a parameter, or move the shared part into its own module.\n`);
   }
-  for (const edge of hotspots.stale) process.stderr.write(`Remove stale hotspot back-import exception: ${edge.from} -> ${edge.to}\n`);
-  process.stdout.write(`Checked ${contract.hotspots.length} hotspot files; ${hotspots.violations.length} new back-imports; ${hotspots.stale.length} stale exceptions.\n`);
+  process.stdout.write(`Checked ${contract.hotspots.length} hotspot files; ${hotspots.violations.length} back-imports.\n`);
   process.exitCode = result.violations.length || result.stale.length
-    || hotspots.missing.length || hotspots.violations.length || hotspots.stale.length ? 1 : 0;
+    || hotspots.missing.length || hotspots.violations.length ? 1 : 0;
 }
 
 module.exports = { edgeKey, inspectImportBoundaries, inspectHotspotImports };

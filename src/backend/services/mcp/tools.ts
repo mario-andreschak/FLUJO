@@ -20,6 +20,7 @@ import { getTasksExtensionSession, TasksExtensionRequestTimeoutError } from './t
 import { getElicitationContext } from './elicitationContext';
 import { runRemoteTaskLifecycle } from "./clientTasks";
 import { resolveServerIdentity } from "./remoteTaskStore";
+import { liveClient } from "./serviceRegistries";
 import {
   checkToolCallVisibility,
   filterToolsForAudience,
@@ -337,15 +338,13 @@ export async function callTool(
       const assertCurrent = async (current: Client) => {
         await assertMcpIsolationDispatch(current, serverName);
         await assertBundledFlujoWorkloadEffectCurrent();
-        const { mcpService } = await import('@/backend/services/mcp');
-        if (serverIdentity === 'unknown' || mcpService.getClient(serverName) !== current || await resolveServerIdentity(serverName) !== serverIdentity) throw new Error('MCP task server connection identity changed');
+        if (serverIdentity === 'unknown' || liveClient(serverName) !== current || await resolveServerIdentity(serverName) !== serverIdentity) throw new Error('MCP task server connection identity changed');
         if (originatingInputContext && getElicitationContext(serverName) !== originatingInputContext) throw new Error('MCP task originating run is no longer current');
       };
       // Only a durably recorded task with a known server identity may be
       // followed onto a replacement connection of that same server.
       const reacquireClient = serverIdentity !== 'unknown' ? async () => {
-        const { mcpService } = await import('@/backend/services/mcp');
-        const current = mcpService.getClient(serverName);
+        const current = liveClient(serverName);
         return current && await resolveServerIdentity(serverName) === serverIdentity ? current : undefined;
       } : undefined;
       const taskResult = await runRemoteTaskLifecycle({

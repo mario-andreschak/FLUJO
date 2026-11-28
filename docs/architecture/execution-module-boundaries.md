@@ -131,7 +131,7 @@ client and transport registries.
 
 | Module | Owns | Contract |
 | --- | --- | --- |
-| `serviceRegistries.ts` | The process-global client, transport, generation and schema-hash maps; `scopedRegistry` | Imported first by the service; the default workspace keeps the original maps. |
+| `serviceRegistries.ts` | The process-global client, transport, generation and schema-hash maps; `scopedRegistry`; `liveClient`, the live client of a server | Imported first by the service; the default workspace keeps the original maps. `liveClient` removes a closed client and reports it as missing. |
 | `connectionScheduling.ts` | Startup sweep and backoff retries after an unexpected close | A retry pings a live client before tearing anything down; needs-user-action failures stop retrying. |
 | `connectionTest.ts` | The "Test Run" probe on a throwaway client | Never registers the client; one classic-handshake retry. |
 | `serverStatus.ts` | The status the MCP page shows | A live client is authoritative over stale OAuth hints. |
@@ -149,12 +149,15 @@ client and transport registries.
   down, and every module listed there must be named in this guide.
 - `npm run check:boundaries` (`scripts/check-import-boundaries.cjs`) and
   `__tests__/architecture/executionHotspots.test.ts`: nothing a big file
-  imports, and no listed split module, may import the big file back. Four older
-  lazy imports stay listed as debt with a reason: `subflowRecovery.ts` loads
-  `runFlow` on demand to resume a parent, `workspace.ts` disconnects every MCP
-  server before deleting a workspace, and `tools.ts` and `betaClient.ts` check
-  that the live client is still current for MCP Tasks. Tests stub those seams,
-  so they change only together with their tests.
+  imports, and no listed split module, may import the big file back. There
+  are no exceptions. The last four lazy imports went in the follow-up to #571:
+  `subflowRecovery.ts` receives `runFlow` as a parameter to resume a parent
+  (from `runStatistics.ts` and the recovery route), workspace deletion lives in
+  `src/backend/services/workspace/workspaceDeletion.ts`, which stops the tool
+  servers and hands `removeWorkspace` in `src/utils/workspace.ts` the stop
+  step, and `tools.ts` and `betaClient.ts` read the live client through
+  `liveClient` in `serviceRegistries.ts`, which `mcpService.getClient` also
+  uses.
 - Rules: `docs/corrections/hotspot-files-only-shrink.md`,
   `docs/corrections/split-modules-never-import-back.md` and
   `docs/corrections/split-modules-are-documented.md`.

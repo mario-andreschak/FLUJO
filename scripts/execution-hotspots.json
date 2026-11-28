@@ -48,7 +48,7 @@
     },
     {
       "file": "src/backend/services/mcp/index.ts",
-      "maxLines": 2532,
+      "maxLines": 2507,
       "modules": [
         "src/backend/services/mcp/serviceRegistries.ts",
         "src/backend/services/mcp/serverConfigSave.ts",
@@ -61,28 +61,6 @@
         "src/backend/services/mcp/connectionScheduling.ts",
         "src/backend/services/mcp/serverConfigUpdate.ts"
       ]
-    }
-  ],
-  "backImportDebt": [
-    {
-      "from": "src/backend/execution/flow/subflowRecovery.ts",
-      "to": "src/backend/execution/flow/runFlow.ts",
-      "reason": "Lazy import to resume the parent run after a recovered subflow join. Remove when recovery receives runFlow as a parameter."
-    },
-    {
-      "from": "src/utils/workspace.ts",
-      "to": "src/backend/services/mcp/index.ts",
-      "reason": "Lazy import to disconnect every MCP server before a workspace is deleted. Remove when workspace deletion takes an MCP disconnect hook."
-    },
-    {
-      "from": "src/backend/services/mcp/tools.ts",
-      "to": "src/backend/services/mcp/index.ts",
-      "reason": "Lazy import to check and reacquire the live client while following an MCP Task. Remove when the task path receives a client lookup as a parameter."
-    },
-    {
-      "from": "src/backend/services/mcp/betaClient.ts",
-      "to": "src/backend/services/mcp/index.ts",
-      "reason": "Lazy import to check that the beta client is still the live client for MCP Tasks. Remove when the beta client receives a client lookup as a parameter."
     }
   ]
 }

@@ -6,7 +6,6 @@ import {
   DEFAULT_WORKSPACE,
   WORKSPACE_SUBTREES,
   createWorkspace,
-  deleteWorkspace,
   ensureWorkspaceDirs,
   getCurrentWorkspace,
   isValidWorkspaceName,
@@ -17,6 +16,7 @@ import {
   updateWorkspaceRoots,
   workspaceExists,
 } from '@/utils/workspace';
+import { deleteWorkspace } from '@/backend/services/workspace/workspaceDeletion';
 import { reconcilePersonaGoals, startPersonaGoalRuntime } from '@/backend/services/enduringAgents/goalRuntime';
 import { mcpService } from '@/backend/services/mcp';
 

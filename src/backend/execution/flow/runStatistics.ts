@@ -5,7 +5,7 @@ import {
   createStatisticsEvent,
   recordStatisticsEvent,
 } from '@/backend/services/statistics';
-import { queueSubflowRunOutcome } from '@/backend/execution/flow/subflowRecovery';
+import { queueSubflowRunOutcome, type SubflowRunner } from '@/backend/execution/flow/subflowRecovery';
 import type { FlowRunInput, FlowRunResult } from './runFlowContract';
 import { traceSpan } from './turnTrace';
 import { flowService } from '@/backend/services/flow/index';
@@ -18,6 +18,8 @@ export type RunStatisticsContext = {
   logicalRunId: string;
   effectiveConvId: string;
   startTime: number;
+  /** runFlow itself: a finished subflow run resumes its waiting parent with it. */
+  runFlow: SubflowRunner;
 };
 
 /**
@@ -30,7 +32,7 @@ export function createRunStatistics(context: RunStatisticsContext): {
   ensureRunStarted: () => void;
   finalizeRun: (result: Omit<FlowRunResult, 'runId'>) => FlowRunResult;
 } {
-  const { state, input, logicalRunId, effectiveConvId, startTime } = context;
+  const { state, input, logicalRunId, effectiveConvId, startTime, runFlow } = context;
   const created = state();
   const flowSnapshot = () => ({
     id: state().flowId || input.flowId || input.flowDefinition?.id || input.modelName || 'unknown',
@@ -113,7 +115,7 @@ export function createRunStatistics(context: RunStatisticsContext): {
       state().statisticsRunFinished = true;
     }
     const finalized = { ...result, runId: logicalRunId };
-    queueSubflowRunOutcome(finalized);
+    queueSubflowRunOutcome(finalized, runFlow);
     return finalized;
   };
 
