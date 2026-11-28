@@ -843,9 +843,6 @@
     }
   },
   "src/frontend/components/Packages/InstalledPackagesList.tsx": {
-    "flujo/no-double-cast": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }

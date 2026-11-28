@@ -251,6 +251,19 @@ describe('PersonaFlowsArea Behavior versions', () => {
     }));
   });
 
+  it('still loads when a Connected App it names is gone or turned off, and says so plainly (#1389)', async () => {
+    getCompositionMock.mockResolvedValue({
+      ...composition,
+      appRefs: ['github-old', 'notes'],
+      appIssues: [{ name: 'github-old', problem: 'missing' }, { name: 'notes', problem: 'disabled' }],
+    });
+    render(<PersonaFlowsArea detail={detail} onChanged={jest.fn()} />);
+    expect(await screen.findByText('Connected App “github-old” no longer exists, so this Persona cannot use it. Choose another app or remove it under Apps.'))
+      .toBeInTheDocument();
+    expect(screen.getByText('Connected App “notes” is turned off, so this Persona cannot use it until you turn it on.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Rename' })).toBeInTheDocument();
+  });
+
   it('presents the primary binding through Core and identifies maintenance as automatic', async () => {
     getCompositionMock.mockResolvedValue({ ...composition, behaviorCards: [
       { ...composition.behaviorCards[0], ref: 'primary', slotKey: 'primary', name: 'Hidden primary duplicate' },

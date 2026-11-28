@@ -41,12 +41,14 @@ const migrateMcpServerReferences = jest.fn(async () => ({
   migratedReferences: 0,
 }));
 jest.mock('@/backend/services/flow', () => ({
-  flowService: { migrateMcpServerReferences },
+  flowService: { migrateMcpServerReferences, loadFlows: async () => [] },
 }));
 
 // In-memory storage so the backend service never touches disk.
 const store: Record<string, unknown> = {};
 jest.mock('@/utils/storage/backend', () => ({
+  // No Personas: deleting a server looks for Personas that use it.
+  listCollectionItems: jest.fn(async () => []),
   saveItem: jest.fn(async (key: string, val: unknown) => { store[key] = val; }),
   loadItem: jest.fn(async (key: string, fallback: unknown) => (key in store ? store[key] : fallback)),
 }));

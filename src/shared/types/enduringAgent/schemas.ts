@@ -580,6 +580,10 @@ export const PersonaCompositionSchema = z.object({
   coreFlowRef: WorkspaceFlowRefSchema.optional(),
   core: PersonaFlowCardSchema.optional(),
   appRefs: z.array(PersonaAppRefSchema).max(128),
+  appIssues: z.array(z.object({
+    name: PersonaAppRefSchema,
+    problem: z.enum(['missing', 'disabled']),
+  }).strict()).max(128).optional(),
   memories: z.array(PersonaCompositionMemorySchema).max(256),
   behaviors: z.array(PersonaBehaviorCompositionSchema).max(64),
   behaviorCards: z.array(PersonaBehaviorFlowCardSchema).max(64).default([]),

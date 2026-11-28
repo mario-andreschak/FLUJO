@@ -19,6 +19,7 @@ import {
   type MemoryItem,
   type Persona,
   type PersonaBehaviorComposition,
+  type PersonaAppIssue,
   type PersonaComposition,
   type PersonaCompositionPreferences,
   type PersonaFlowBinding,
@@ -145,22 +146,20 @@ export async function assertBindingOwnership(
   }
 }
 
-async function requireApps(appRefs: readonly string[]): Promise<void> {
-  const configs = await loadServerConfigs();
-  if (!Array.isArray(configs)) {
-    throw new PersonaDomainConflictError(
-      configs.error || 'MCP server configurations are currently unavailable.',
-    );
-  }
-  for (const appRef of appRefs) {
-    const config = configs.find((candidate) => candidate.name === appRef);
-    if (!config) missing('MCPServerConfig', appRef);
-    if (config.disabled === true) {
-      throw new PersonaDomainConflictError(
-        `MCP config ${JSON.stringify(appRef)} is disabled.`,
-      );
-    }
-  }
+/**
+ * Connected Apps the Persona lists that are gone or turned off. Reading a
+ * Persona never fails because of them (#1389): they are reported so the page
+ * can say so plainly. When the app list cannot be read, nothing is reported.
+ */
+async function appIssues(appRefs: readonly string[]): Promise<PersonaAppIssue[]> {
+  if (appRefs.length === 0) return [];
+  const configs = await loadServerConfigs().catch(() => null);
+  if (!Array.isArray(configs)) return [];
+  return appRefs.flatMap((name): PersonaAppIssue[] => {
+    const config = configs.find((candidate) => candidate.name === name);
+    if (!config) return [{ name, problem: 'missing' }];
+    return config.disabled === true ? [{ name, problem: 'disabled' }] : [];
+  });
 }
 
 async function requireMemories(persona: Persona, memoryRefs: readonly string[]): Promise<void> {
@@ -183,7 +182,6 @@ async function requireMemories(persona: Persona, memoryRefs: readonly string[]):
 
 async function requireRole(role: PersonaRoleComposition): Promise<void> {
   if (!await getRoleDefinition(role.ref)) missing('RoleDefinition', role.ref);
-  await requireApps(role.suggestedAppRefs);
 }
 
 function memoryProjection(
@@ -302,7 +300,7 @@ async function projectBundle(bundle: PersonaBundle): Promise<PersonaComposition>
     : undefined;
 
   const appRefs = preferences?.appRefs ?? bundle.appGrants.map((grant) => grant.mcpServerName);
-  await requireApps(appRefs);
+  const unavailableApps = await appIssues(appRefs);
 
   const memoryRefs = preferences?.memoryRefs ?? persona.coreMemoryItemIds ?? [];
   await requireMemories(persona, memoryRefs);
@@ -348,6 +346,7 @@ async function projectBundle(bundle: PersonaBundle): Promise<PersonaComposition>
     role: selectedRole,
     ...(core ? { coreFlowRef: core.effectiveFlowRef, core } : {}),
     appRefs,
+    ...(unavailableApps.length > 0 ? { appIssues: unavailableApps } : {}),
     memories: memoryProjection(memoryRefs, bundle.memoryItems),
     behaviors,
     behaviorCards,

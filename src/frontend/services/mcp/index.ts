@@ -11,6 +11,18 @@ import {
 import { TestConnectionEvent } from '@/shared/types/streaming';
 import { readNdjsonStream } from '@/frontend/utils/ndjsonReader';
 import { createLogger } from '@/utils/logger';
+import type { DeletePlan } from '@/shared/types/deletePlan';
+import {
+  MCP_SERVER_IN_USE_CODE,
+  type McpServerDeleteSummary,
+  type McpServerInUseResponse,
+  type McpServerUsage,
+} from '@/shared/types/mcp/serverUsage';
+
+export type McpServerDeleteResult =
+  | { status: 'deleted'; summary?: McpServerDeleteSummary }
+  | { status: 'in-use'; usage: McpServerUsage; changed: boolean; error: string }
+  | { status: 'failed'; error: string };
 import { announceEditConflict, baseRevisionHeaders, editConflictFrom } from '@/frontend/services/sharedItems';
 import { FEATURES } from '@/config/features'; // Import the feature flags
 import {
@@ -721,18 +733,28 @@ class MCPService {
   }
 
   /**
-   * Delete an MCP server configuration
+   * Delete an MCP server configuration. While flows, Personas or automations
+   * still use it, nothing is deleted and the answer lists every place (#1389);
+   * send the person's choices as `plan` to switch or release them first.
    */
-  async deleteServerConfig(serverName: string) {
+  async deleteServerConfig(serverName: string, plan?: DeletePlan): Promise<McpServerDeleteResult> {
     try {
       const response = await fetch(`/api/mcp/servers/${encodeURIComponent(serverName)}`, {
         method: 'DELETE',
+        ...(plan ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ plan }) } : {}),
       });
-
-      return await response.json();
+      const body = await response.json().catch(() => ({})) as Partial<McpServerInUseResponse> & {
+        error?: string;
+        summary?: McpServerDeleteSummary;
+      };
+      if (response.ok) return { status: 'deleted', ...(body.summary ? { summary: body.summary } : {}) };
+      if (response.status === 409 && body.code === MCP_SERVER_IN_USE_CODE && body.usage) {
+        return { status: 'in-use', usage: body.usage, changed: body.changed === true, error: body.error ?? '' };
+      }
+      return { status: 'failed', error: body.error || `Failed to delete server config (${response.status})` };
     } catch (error) {
       log.warn(`Failed to delete server config for ${serverName}:`, error);
-      return { error: 'Failed to delete server config' };
+      return { status: 'failed', error: 'Failed to delete server config' };
     }
   }
 

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { mcpService } from '@/frontend/services/mcp';
+import { mcpService, type McpServerDeleteResult } from '@/frontend/services/mcp';
+import type { DeletePlan } from '@/shared/types/deletePlan';
 import { MCPServerConfig, MCPStdioConfig, MCPWebSocketConfig, EnvVarValue, MCPStdioOAuthStatus } from '@/shared/types';
 import { createLogger } from '@/utils/logger';
 
@@ -176,31 +177,19 @@ export function useServerStatus() {
   }, [servers]);
 
   /**
-   * Delete a server
+   * Delete a server. The list drops it only after the server confirmed the
+   * delete; while something still uses it, the result lists those places.
    */
-  const deleteServer = useCallback(async (serverName: string) => {
+  const deleteServer = useCallback(async (serverName: string, plan?: DeletePlan): Promise<McpServerDeleteResult> => {
     log.debug(`Deleting server: ${serverName}`);
-    try {
-      const server = servers.find((s) => s.name === serverName);
-      if (!server) {
-        log.warn('Server not found:', serverName);
-        return false;
-      }
-      
-      // Remove from persistent storage
-      const deleteResult = await mcpService.deleteServerConfig(serverName);
-      if(deleteResult.error){
-        log.warn('Failed to delete server config:', deleteResult.error);
-        return false;
-      }
-      
+    const result = await mcpService.deleteServerConfig(serverName, plan);
+    if (result.status === 'deleted') {
       setServers((prev) => prev.filter((server) => server.name !== serverName));
-      return true;
-    } catch (error) {
-      log.warn('Failed to delete server:', error);
-      return false;
+    } else if (result.status === 'failed') {
+      log.warn('Failed to delete server config:', result.error);
     }
-  }, [servers]);
+    return result;
+  }, []);
 
   /**
    * Add a new server

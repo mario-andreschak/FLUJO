@@ -339,6 +339,11 @@ export default function PersonaFlowsArea({
   return (
     <Stack spacing={2}>
       {error && <Alert severity="error" onClose={() => setError(null)}>{error}</Alert>}
+      {composition.appIssues?.map((issue) => (
+        <Alert key={issue.name} severity="warning">
+          {t(issue.problem === 'missing' ? 'personas.flows.appMissing' : 'personas.flows.appDisabled', { name: issue.name })}
+        </Alert>
+      ))}
       <Alert severity="info">{t('personas.behaviors.futureActivity')}</Alert>
       <Button component={Link} href={withWorkspaceUrl(`/harness?personaId=${encodeURIComponent(detail.persona.id)}`)}>{t('harness.versions')}</Button>
       <FlowSection

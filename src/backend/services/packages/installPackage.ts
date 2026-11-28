@@ -90,6 +90,19 @@ import { modelService } from '@/backend/services/model';
 import { flowService } from '@/backend/services/flow';
 import { mcpService } from '@/backend/services/mcp';
 import { getSchedulerService } from '@/backend/services/scheduler';
+import { deleteFlowAndMoveUses, findFlowUsage } from '@/backend/services/flow/flowDeletion';
+import { deleteMcpServerAndMoveUses, findMcpServerUsage } from '@/backend/services/mcp/serverDeletion';
+import type { SharedEditor } from '@/backend/services/sharedItems/guard';
+import type { PackageUninstallPlan, PackageUsage } from '@/shared/types/package/uninstall';
+import {
+  checkPackagePlan,
+  findPackageUsage,
+  packageFlowPlan,
+  packageServerPlan,
+  packageUsageIsEmpty,
+  packageUsageTouchesPersonaAutomations,
+  type PackageLeaving,
+} from './uninstallUsage';
 import type { Model } from '@/shared/types/model';
 import type { ModelAdapter, ModelProvider } from '@/shared/types/model/provider';
 import type { Flow } from '@/shared/types/flow';
@@ -195,6 +208,16 @@ export interface UninstallSummary {
   removed: PackageEntityRef[];   // entities actually deleted
   skipped: PackageEntityRef[];   // already gone, or intentionally preserved
   errors: PackageEntityRef[];    // delete primitive returned success:false (real error)
+  /**
+   * Set when flows or apps of the package are still used outside it (#1389):
+   * nothing more was removed, and the person chooses what each place uses
+   * instead before removing the package again.
+   */
+  usage?: PackageUsage;
+  /** The places changed since the plan was made. */
+  changed?: boolean;
+  /** Why the uninstall stopped before removing anything, in plain words. */
+  refusal?: string;
 }
 
 export interface InstalledPackageInfo {
@@ -208,11 +231,16 @@ export interface PackageUninstallInspection {
   exists: boolean;
   /** True when uninstall would delete at least one currently Persona-targeted plan. */
   requiresPersonaControl: boolean;
+  /** True when answering the places outside the package changes an automation that runs a Persona. */
+  answersTouchPersonaAutomations: boolean;
 }
 
 export interface UninstallPackageOptions {
   /** Set only by a route that already passed the strict-loopback boundary. */
   allowPersonaPlannedExecutions?: boolean;
+  /** The person's answers for places outside the package that use its flows or apps. */
+  plan?: PackageUninstallPlan | null;
+  editor?: SharedEditor | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -847,16 +875,31 @@ async function protectedPlannedExecutionsForUninstall(
   return protectedIds;
 }
 
+/** What an uninstall removes: only what the install created, when the ledger says so. */
+function leavingFor(record: PackageInstallRecord): PackageLeaving {
+  const created = record.created;
+  const createdOnly = (ids: string[], createdIds: string[] | undefined) => (
+    created ? ids.filter((id) => createdIds?.includes(id)) : ids
+  );
+  return {
+    flowIds: createdOnly(Object.values(record.entities?.flows ?? {}), created?.flows),
+    serverNames: createdOnly(record.entities?.servers ?? [], created?.servers),
+    executionIds: plannedExecutionIdsRemovedByUninstall(record),
+  };
+}
+
 /** Side-effect-free route preflight; never returns Persona ids or bindings. */
 export async function inspectPackageUninstall(
   packageName: string,
 ): Promise<PackageUninstallInspection> {
   const file = await loadItem<PackageInstallsFile>(StorageKey.PACKAGE_INSTALLS, {});
   const record = Object.prototype.hasOwnProperty.call(file, packageName) ? file[packageName] : undefined;
-  if (!record) return { exists: false, requiresPersonaControl: false };
+  if (!record) return { exists: false, requiresPersonaControl: false, answersTouchPersonaAutomations: false };
+  const usage = await findPackageUsage(packageName, leavingFor(record)).catch(() => null);
   return {
     exists: true,
     requiresPersonaControl: (await protectedPlannedExecutionsForUninstall(record)).length > 0,
+    answersTouchPersonaAutomations: usage ? packageUsageTouchesPersonaAutomations(usage) : false,
   };
 }
 
@@ -871,6 +914,11 @@ export async function inspectPackageUninstall(
  *
  * Order: planned executions -> flows -> servers -> models (delete dependents
  * before dependencies; models last since flows may reference them).
+ *
+ * Flows and MCP servers go through the same checked delete as deleting one of
+ * them by hand (#1389): places inside the package are let go, and when a
+ * Persona, automation or flow outside the package still uses one, nothing is
+ * removed until the person answered for each place (`options.plan`).
  */
 export async function uninstallPackage(
   packageName: string,
@@ -919,6 +967,41 @@ export async function uninstallPackage(
 
   const created = record.created;
   const hasProvenance = created !== undefined;
+  const plan = options.plan ?? null;
+  const editor = options.editor ?? null;
+  const leaving = leavingFor(record);
+
+  const refuse = (reason: string): UninstallSummary => {
+    summary.ok = false;
+    summary.hasErrors = true;
+    summary.refusal = reason;
+    return summary;
+  };
+  const stopInUse = async (usage: PackageUsage | null, changed: boolean): Promise<UninstallSummary> => {
+    try {
+      summary.usage = usage ?? await findPackageUsage(packageName, leaving);
+    } catch (err) {
+      log.warn('uninstallPackage: could not re-read where the package is used', err);
+      return refuse('Something started using this package while it was being removed. Remove it again to choose what each place uses.');
+    }
+    summary.ok = false;
+    summary.hasErrors = true;
+    summary.changed = changed;
+    return summary;
+  };
+
+  // Nothing is removed while a place outside the package still needs an answer.
+  try {
+    const usage = await findPackageUsage(packageName, leaving);
+    if (!packageUsageIsEmpty(usage)) {
+      const check = plan ? checkPackagePlan(usage, plan) : 'unanswered';
+      if (check === 'unanswered') return stopInUse(usage, plan !== null);
+      if (check) return refuse(check);
+    }
+  } catch (err) {
+    log.warn('uninstallPackage: could not check where the package is used', err);
+    return refuse("Could not check where this package's flows and apps are used. Nothing was removed. Try again in a moment.");
+  }
 
   // Classify a delete primitive's result into the symmetric summary.
   const classify = (
@@ -959,6 +1042,24 @@ export async function uninstallPackage(
     await runDelete(ref, () => scheduler.delete(id));
   }
 
+  // A checked delete moves every place first. 'in-use' means a place outside
+  // the package appeared meanwhile, so the person is asked again.
+  const runCheckedDelete = async (
+    ref: PackageEntityRef,
+    fn: () => Promise<{ status: 'deleted' | 'not-found' | 'in-use' } | { status: 'refused'; error: string }>,
+  ): Promise<boolean> => {
+    try {
+      const outcome = await fn();
+      if (outcome.status === 'deleted') summary.removed.push(ref);
+      else if (outcome.status === 'not-found') summary.skipped.push({ ...ref, reason: 'not found' });
+      else if (outcome.status === 'refused') summary.errors.push({ ...ref, reason: outcome.error });
+      return outcome.status === 'in-use';
+    } catch (err) {
+      summary.errors.push({ ...ref, reason: err instanceof Error ? err.message : String(err) });
+      return false;
+    }
+  };
+
   // 2. Flows. Package-owned deterministic ids: safe to remove even for legacy
   //    ledgers without provenance.
   for (const [localId, flowId] of Object.entries(record.entities?.flows ?? {})) {
@@ -967,7 +1068,12 @@ export async function uninstallPackage(
       summary.skipped.push({ ...ref, reason: 'adopted-not-created' });
       continue;
     }
-    await runDelete(ref, () => flowService.deleteFlow(flowId));
+    const placesChanged = await runCheckedDelete(ref, async () => {
+      const usage = await findFlowUsage(flowId);
+      if (!usage) return { status: 'not-found' };
+      return deleteFlowAndMoveUses(flowId, packageFlowPlan(usage, leaving, plan), editor);
+    });
+    if (placesChanged) return stopInUse(null, true);
   }
 
   // 3. MCP servers. Registry servers use package-owned names; remote servers are
@@ -978,7 +1084,12 @@ export async function uninstallPackage(
       summary.skipped.push({ ...ref, reason: 'adopted-not-created' });
       continue;
     }
-    await runDelete(ref, () => mcpService.deleteServerConfig(name));
+    const placesChanged = await runCheckedDelete(ref, async () => {
+      const usage = await findMcpServerUsage(name);
+      if (!usage) return { status: 'not-found' };
+      return deleteMcpServerAndMoveUses(name, packageServerPlan(usage, leaving, plan), editor);
+    });
+    if (placesChanged) return stopInUse(null, true);
   }
 
   // 4. Models (last). CRITICAL: install ADOPTS pre-existing models by displayName

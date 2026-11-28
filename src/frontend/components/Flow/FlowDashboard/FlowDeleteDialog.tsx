@@ -3,7 +3,6 @@
 import React, { useMemo, useState } from 'react';
 import {
   Alert,
-  Box,
   Button,
   CircularProgress,
   Dialog,
@@ -11,12 +10,15 @@ import {
   DialogContent,
   DialogTitle,
   Divider,
-  MenuItem,
   Stack,
-  TextField,
   Typography,
 } from '@mui/material';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import UseChoiceRow, {
+  REMOVE_CHOICE,
+  choiceFromValue,
+  itemChoiceValue,
+} from '@/frontend/components/shared/UseChoiceRow';
 import type { Flow } from '@/frontend/types/flow/flow';
 import type {
   FlowDeletePlan,
@@ -40,20 +42,39 @@ export interface FlowDeleteDialogProps {
   onConfirm: (plan: FlowDeletePlan) => void;
 }
 
-const REMOVE = 'remove';
-const flowValue = (flowId: string) => `flow:${flowId}`;
+const FLOW = 'flow';
 
-function initialChoices(usage: FlowUsage, candidates: readonly Flow[]): Record<string, string> {
+/** Agents that can take over a place: shared, and not one that is being deleted. */
+export function flowCandidates(flows: readonly Flow[], leaving: readonly string[]): Flow[] {
+  return flows
+    .filter((flow) => !leaving.includes(flow.id) && !flow.personaOwnership)
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+export function initialFlowChoices(usage: FlowUsage, candidates: readonly Flow[]): Record<string, string> {
   return Object.fromEntries(usage.uses.flatMap((use) => (
     use.suggestedFlowId && candidates.some((flow) => flow.id === use.suggestedFlowId)
-      ? [[use.key, flowValue(use.suggestedFlowId)]]
+      ? [[use.key, itemChoiceValue(FLOW, use.suggestedFlowId)]]
       : []
   )));
 }
 
-function toChoice(value: string): FlowUseChoice | null {
-  if (value === REMOVE) return { remove: true };
-  return value.startsWith('flow:') ? { replaceWith: value.slice('flow:'.length) } : null;
+/** The plan for these answers, or `null` while a place still needs one. */
+export function flowPlanFromChoices(usage: FlowUsage, choices: Record<string, string>): FlowDeletePlan | null {
+  const answers: Record<string, FlowUseChoice> = {};
+  for (const use of usage.uses) {
+    const choice = choiceFromValue(choices[use.key] ?? '', FLOW);
+    if (!choice || ('remove' in choice && !use.canRemove)) return null;
+    answers[use.key] = choice;
+  }
+  return { choices: answers };
+}
+
+/** Personas that lose their Core Flow with these answers, so they will be paused. */
+export function flowPausedPersonas(usage: FlowUsage, choices: Record<string, string>): string[] {
+  return [...new Set(usage.uses
+    .filter((use) => use.removePauses && choices[use.key] === REMOVE_CHOICE)
+    .map(ownerName))];
 }
 
 function ownerName(use: FlowUse): string {
@@ -92,71 +113,66 @@ function PlaceChoice({ use, flows, value, disabled, onChange }: {
     : place.kind === 'persona-behavior'
       ? t('flows.delete.remove.personaBehavior')
       : place.kind === 'automation' ? t('flows.delete.remove.automation') : t('flows.delete.remove.subflow');
-  const options = flows.filter((flow) => (
-    flow.id !== use.suggestedFlowId
-    && !(place.kind === 'subflow' && flow.id === place.flowId)
-  ));
   const suggested = use.suggestedFlowId ? flows.find((flow) => flow.id === use.suggestedFlowId) : undefined;
-  const label = `${owner}: ${description}`;
+  const options = [
+    ...(suggested ? [{ value: itemChoiceValue(FLOW, suggested.id), label: t('flows.delete.original', { name: suggested.name }) }] : []),
+    ...flows
+      .filter((flow) => flow.id !== use.suggestedFlowId && !(place.kind === 'subflow' && flow.id === place.flowId))
+      .map((flow) => ({ value: itemChoiceValue(FLOW, flow.id), label: flow.name })),
+  ];
 
   return (
-    <Box
-      role="group"
-      aria-label={label}
-      sx={{ display: 'grid', gap: 1, gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: 'minmax(0, 1fr) minmax(0, 1fr)' }, alignItems: 'center' }}
-    >
-      <Box sx={{ minWidth: 0 }}>
-        <Typography sx={{ fontWeight: 700 }} noWrap title={owner}>{owner}</Typography>
-        <Typography variant="body2" color="text.secondary">{description}</Typography>
-        {!use.canRemove && place.kind === 'persona-behavior' && (
-          <Typography variant="caption" color="text.secondary">
-            {t('flows.delete.required', { persona: owner })}
-          </Typography>
-        )}
-      </Box>
-      <TextField
-        select
-        fullWidth
-        size="small"
-        label={t('flows.delete.switchTo')}
-        value={value}
-        disabled={disabled}
-        onChange={(event) => onChange(event.target.value)}
-      >
-        {suggested && (
-          <MenuItem value={flowValue(suggested.id)}>
-            {t('flows.delete.original', { name: suggested.name })}
-          </MenuItem>
-        )}
-        {options.map((flow) => (
-          <MenuItem key={flow.id} value={flowValue(flow.id)}>{flow.name}</MenuItem>
-        ))}
-        {use.canRemove && (
-          <MenuItem value={REMOVE} sx={{ borderTop: 1, borderColor: 'divider' }}>{removeLabel}</MenuItem>
-        )}
-      </TextField>
-    </Box>
+    <UseChoiceRow
+      owner={owner}
+      description={description}
+      note={!use.canRemove && place.kind === 'persona-behavior' ? t('flows.delete.required', { persona: owner }) : undefined}
+      value={value}
+      options={options}
+      removeLabel={use.canRemove ? removeLabel : undefined}
+      disabled={disabled}
+      onChange={onChange}
+    />
+  );
+}
+
+/** Every place that uses one agent, each with its choice. */
+export function FlowUseRows({ usage, candidates, choices, disabled, onChange }: {
+  usage: FlowUsage;
+  candidates: Flow[];
+  choices: Record<string, string>;
+  disabled: boolean;
+  onChange: (key: string, value: string) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <>
+      {usage.uses.map((use, index) => (
+        <React.Fragment key={use.key}>
+          {index > 0 && <Divider />}
+          <PlaceChoice
+            use={use}
+            flows={candidates}
+            value={choices[use.key] ?? ''}
+            disabled={disabled}
+            onChange={(value) => onChange(use.key, value)}
+          />
+        </React.Fragment>
+      ))}
+      {usage.copySources.map((source) => (
+        <Typography key={source.personaId} variant="body2" color="text.secondary">
+          {t('flows.delete.keepsCopy', { persona: source.personaName })}
+        </Typography>
+      ))}
+    </>
   );
 }
 
 function DeleteChoices({ usage, flows, busy, error, notice, onCancel, onConfirm }: FlowDeleteDialogProps & { usage: FlowUsage }) {
   const { t, formatList } = useI18n();
-  const candidates = useMemo(() => flows
-    .filter((flow) => flow.id !== usage.flowId && !flow.personaOwnership)
-    .sort((left, right) => left.name.localeCompare(right.name)), [flows, usage.flowId]);
-  const [choices, setChoices] = useState<Record<string, string>>(() => initialChoices(usage, candidates));
-  const plan = useMemo(() => {
-    const answers: Record<string, FlowUseChoice> = {};
-    for (const use of usage.uses) {
-      const choice = toChoice(choices[use.key] ?? '');
-      if (!choice || ('remove' in choice && !use.canRemove)) return null;
-      answers[use.key] = choice;
-    }
-    return { choices: answers };
-  }, [choices, usage.uses]);
-  const paused = [...new Set(usage.uses
-    .filter((use) => use.removePauses && choices[use.key] === REMOVE)
-    .map(ownerName))];
+  const candidates = useMemo(() => flowCandidates(flows, [usage.flowId]), [flows, usage.flowId]);
+  const [choices, setChoices] = useState<Record<string, string>>(() => initialFlowChoices(usage, candidates));
+  const plan = useMemo(() => flowPlanFromChoices(usage, choices), [choices, usage]);
+  const paused = flowPausedPersonas(usage, choices);
 
   return (
     <>
@@ -165,23 +181,13 @@ function DeleteChoices({ usage, flows, busy, error, notice, onCancel, onConfirm 
         <Stack spacing={2}>
           {notice && <Alert severity="info" role="status">{notice}</Alert>}
           <Typography color="text.secondary">{t('flows.delete.intro')}</Typography>
-          {usage.uses.map((use, index) => (
-            <React.Fragment key={use.key}>
-              {index > 0 && <Divider />}
-              <PlaceChoice
-                use={use}
-                flows={candidates}
-                value={choices[use.key] ?? ''}
-                disabled={busy}
-                onChange={(value) => setChoices((current) => ({ ...current, [use.key]: value }))}
-              />
-            </React.Fragment>
-          ))}
-          {usage.copySources.map((source) => (
-            <Typography key={source.personaId} variant="body2" color="text.secondary">
-              {t('flows.delete.keepsCopy', { persona: source.personaName })}
-            </Typography>
-          ))}
+          <FlowUseRows
+            usage={usage}
+            candidates={candidates}
+            choices={choices}
+            disabled={busy}
+            onChange={(key, value) => setChoices((current) => ({ ...current, [key]: value }))}
+          />
           {paused.length > 0 && (
             <Alert severity="warning" role="status">{t('flows.delete.pauseWarning', { names: formatList(paused) })}</Alert>
           )}

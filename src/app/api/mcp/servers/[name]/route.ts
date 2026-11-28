@@ -8,6 +8,7 @@ import { MCPServerConfig } from '@/shared/types/mcp';
 import { formatErrorResponse } from '@/utils/mcp/utils';
 import { checkBaseRevision, currentSharedEditor, recordChange } from '@/backend/services/sharedItems/guard';
 import { loadSharedItem } from '@/backend/services/sharedItems/load';
+import { parseDeletePlan } from '@/shared/types/deletePlan';
 import { json, getServerConfigByName, validateServerName } from '../../_helpers';
 
 const log = createLogger('app/api/mcp/servers/[name]/route');
@@ -110,7 +111,12 @@ async function PUT_handler(request: NextRequest, { params }: RouteContext) {
 
 /**
  * DELETE /api/mcp/servers/{name}
- * Delete an MCP server configuration by name (disconnecting it first if connected).
+ * Delete an MCP server configuration by name (disconnecting it first). When
+ * flows, Personas or automations still use it, the answer is 409
+ * `MCP_SERVER_IN_USE` with every place. Send the person's choices as
+ * `{ plan: { choices: { [place key]: { replaceWith: <server name> } | { remove: true } } } }`
+ * to switch or release each place first; the server is deleted last
+ * (200 with `summary`).
  */
 async function DELETE_handler(request: NextRequest, { params }: RouteContext) {
   // Local-only: this is a state-mutating route, so reject cross-origin /
@@ -123,20 +129,40 @@ async function DELETE_handler(request: NextRequest, { params }: RouteContext) {
 
   try {
     const { name } = await params;
-    const editor = await currentSharedEditor();
-    const before = editor ? await loadSharedItem('mcp-server', name) : null;
-    const result = await mcpService.deleteServerConfig(name);
-
-    if (!result.success) {
-      const errMsg = typeof result.error === 'string' ? result.error : '';
-      const status = errMsg.includes('not found') ? 404 : 500;
-      log.warn(`Error deleting config for ${name}:`, result.error);
-      return json({ success: false, error: result.error }, status);
+    const plan = parseDeletePlan(await request.json().catch(() => null));
+    if (plan === 'invalid') {
+      return json({ success: false, error: 'The choices for deleting this app could not be read.' }, 400);
     }
 
-    await recordChange(editor, { kind: 'mcp-server', itemId: name, action: 'deleted', before, after: null });
-    log.info(`Successfully deleted config for ${name}`);
-    return json({ success: true }, 200);
+    // Loaded on use: it reaches flows, Personas and automations, which reading a config never needs.
+    const {
+      deleteMcpServerAndMoveUses,
+      findMcpServerUsage,
+      mcpServerDeleteTouchesPersonas,
+      mcpServerInUseBody,
+    } = await import('@/backend/services/mcp/serverDeletion');
+    const usage = await findMcpServerUsage(name);
+    if (!usage) {
+      return json({ success: false, error: `Server "${name}" not found` }, 404);
+    }
+    // Changing a Persona's automation needs the same access as its own page.
+    if (plan && mcpServerDeleteTouchesPersonas(usage).personaAutomations) {
+      const notLoopback = assertLocalRequest(request, { strictLoopback: true });
+      if (notLoopback) return notLoopback;
+    }
+
+    const outcome = await deleteMcpServerAndMoveUses(name, plan, await currentSharedEditor());
+    switch (outcome.status) {
+      case 'not-found':
+        return json({ success: false, error: `Server "${name}" not found` }, 404);
+      case 'in-use':
+        return json({ success: false, ...mcpServerInUseBody(outcome.usage, outcome.changed) }, 409);
+      case 'refused':
+        return json({ success: false, error: outcome.error, code: 'MCP_SERVER_DELETE_REFUSED' }, 409);
+      case 'deleted':
+        log.info(`Successfully deleted config for ${name}`);
+        return json({ success: true, ...(plan ? { summary: outcome.summary } : {}) }, 200);
+    }
   } catch (error) {
     log.error('Error handling DELETE request', error);
     return json({ success: false, ...formatErrorResponse(error) }, 500);
