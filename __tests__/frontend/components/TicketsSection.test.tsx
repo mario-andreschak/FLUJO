@@ -61,6 +61,18 @@ describe('TicketsSection', () => {
     expect(screen.getByText('tickets.section.title')).toBeInTheDocument();
   });
 
+  it('shows no spinner or empty box while the first check is still running', async () => {
+    let answer: (value: unknown) => void = () => undefined;
+    listTickets.mockReturnValue(new Promise(resolve => { answer = resolve; }));
+
+    const { container } = render(<TicketsSection />);
+
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+    answer({ items: [ticket()], total: 1, hasMore: false });
+    await waitFor(() => expect(screen.getByText('Please review the deploy')).toBeInTheDocument());
+  });
+
   it('renders nothing once it knows there are no tickets', async () => {
     listTickets.mockResolvedValue({ items: [], total: 0, hasMore: false });
 

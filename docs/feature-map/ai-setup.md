@@ -38,7 +38,7 @@ Preconditions: a throwaway instance from the verify-flujo skill; a fresh instanc
 - "Saved" does not mean "works". The wizard says so too: run "Test model" before using a connection. A test sends a real request and may use provider credits.
 - The search box has only a placeholder, no label, so `fill --label` will not find it.
 - "I’m an expert" in the wizard skips the questions and opens the manual form.
-- With Provider "Ollama" the manual form needs no API key ("Not needed for Ollama. Leave it empty."); it stores the same placeholder as the wizard. Any local OpenAI-compatible server works this way, including the stub model of `npm run journey:first-use`.
+- With Provider "Ollama" the manual form needs no API key ("Not needed for Ollama or another local server. Leave it empty."); it stores the same placeholder as the wizard. Any local OpenAI-compatible server works this way (LM Studio, vLLM, llama.cpp, the stub model of `npm run journey:first-use`): the provider list heads that group "On this computer: Ollama, LM Studio, vLLM, llama.cpp" and the Base URL help gives an LM Studio example address.
 - Offline (Ollama) and subscription routes check or install tools on the machine running FLUJO. Do not let a run install software.
 - Provider model lists hide models known not to support tool calls (for example image generators) unless the provider lists nothing else. Then the tool-less models are shown so the list is not empty.
 - The allowance panel appears only when a subscription connection exists, and a throwaway instance has no real subscription, so it can only show the wording states. Percentages from real accounts need the owner's own logins; `docs/features/models/subscription-allowance.md` lists what each state means.

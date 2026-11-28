@@ -37,6 +37,7 @@ import { useTour } from '@/frontend/contexts/TourContext';
 import { chatService } from '@/frontend/services/chat';
 import { flowService } from '@/frontend/services/flow';
 import { modelService } from '@/frontend/services/model';
+import { DEFAULT_FLUJO_AGENT_ID } from '@/shared/flujoAgent';
 import {
   DASHBOARD_CARD_IDS,
   LEGACY_HIDDEN_DASHBOARD_CARD_IDS,
@@ -64,6 +65,8 @@ interface WorkspaceStatus {
   /** null means the encrypted/local model store could not be checked. */
   models: number | null;
   assistants: number;
+  /** Agents the person made, without the FLUJO agent every workspace ships with. */
+  ownAssistants: number;
   conversations: number;
   loading: boolean;
   conversationsLoading: boolean;
@@ -83,6 +86,7 @@ export default function HomePage() {
   const [workspaceStatus, setWorkspaceStatus] = useState<WorkspaceStatus>({
     models: null,
     assistants: 0,
+    ownAssistants: 0,
     conversations: 0,
     loading: true,
     conversationsLoading: true,
@@ -97,6 +101,7 @@ export default function HomePage() {
         ...current,
         models: models.status === 'fulfilled' && models.value !== null ? models.value.length : null,
         assistants: flows.status === 'fulfilled' ? flows.value.length : 0,
+        ownAssistants: flows.status === 'fulfilled' ? flows.value.filter((flow) => flow.id !== DEFAULT_FLUJO_AGENT_ID).length : 0,
         loading: false,
       }));
     });
@@ -205,6 +210,7 @@ export default function HomePage() {
   const aiReady = workspaceStatus.models !== null && workspaceStatus.models > 0;
   const aiCheckUnavailable = !workspaceStatus.loading && workspaceStatus.models === null;
   const assistantReady = workspaceStatus.assistants > 0;
+  const ownAssistantReady = workspaceStatus.ownAssistants > 0;
   const talkReady = workspaceStatus.conversations > 0;
   const setupSteps: SetupStep[] = [
     {
@@ -231,11 +237,15 @@ export default function HomePage() {
       title: t('home.agent.title'),
       description: t('home.agent.description'),
       icon: AutoAwesomeRounded,
-      complete: assistantReady,
+      complete: ownAssistantReady,
       available: aiReady,
-      status: assistantReady ? tp('home.createdCount', workspaceStatus.assistants) : aiReady ? t('home.next') : t('home.afterAi'),
+      status: ownAssistantReady
+        ? tp('home.createdCount', workspaceStatus.ownAssistants)
+        : assistantReady
+          ? t('home.agent.builtInIncluded')
+          : aiReady ? t('home.next') : t('home.afterAi'),
       href: aiReady ? '/flows?create=assistant' : undefined,
-      action: !aiReady ? t('home.agent.connectFirst') : assistantReady ? t('home.agent.another') : t('home.agent.openBuilder'),
+      action: !aiReady ? t('home.agent.connectFirst') : ownAssistantReady ? t('home.agent.another') : t('home.agent.openBuilder'),
     },
     {
       id: 'talk',

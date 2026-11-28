@@ -14,6 +14,9 @@ import { useI18n } from '@/frontend/contexts/I18nContext';
 
 const log = createLogger('frontend/components/TelemetryNotice');
 
+/** Long enough to read; short enough not to hide a phone's main button for good. */
+export const TELEMETRY_NOTICE_SECONDS = 20;
+
 interface CheckResult {
   enabled: boolean;
   attempted: boolean;
@@ -65,8 +68,9 @@ export default function TelemetryNotice() {
   return (
     <Snackbar
       open={Boolean(result)}
+      autoHideDuration={TELEMETRY_NOTICE_SECONDS * 1000}
       onClose={(_event, reason) => {
-        if (reason === 'escapeKeyDown') setResult(null);
+        if (reason === 'escapeKeyDown' || reason === 'timeout') setResult(null);
       }}
       anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
       sx={{ maxWidth: 720 }}

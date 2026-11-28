@@ -433,6 +433,8 @@ sleep() { :; }
 
 const antigravityJob = files => files['verify.yml'].jobs['antigravity-cli'];
 const antigravityStep = (files, prefix) => antigravityJob(files).steps.find(step => step.run?.startsWith(prefix));
+const journeyJob = files => files['verify.yml'].jobs['first-use-journey'];
+const journeyStep = (files, prefix) => journeyJob(files).steps.find(step => step.run?.startsWith(prefix));
 for (const [label, change, expected] of [
   ['a missing official Antigravity CLI job', files => { delete files['verify.yml'].jobs['antigravity-cli']; }, /official Antigravity CLI suite on macOS and Windows/],
   ['an Antigravity job without macOS', files => { antigravityJob(files).strategy.matrix.os = ['windows-latest']; }, /official Antigravity CLI suite/],
@@ -451,6 +453,27 @@ for (const [label, change, expected] of [
   ['a verification gate that ignores the Antigravity job', files => { const gate = files['verify.yml'].jobs.verification; gate.needs = gate.needs.filter(id => id !== 'antigravity-cli'); }, /evaluate every prerequisite/],
   ['a verification gate that ignores the installed Windows build check', files => { const gate = files['verify.yml'].jobs.verification; gate.needs = gate.needs.filter(id => id !== 'installed-windows-acceptance'); }, /evaluate every prerequisite/],
   ['a verification gate that ignores the Docker image check', files => { const gate = files['verify.yml'].jobs.verification; gate.needs = gate.needs.filter(id => id !== 'image-acceptance'); }, /evaluate every prerequisite/],
+  ['a verification gate that ignores the first-use journey', files => { const gate = files['verify.yml'].jobs.verification; gate.needs = gate.needs.filter(id => id !== 'first-use-journey'); }, /evaluate every prerequisite/],
+  ['a missing first-use journey', files => { delete files['verify.yml'].jobs['first-use-journey']; }, /first-use journey/],
+  ['a skipped first-use journey', files => { journeyJob(files).if = 'false'; }, /first-use journey/],
+  ['a first-use journey without the phone screen', files => {
+    journeyJob(files).steps = journeyJob(files).steps.filter(step => !step.run?.includes('--viewport 390x844'));
+  }, /first-use journey/],
+  ['an optional first-use journey', files => { journeyStep(files, 'npm run journey:first-use')['continue-on-error'] = true; }, /first-use journey/],
+  ['a first-use journey before the production build', files => {
+    const steps = journeyJob(files).steps;
+    const [build] = steps.splice(steps.findIndex(step => step.run === 'npm run build'), 1);
+    steps.push(build);
+  }, /first-use journey/],
+  ['a first-use journey without the 128-tool app', files => {
+    journeyJob(files).steps = journeyJob(files).steps.filter(step => !step.run?.includes('playwright.features-first-use.config.mjs'));
+  }, /128-tool app/],
+  ['a 128-tool check against another build', files => {
+    journeyStep(files, 'npx playwright test').env.FEATURE_BROWSER_APP_DIR = '/opt/old-flujo';
+  }, /128-tool app/],
+  ['a first-use journey that drops its evidence after a failure', files => {
+    journeyJob(files).steps.find(step => step.uses?.startsWith('actions/upload-artifact@')).if = 'success()';
+  }, /first-use journey/],
 ]) {
   test(`broad qualification refuses ${label}`, () => {
     const files = readWorkflows();
@@ -497,7 +520,7 @@ for (const [label, change, expected] of [
 test('the main pull-request bridge does not need the broad-only jobs, and the broad gate waits for them', () => {
   const files = Object.fromEntries(readdirSync(directory).filter(file => /\.ya?ml$/.test(file))
     .map(file => [file, YAML.parse(readFileSync(new URL(file, directory), 'utf8'))]));
-  const broadOnly = ['antigravity-cli', 'installed-windows-acceptance', 'image-acceptance', 'system-key-store', 'system-key-store-linux', 'contributor-guide'];
+  const broadOnly = ['antigravity-cli', 'installed-windows-acceptance', 'image-acceptance', 'system-key-store', 'system-key-store-linux', 'contributor-guide', 'first-use-journey'];
   for (const id of broadOnly) assert.equal(files['verify.yml'].jobs[id], undefined, id);
   assert.deepEqual(files['verify-full.yml'].jobs.verification.needs.slice(-broadOnly.length), broadOnly);
 });

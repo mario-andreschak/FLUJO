@@ -607,21 +607,19 @@ async function GET_handler(request: NextRequest) {
 
   } catch (error: unknown) {
     if (error instanceof ConversationLogReadPressureError) throw error;
-    const duration = Date.now() - startTime;
-    log.error('Error listing conversations', {
-      requestId,
-      error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack, code: (error as NodeJS.ErrnoException).code } : error,
-      duration: `${duration}ms`
-    });
-
-    // Check if the error is because the directory doesn't exist
+    // A fresh workspace has no conversations folder until the first chat is saved.
     if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
-      log.warn('Conversations directory does not exist, returning empty list.', { requestId, path: conversationsDir });
+      log.debug('No conversations folder yet; returning an empty list.', { requestId, path: conversationsDir });
       if (presenceOnly) return NextResponse.json({ count: 0 });
       if (paged) return NextResponse.json({ items: [], total: 0, hasMore: false });
       return NextResponse.json([]); // Legacy unpaged contract
     }
 
+    log.error('Error listing conversations', {
+      requestId,
+      error: error instanceof Error ? { name: error.name, message: error.message, stack: error.stack, code: (error as NodeJS.ErrnoException).code } : error,
+      duration: `${Date.now() - startTime}ms`
+    });
     return NextResponse.json({ error: 'Failed to list conversations' }, { status: 500 });
   }
 }

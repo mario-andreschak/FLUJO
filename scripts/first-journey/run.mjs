@@ -2,14 +2,15 @@
 // The first-use journey as one repeatable check: connect and test an AI, inspect and test an
 // app's tool, build an agent in the simple builder, run it with a tool approval, look at the
 // executed steps, then reuse the agent over the OpenAI-compatible API and the app over the MCP proxy.
-// It drives a throwaway FLUJO (`npm run drive -- launch`) like a user and answers with a free
-// local stub model, so it needs no account or key. How to run it: docs/feature-map/README.md.
-import { mkdirSync, writeFileSync } from 'node:fs';
+// It drives a throwaway FLUJO like a user and answers with a free local stub model, so it needs no
+// account or key. How to run it: docs/feature-map/README.md.
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  EVIDENCE_DIR, gotoWithRetry, loadChromium, parseArgs, parseViewport, readState, routeUrl, save, settle,
+  EVIDENCE_DIR, gotoWithRetry, isAlive, loadChromium, parseArgs, parseViewport, readState, routeUrl, save, settle,
 } from '../flujo-drive.mjs';
+import { startProductionFlujo } from './production.mjs';
 import { STUB_FINAL_PREFIX, STUB_MODEL_ID, startStubModel } from './stub-model.mjs';
 
 export const NAMES = Object.freeze({
@@ -21,13 +22,19 @@ export const NAMES = Object.freeze({
   question: 'Which folders can you read? Please use get_allowed_directories.',
 });
 const WAIT = 120_000;
+/** The issue's target for a newcomer: the whole first-use path in under 15 minutes. */
+export const TARGET_SECONDS = 15 * 60;
 
 export const USAGE = `Usage: node scripts/first-journey/run.mjs [--viewport WxH] [--base-url URL] [--out FOLDER]
 
-Walks the first-use journey on a throwaway FLUJO started with "npm run drive -- launch" (fresh data
-folder, never port 4200) and a local stub model it starts itself. Screenshots and accessibility
-snapshots of every stage, plus report.json, are saved under ${path.join(EVIDENCE_DIR, 'first-journey')}.
-Exit code 0 means every stage passed.`;
+Walks the first-use journey with a local stub model it starts itself, on a throwaway FLUJO with a
+fresh data folder (never port 4200):
+  - the instance "npm run drive -- launch" started from this checkout, while it runs;
+  - otherwise one it starts itself from the production build ("npm run build" first), with the
+    memory capped at 4 GB, and stops and deletes again at the end.
+Screenshots and accessibility snapshots of every stage, plus report.json, are saved under
+${path.join(EVIDENCE_DIR, 'first-journey')}. Exit code 0 means every stage passed without errors on
+the page and, on the production build, within ${TARGET_SECONDS / 60} minutes.`;
 
 const visible = (locator) => locator.filter({ visible: true }).first();
 const button = (page, name, exact = false) => visible(page.getByRole('button', { name, exact }));
@@ -93,11 +100,10 @@ export const STAGES = [
     title: 'Inspect a connected app and test one tool',
     async run({ page, baseUrl, log }) {
       await openNavigationTo(page, routeUrl(baseUrl, 'mcp'), log);
-      const guide = button(page, 'Your first AI + app agent', true);
-      if (await guide.getAttribute('aria-expanded') !== 'true') await guide.click();
-      await visible(page.getByRole('combobox', { name: /^Saved app to inspect/ })).click();
-      await visible(page.getByRole('option', { name: NAMES.app, exact: true })).click();
-      await button(page, 'Inspect and test tools', true).click();
+      // The built-in apps connect on their own, so the first-run guide is already gone (#1278).
+      // Open the app from its card with the keyboard, the way a keyboard or screen-reader user must.
+      await button(page, `Open ${NAMES.app}`, true).focus();
+      await page.keyboard.press('Enter');
       await visible(page.getByRole('combobox', { name: /^Select tool/ })).click();
       await visible(page.getByRole('option', { name: NAMES.tool, exact: true })).click();
       await button(page, 'Test tool', true).click();
@@ -119,7 +125,8 @@ export const STAGES = [
       await visible(page.getByLabel('Workflow goal')).fill(NAMES.goal);
       await button(page, 'Create goal step').click();
       await button(page, 'Add an app').click();
-      await visible(page.getByRole('button', { name: NAMES.app, exact: true })).click();
+      // Each choice reads as the app's name followed by what it brings ("All tools included").
+      await visible(page.getByRole('dialog', { name: 'Choose an app' }).getByRole('button', { name: new RegExp(`^${NAMES.app}\\b`) })).click();
       await visible(page.getByLabel('Agent name')).fill(NAMES.agent);
       await button(page, 'Try my agent').click();
       await page.waitForURL(/\/chat/, { timeout: WAIT });
@@ -193,12 +200,28 @@ export const STAGES = [
   },
 ];
 
-export async function runJourney({ baseUrl, viewport, out, log = console.log }) {
+/**
+ * What makes a run fail besides a stage: a crash on the page, or a path slower than the target.
+ * The time only counts on the production build: a dev server spends minutes compiling pages.
+ */
+export function verdict(report) {
+  const seconds = report.stages.reduce((sum, stage) => sum + stage.seconds, 0);
+  const pageErrors = report.problems.filter((problem) => problem.startsWith('page error:'));
+  const reasons = [];
+  if (report.stages.some((stage) => !stage.ok) || report.stages.length !== STAGES.length) reasons.push('a stage did not pass');
+  if (pageErrors.length) reasons.push(`${pageErrors.length} error(s) crashed code on the page`);
+  if (report.server === 'production build' && seconds > TARGET_SECONDS) reasons.push(`the path took ${(seconds / 60).toFixed(1)} minutes; the target is under ${TARGET_SECONDS / 60}`);
+  return { passed: reasons.length === 0, seconds, reasons };
+}
+
+export async function runJourney({ baseUrl, viewport, out, log = console.log, server }) {
   const stub = await startStubModel();
   const evidence = path.join('first-journey', out);
-  const report = { startedAt: new Date().toISOString(), baseUrl, viewport, stubModel: stub.url, stages: [], notes: {}, problems: [] };
+  const report = {
+    startedAt: new Date().toISOString(), baseUrl, server: server ?? 'given', viewport, stubModel: stub.url, stages: [], notes: {}, problems: [],
+  };
   const browser = await loadChromium();
-  let failed = false;
+  let result = { passed: false, seconds: 0, reasons: [] };
   try {
     const context = await browser.newContext({ viewport, locale: 'en-US' });
     await context.addInitScript(() => { try { localStorage.setItem('flujo.locale', 'en'); } catch { /* storage blocked */ } });
@@ -216,7 +239,6 @@ export async function runJourney({ baseUrl, viewport, out, log = console.log }) 
         report.stages.push({ id: stage.id, ok: true, seconds: (Date.now() - started) / 1000 });
         log(`✓ ${stage.title} (${((Date.now() - started) / 1000).toFixed(1)}s)`);
       } catch (error) {
-        failed = true;
         report.stages.push({ id: stage.id, ok: false, seconds: (Date.now() - started) / 1000, error: error.message.split('\n')[0] });
         log(`✗ ${stage.title}: ${error.message.split('\n')[0]}`);
         await save(page, 'shot', path.join(evidence, `${stage.id}-failed.png`), log).catch(() => undefined);
@@ -228,27 +250,48 @@ export async function runJourney({ baseUrl, viewport, out, log = console.log }) 
     await browser.close();
     report.stubCalls = stub.events.map(({ kind, offeredTools, calledTools, answered }) => ({ kind, offeredTools, calledTools, answered }));
     await stub.close();
+    result = verdict(report);
     const target = path.join(EVIDENCE_DIR, evidence, 'report.json');
     mkdirSync(path.dirname(target), { recursive: true });
-    writeFileSync(target, `${JSON.stringify({ ...report, finishedAt: new Date().toISOString(), passed: !failed }, null, 2)}\n`);
+    writeFileSync(target, `${JSON.stringify({
+      ...report, finishedAt: new Date().toISOString(), seconds: result.seconds, targetSeconds: TARGET_SECONDS,
+      passed: result.passed, failedBecause: result.reasons,
+    }, null, 2)}\n`);
     log(`Report: ${target}`);
   }
   for (const problem of report.problems.slice(0, 20)) log(`! ${problem}`);
-  return failed ? 1 : 0;
+  log(result.passed
+    ? `First-use journey passed in ${(result.seconds / 60).toFixed(1)} minutes.`
+    : `First-use journey failed: ${result.reasons.join('; ')}.`);
+  return result.passed ? 0 : 1;
 }
 
-export async function main(argv = process.argv.slice(2), log = console.log) {
+/** The instance "npm run drive -- launch" started from this checkout, if it still runs. */
+function drivenInstance() {
+  const state = readState();
+  return state?.baseUrl && Number.isInteger(state.pid) && isAlive(state.pid) ? state.baseUrl : undefined;
+}
+
+export async function main(argv = process.argv.slice(2), log = console.log, { start = startProductionFlujo } = {}) {
   const { command, options } = parseArgs(['run', ...argv]);
   if (command !== 'run' || options.help) {
     log(USAGE);
     return options.help ? 0 : 1;
   }
-  const baseUrl = options['base-url'] || readState()?.baseUrl;
-  if (!baseUrl) throw new Error('No instance to drive. Run "npm run drive -- launch" first, or pass --base-url.');
-  if (new URL(baseUrl).port === '4200') throw new Error('Refusing to drive port 4200: it is the everyday FLUJO with real data.');
+  const given = options['base-url'] || drivenInstance();
+  if (given && new URL(given).port === '4200') throw new Error('Refusing to drive port 4200: it is the everyday FLUJO with real data.');
   const viewport = parseViewport(options.viewport);
   const out = typeof options.out === 'string' ? options.out : `${viewport.width}x${viewport.height}`;
-  return runJourney({ baseUrl, viewport, out, log });
+  if (!/^[\w-][\w.-]*$/.test(out) || out.includes('..')) throw new Error(`--out must be a plain folder name such as "phone", got "${out}".`);
+  // Screenshots of an earlier run's failed stage must not sit next to this run's results.
+  rmSync(path.join(EVIDENCE_DIR, 'first-journey', out), { recursive: true, force: true });
+  if (given) return runJourney({ baseUrl: given, viewport, out, log, server: 'given' });
+  const instance = await start({ logFile: path.join(EVIDENCE_DIR, 'first-journey', out, 'flujo.log'), log });
+  try {
+    return await runJourney({ baseUrl: instance.baseUrl, viewport, out, log, server: 'production build' });
+  } finally {
+    await instance.stop();
+  }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

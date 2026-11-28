@@ -70,14 +70,20 @@ and approve the call → open the executed steps → call the agent through `/v1
 It starts a free local stub model (`scripts/first-journey/stub-model.mjs`), so
 no account or key is needed; a pass proves the wiring, not the quality of a
 real AI. Each stage saves a screenshot and an ARIA snapshot, plus
-`report.json`, under `first-journey/<viewport>/` in the evidence folder. Run
-it after `launch` (and `warm models mcp flows chat`); `--viewport 390x844`
+`report.json` (seconds per stage, where it stopped, errors on the page), under
+`first-journey/<viewport>/` in the evidence folder. `--viewport 390x844`
 checks the phone layout. A failed stage stops the run and saves
-`<stage>-failed.png`. Dev mode needs plenty of free memory for this many
-pages (about 8–10 GB): with a smaller `--max-old-space-size` Next restarts
-itself mid-run ("approaching the used memory threshold") and the stage that
-was loading fails with `ERR_CONNECTION_REFUSED`. That is the machine, not the
-journey; run it again with more memory.
+`<stage>-failed.png`.
+
+Without a running `launch` instance it starts its own FLUJO from the production
+build (run `npm run build` first) on a fresh data folder with the memory capped
+at 4 GB, and stops it and deletes the folder at the end. Then the run also fails
+on a crash on the page or when the whole path takes longer than 15 minutes, the
+target for a newcomer. The `First-use journey` job of `verify-full.yml` runs it
+this way on desktop and phone screens and keeps the evidence. On a `launch`
+(dev mode) instance, warm the pages first (`warm models mcp flows chat`); dev
+mode needs about 8–10 GB for this many pages, otherwise Next restarts itself
+mid-run and the loading stage fails with `ERR_CONNECTION_REFUSED`.
 
 ## Features
 

@@ -1,10 +1,9 @@
 "use client";
 
 import React from 'react';
-import { Box, Collapse, IconButton, Typography, Chip, useTheme } from '@mui/material';
+import { Box, Collapse, Typography, Chip, useTheme } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
-import { useI18n } from '@/frontend/contexts/I18nContext';
 
 export interface CollapsibleCardSectionProps {
   /** Header text (folder name, sort bucket label, …). */
@@ -46,7 +45,6 @@ const CollapsibleCardSection = ({
 }: CollapsibleCardSectionProps) => {
   const scrollAnchorKey = anchorKey ?? groupKey;
   const theme = useTheme();
-  const { t } = useI18n();
 
   return (
     <Box sx={{ mb: 1.5 }}>
@@ -78,20 +76,19 @@ const CollapsibleCardSection = ({
           '&:hover': { backgroundColor: theme.palette.action.hover },
         }}
       >
-        <IconButton
-          size="small"
-          aria-label={expanded ? t('common.collapseSection') : t('common.expandSection')}
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggle();
-          }}
+        {/* The whole header is the one button; a second button inside it would be a nested control. */}
+        <Box
+          component="span"
+          aria-hidden
           sx={{
+            display: 'inline-flex',
+            p: '5px',
             transition: 'transform 0.2s',
             transform: expanded ? 'rotate(0deg)' : 'rotate(-90deg)',
           }}
         >
           <ExpandMoreIcon fontSize="small" />
-        </IconButton>
+        </Box>
         {showFolderIcon && (
           <FolderOutlinedIcon fontSize="small" sx={{ color: 'text.secondary' }} />
         )}

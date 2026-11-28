@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import '@testing-library/jest-dom';
 
 jest.mock('@/frontend/contexts/I18nContext', () => ({
@@ -84,12 +84,13 @@ describe('CardPickerGrid', () => {
     expect(screen.getByRole('button', { name: 'Repair app' })).toBeInTheDocument();
   });
 
-  it('toggles a group once when its inner collapse button is activated by keyboard', () => {
+  it('makes the group header one named button, with no second button nested inside it', () => {
     const onToggleGroup = jest.fn();
     render(<CardPickerGrid groups={[{ key: 'apps', label: 'Apps', items }]} onToggleGroup={onToggleGroup} />);
-    const toggle = screen.getByRole('button', { name: 'common.collapseSection' });
-    fireEvent.keyDown(toggle, { key: 'Enter' });
-    fireEvent.click(toggle);
+    const header = screen.getByRole('button', { name: /^Apps/ });
+    expect(header).toHaveAttribute('aria-expanded', 'true');
+    expect(within(header).queryByRole('button')).not.toBeInTheDocument();
+    fireEvent.keyDown(header, { key: 'Enter' });
     expect(onToggleGroup).toHaveBeenCalledTimes(1);
   });
 

@@ -62,6 +62,29 @@ node scripts/run-local-jest.cjs --selectProjects node --runInBand --runTestsByPa
 node scripts/run-local-jest.cjs --selectProjects jsdom --runInBand --runTestsByPath __tests__/frontend/hooks/useServerTools.test.tsx __tests__/frontend/components/MCPToolManager.test.tsx __tests__/frontend/components/ToolTester.test.tsx __tests__/frontend/components/MCPToolRefresh.integration.test.tsx
 ```
 
+## Checked automatically on every broad run (#572)
+
+The `First-use journey` job of `.github/workflows/verify-full.yml` builds FLUJO
+with `npm run build`, starts that production build on a fresh data folder with
+the memory capped at 4 GB, and walks the newcomer path with
+`npm run journey:first-use` on a desktop and a phone screen: connect and test an
+AI, inspect and test an app's tool, build an agent in the simple builder, run it
+with a tool approval, read its executed steps, then reuse the agent through
+`/v1` and the app through its MCP proxy from an outside MCP client. A free local
+stand-in AI answers, so no account or key is needed.
+
+| Target in #572 | How it is checked now |
+| --- | --- |
+| A newcomer finishes a model-plus-app agent run within 15 minutes, without coding or coaching | The journey uses only what a newcomer sees (labels and buttons, no code) and fails when the path takes longer than 15 minutes on the production build. |
+| Record where people drop off | `report.json` per screen size records the seconds for each stage, the stage where a run stopped and every error on the page; the job keeps it with a screenshot and an accessibility snapshot per stage, also after a failure. |
+| On the built candidate, complex forms stay stable and all 128 tools of a big app are reachable | The same job connects the 128-tool fixture through the screens over Streamable HTTP and SSE on that production build (`playwright.features-first-use.config.mjs`, desktop and 360px), reaches the last tool by keyboard, fills its form and runs one test with no page errors. `__tests__/frontend/components/MCPToolRefresh.integration.test.tsx` keeps edits, result and the app frame through successful and failed refreshes and checks the stale-list warning. |
+| Saved settings, forms and history survive an upgrade | `Back up, restart, upgrade and restore the installed npm package` in the same workflow upgrades the last published package to the candidate (`scripts/packaged-acceptance.mjs`). |
+| A documented provider/transport/API smoke matrix | The table at the top of this page; the journey covers `/v1` and the MCP proxy on every run. |
+
+A pass proves the wiring a newcomer depends on, not the quality of a paid AI's
+answers. `assertFirstUseJourneyJob` in `scripts/workflow-contract.mjs` keeps the
+job mandatory for the broad run's `verification` gate.
+
 ## Acceptance still required
 
 The source slice starts from main `3511ba49514fe8cf525f5a22c16c3806bf3886ba`

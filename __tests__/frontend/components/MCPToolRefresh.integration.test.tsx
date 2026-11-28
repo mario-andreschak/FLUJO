@@ -103,6 +103,10 @@ describe('MCP manager, discovery hook and real complex form', () => {
       expect(mockAppUnmount).not.toHaveBeenCalled();
       expect(mcpService.callTool).toHaveBeenCalledTimes(1);
       expect(mcpService.clearToolsCache).toHaveBeenCalledWith('fixture');
+      // A failed refresh says so: the list shown is the one from before.
+      const stale = screen.queryByRole('alert');
+      if (outcome === 'success') expect(stale).not.toBeInTheDocument();
+      else expect(stale).toHaveTextContent('mcp.tools.cached');
     },
   );
 

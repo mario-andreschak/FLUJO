@@ -76,7 +76,10 @@ for (const [transport, title, endpoint] of [
 
       const testRun = configure.getByRole('button', { name: '3) Test run', exact: true });
       await testRun.click();
-      await expect(configure.getByText('Connection test passed. The server completed the MCP handshake.', { exact: true })).toBeVisible();
+      await expect(configure.getByRole('alert').filter({ hasText: 'Connection test passed. The server is reachable.' }))
+        .toHaveText('Connection test passed. The server is reachable.');
+      await expect(configure.getByText('Connection result: MCP handshake successful.', { exact: false })).toBeVisible();
+      await expect(configure.getByText('Tools discovered: 128.', { exact: false })).toBeVisible();
       await expect(testRun).toBeEnabled();
       expect(environment.fixture.state.snapshot().toolCalls).toBe(0);
       record('actual connection handshake passed without a tool invocation');
@@ -91,11 +94,9 @@ for (const [transport, title, endpoint] of [
 
       await page.reload();
       await environment.verifyServerSelection([name]);
-      const guide = page.getByRole('button', { name: 'Your first AI + app agent', exact: true });
-      if (await guide.getAttribute('aria-expanded') !== 'true') await guide.click();
-      await page.getByRole('combobox', { name: /^Saved app to inspect(?: |$)/ }).click();
-      await page.getByRole('option', { name, exact: true }).click();
-      await page.getByRole('button', { name: 'Inspect and test tools', exact: true }).click();
+      // A connected app hides the first-run guide (#1278); open the app from its card by keyboard.
+      await page.getByRole('button', { name: `Open ${name}`, exact: true }).focus();
+      await page.keyboard.press('Enter');
       const selector = page.getByRole('combobox', { name: /^Select tool(?: |$)/ });
       await selector.click();
       const options = page.getByRole('option');
@@ -109,7 +110,7 @@ for (const [transport, title, endpoint] of [
 
       await page.getByRole('textbox', { name: 'element *', exact: true }).fill('UI connection receipt');
       await page.getByRole('textbox', { name: 'ref *', exact: true }).fill('ui-marker');
-      const enabled = page.getByRole('checkbox', { name: 'enabled', exact: true });
+      const enabled = page.getByRole('switch', { name: 'enabled', exact: true });
       await enabled.check();
       await enabled.uncheck();
       expect(environment.fixture.state.snapshot().toolCalls).toBe(0);

@@ -44,6 +44,7 @@ import Button from "@mui/material/Button";
 import Snackbar from "@mui/material/Snackbar";
 import Alert from "@mui/material/Alert";
 import {
+  ButtonBase,
   Switch,
   Typography,
   IconButton,
@@ -746,6 +747,27 @@ const ServerCard: React.FC<ServerCardProps> = ({
     </Tooltip>
   ) : null;
 
+  // Outside picker mode the card opens the app's tools on click; this real button
+  // gives keyboard and screen-reader users the same way in. Its click bubbles to the card.
+  const nameContent = pickerMode ? name : (
+    <ButtonBase
+      disableRipple
+      aria-label={t("mcp.card.open", { name })}
+      aria-disabled={disabled || undefined}
+      sx={{
+        font: "inherit",
+        color: "inherit",
+        maxWidth: "100%",
+        justifyContent: "flex-start",
+        textAlign: "left",
+        borderRadius: 1,
+        "&.Mui-focusVisible": { outline: `2px solid ${muiTheme.palette.primary.main}`, outlineOffset: 2 },
+      }}
+    >
+      <Box component="span" sx={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</Box>
+    </ButtonBase>
+  );
+
   return (
     <Card
       data-tutorial-server-name={name}
@@ -906,7 +928,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
                       : undefined
                   }
                 >
-                  {name}
+                  {nameContent}
                 </Typography>
               )}
               {path && path !== "." && (
@@ -995,7 +1017,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
                         : {}),
                     }}
                   >
-                    {name}
+                    {nameContent}
                   </Typography>
                 )}
               </Box>
@@ -1496,6 +1518,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
           <Box sx={{ display: "flex", alignItems: "center" }}>
             <Switch
               data-tutorial-server-toggle={name}
+              slotProps={{ input: { "aria-label": t("mcp.card.toggle", { name }) } }}
               checked={enabled}
               onClick={(e) => e.stopPropagation()}
               onChange={(e) => {

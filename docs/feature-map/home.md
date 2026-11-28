@@ -2,7 +2,7 @@
 
 Routes: `/`
 
-The start page walks a new user through three steps in order: connect an AI, create an agent, and talk to it. Each step is a card that shows its status (for example "Required", "Saved", "After AI setup", "1 created", "Started") and a button for the next action. The page also shows a notice about protecting saved credentials with a private password, tickets that agents left for the user, an optional "Connected Apps are optional" card, a button to replay the setup guide, and a short "Are you happy with FLUJO?" feedback box.
+The start page walks a new user through three steps in order: connect an AI, create an agent, and talk to it. Each step is a card that shows its status (for example "Required", "Saved", "After AI setup", "FLUJO agent included", "1 created", "Started") and a button for the next action. The page also shows a notice about protecting saved credentials with a private password, tickets that agents left for the user, an optional "Connected Apps are optional" card, a button to replay the setup guide, and a short "Are you happy with FLUJO?" feedback box.
 
 ## Sub-features
 
@@ -37,7 +37,7 @@ Preconditions: a throwaway instance from the verify-flujo skill (`launch`); no m
 
 - The tour auto-starts on `/` until it is closed or finished once; its overlay sits on top of the page and can catch clicks.
 - The tour opens a step's page only when it moves to that step. Following a highlighted button to another page (for example "Connect AI") ends the tour like "Skip tour" instead of sending you back.
-- On a fresh instance step 2 already says "1 created": the built-in "FLUJO" agent counts. It takes the first AI you connect (unless you chose another for it), so "Start talking" works right after step 1.
+- On a fresh instance step 2 says "FLUJO agent included" and still offers "Open simple builder": only agents the person made count as "created". The built-in "FLUJO" agent takes the first AI you connect (unless you chose another for it), so "Start talking" works right after step 1.
 - Step 1 says "Saved", not "tested". Saving a model does not prove it works; use "Test model" on AI Setup.
 - Dismissing a card is saved in settings and survives reloads. Replaying the tour can bring the setup cards back.
 - Never press "Send" in the feedback box during a run: it forwards the feedback to the hosted FLUJO registry.

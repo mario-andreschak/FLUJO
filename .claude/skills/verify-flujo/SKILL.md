@@ -75,10 +75,12 @@ node scripts/flujo-drive.mjs steps chat --file journey.json
 
 For anything on the path a new user takes (Home, AI Setup, Connected Apps,
 the simple builder, Talk, `/v1`, the MCP proxy), also run the whole first-use
-journey. It brings its own free stub model, so the reply steps can pass:
+journey. It brings its own free stub model, so the reply steps can pass. It
+drives your `launch` instance while that runs; otherwise it starts its own
+FLUJO from the production build (4 GB memory cap) and removes it afterwards:
 
 ```
-npm run journey:first-use                       # add --viewport 390x844 for the phone layout
+npm run build && npm run journey:first-use      # add --viewport 390x844 for the phone layout
 ```
 
 For a broad "did anything break" pass over every page, run the release sweep
