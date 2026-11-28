@@ -162,15 +162,26 @@ client and transport registries.
 ### How the split was checked
 
 The same four Jest folders (`__tests__/flow`, `__tests__/model`,
-`__tests__/mcp`, `__tests__/chat`) and `npm run test:checks` ran on the
-untouched bundle and after the last move, and their pass and fail lists were
-compared file by file. Every failure after the split also failed before it, in
-the same number: Windows permission probes ("not private to this account"),
-host consent and container tests, timing-sensitive child-process tests on a
-loaded machine, and two bundle failures outside #571 (`executionOrdering`,
-`conversationLogLiveTapIndependence`). Each move was also checked with the
-TypeScript compiler (including unused imports in the moved files), ESLint and
-the tests that exercise it.
+`__tests__/mcp`, `__tests__/chat`, 695 files, 8,835 tests) and
+`npm run test:checks` ran on the untouched bundle (`de5a1cdf`) and after the
+last move, and their fail lists were compared file by file.
+
+- `npm run test:checks`: 198 of 198 before, 206 of 206 after (the new size and
+  back-import check tests).
+- Jest before: 38 files with 185 failing tests. After: 44 files with 232, on a
+  far busier machine (57 minutes instead of 31). Every test that failed only
+  after the split passed when its file ran again on its own, except two files
+  that fail the same way on the untouched bundle: `nativeOriginalHost` (real
+  child processes; alone, the bundle and the split each lost two different
+  tests to timeouts) and `serverTasks` (imports none of the moved code).
+  `executionOrdering` then failed exactly the two tests it fails on the bundle.
+- The failures on both sides are this Windows machine, not the code: permission
+  probes ("not private to this account"), host consent and container tests,
+  missing timing headroom, and two bundle failures outside #571
+  (`executionOrdering`, `conversationLogLiveTapIndependence`).
+
+Each move was also checked on its own with the TypeScript compiler (including
+unused imports in the moved files), ESLint and the tests that exercise it.
 
 ## Import direction
 
