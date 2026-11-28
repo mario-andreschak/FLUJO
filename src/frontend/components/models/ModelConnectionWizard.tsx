@@ -57,6 +57,7 @@ import {
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { TranslationKey } from '@/frontend/i18n/messages';
 import { useSetupStepFocus } from '@/frontend/hooks/useSetupStepFocus';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
 
 type Experience = 'beginner' | 'familiar';
 type WizardStep =
@@ -343,8 +344,9 @@ export default function ModelConnectionWizard({
     return () => { sessionRef.current += 1; };
   }, [open]);
 
-  useEffect(() => {
-    if (!open) return;
+  // Every opening starts a fresh session of the wizard.
+  useResetOnChange(open, (isOpen) => {
+    if (!isOpen) return;
     setStep('welcome');
     setHistory([]);
     setExperience('beginner');
@@ -368,18 +370,40 @@ export default function ModelConnectionWizard({
     setOllamaPulling(false);
     setOllamaChecked(false);
     setOllamaProgress([]);
-  }, [open]);
+    setSetupHost(null);
+  });
 
   useEffect(() => {
     if (!open) return;
     let active = true;
-    setSetupHost(null);
     void fetch('/api/setup/ai-cli', { cache: 'no-store' })
       .then(async response => response.ok ? response.json() as Promise<SetupHost> : null)
       .then(host => { if (active) setSetupHost(host); })
       .catch(() => { /* Official instructions remain usable if host detection fails. */ });
     return () => { active = false; };
   }, [open]);
+
+  const loadOllama = useCallback(async () => {
+    const session = sessionRef.current;
+    const request = ++capabilityRequestRef.current;
+    const current = () => session === sessionRef.current && request === capabilityRequestRef.current;
+    setOllamaLoading(true);
+    setError(null);
+    try {
+      const response = await fetch('/api/local-models/capability', { cache: 'no-store' });
+      if (!response.ok) throw new Error(t('models.wizard.inspectFailed'));
+      const capability = await response.json() as OllamaCapability;
+      if (current()) setOllama(capability);
+    } catch (loadError) {
+      if (!current()) return;
+      setError(loadError instanceof Error ? loadError.message : t('models.wizard.inspectFailed'));
+    } finally {
+      if (current()) {
+        setOllamaChecked(true);
+        setOllamaLoading(false);
+      }
+    }
+  }, [t]);
 
   const go = (next: WizardStep) => {
     setHistory((value) => [...value, step]);
@@ -409,6 +433,7 @@ export default function ModelConnectionWizard({
     // different provider. Back to the same keyed setup keeps the user's input.
     if (nextKind !== kind || nextKind === 'antigravity-cli' || nextKind === 'codex-subscription') setApiKey('');
     go('setup');
+    if (nextKind === 'ollama' && !ollamaChecked && !ollamaLoading) void loadOllama();
   };
 
   const copyCommand = async (command: string) => {
@@ -420,34 +445,6 @@ export default function ModelConnectionWizard({
       setError(t('models.wizard.copyFailed'));
     }
   };
-
-  const loadOllama = useCallback(async () => {
-    const session = sessionRef.current;
-    const request = ++capabilityRequestRef.current;
-    const current = () => session === sessionRef.current && request === capabilityRequestRef.current;
-    setOllamaLoading(true);
-    setError(null);
-    try {
-      const response = await fetch('/api/local-models/capability', { cache: 'no-store' });
-      if (!response.ok) throw new Error(t('models.wizard.inspectFailed'));
-      const capability = await response.json() as OllamaCapability;
-      if (current()) setOllama(capability);
-    } catch (loadError) {
-      if (!current()) return;
-      setError(loadError instanceof Error ? loadError.message : t('models.wizard.inspectFailed'));
-    } finally {
-      if (current()) {
-        setOllamaChecked(true);
-        setOllamaLoading(false);
-      }
-    }
-  }, [t]);
-
-  useEffect(() => {
-    if (open && step === 'setup' && kind === 'ollama' && !ollamaChecked && !ollamaLoading) {
-      void loadOllama();
-    }
-  }, [kind, loadOllama, ollamaChecked, ollamaLoading, open, step]);
 
   const runInstaller = async (tool: InstallTool) => {
     if (!setupHost?.oneClickInstall || operationRef.current) return;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Avatar,
@@ -62,6 +62,7 @@ import CardPickerGrid from '@/frontend/components/shared/CardPickerGrid';
 import FlowCard from '@/frontend/components/Flow/FlowDashboard/FlowCard';
 import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 import { meetingParticipantSourceLabel } from './meetingParticipantPresentation';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
 
 interface MeetingWizardProps {
   open: boolean;
@@ -97,6 +98,57 @@ const makeId = () => {
   return `participant-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 };
 
+/** Concurrency suggested for a meeting: the saved policy, or one slot per participant up to four. */
+const suggestedConcurrency = (input: CreateMeetingInput | null | undefined, participantCount: number) =>
+  input?.policy?.concurrencyLimit ?? Math.max(1, Math.min(4, participantCount || 1));
+
+/** The form a wizard opens with, empty or seeded from `input`. */
+function draftFromInput(input: CreateMeetingInput | null | undefined) {
+  const participants: DraftParticipant[] = input?.participants.map((participant) => ({
+    id: participant.id ?? makeId(),
+    flowId: participant.flowId,
+    personaId: participant.personaId,
+    behaviorSlotKey: participant.behaviorSlotKey === 'primary'
+      ? undefined
+      : participant.behaviorSlotKey,
+    behaviorName: participant.behaviorName,
+    sourceName: participant.name,
+    name: participant.name,
+  })) ?? [];
+  const participantSource: ParticipantSource = input?.participants.some((participant) => participant.personaId)
+    ? 'persona'
+    : input?.participants.length
+      ? 'flow'
+      : 'persona';
+  return {
+    title: input?.title ?? '',
+    openingPrompt: input?.openingPrompt ?? '',
+    openingMedia: input?.openingMedia?.map((part) => ({ ...part })) ?? [],
+    participants,
+    participantSource,
+    moderatorMode: input?.policy?.moderatorMode ?? 'none',
+    moderatorParticipantId: input?.moderatorParticipantId ?? '',
+    maxRounds: input?.policy?.maxRounds ?? 6,
+    concurrencyLimit: suggestedConcurrency(input, participants.length),
+    finishThreshold: input?.policy?.finishThreshold ?? 'majority',
+    errorStrategy: input?.policy?.errorStrategy ?? 'collect-all',
+  };
+}
+
+/** Copies the current name of each participant's source (an agent or a Persona) onto the participant. */
+function withSourceNames(
+  participants: DraftParticipant[],
+  sources: Array<{ id: string; name: string }>,
+  sourceId: (participant: DraftParticipant) => string | undefined,
+): DraftParticipant[] {
+  return participants.map((participant) => {
+    const sourceName = sources.find((source) => source.id === sourceId(participant))?.name;
+    return sourceName ? { ...participant, sourceName } : participant;
+  });
+}
+
+const CLOSED = Symbol('closed');
+
 const modeIcons = {
   none: GroupsRounded,
   bookends: PersonRounded,
@@ -111,35 +163,47 @@ export default function MeetingWizard({
   onClose,
   onSubmit,
 }: MeetingWizardProps) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const theme = useTheme();
   const fullScreen = useMediaQuery(theme.breakpoints.down('sm'));
+  const [openingDraft] = useState(() => draftFromInput(open ? initialInput : undefined));
   const [step, setStep] = useState(0);
-  const [participantSource, setParticipantSource] = useState<ParticipantSource>('persona');
+  const [participantSource, setParticipantSource] = useState<ParticipantSource>(openingDraft.participantSource);
   const [personas, setPersonas] = useState<Persona[]>([]);
-  const [personasLoading, setPersonasLoading] = useState(false);
+  const [personasLoading, setPersonasLoading] = useState(open);
   const [personasLoadError, setPersonasLoadError] = useState<string | null>(null);
   const [personaSkills, setPersonaSkills] = useState<Record<string, PersonaSkillsState>>({});
+  const startedSkillLoads = useRef(new WeakSet<PersonaSkillsState>());
   const [flows, setFlows] = useState<Flow[]>([]);
-  const [flowsLoading, setFlowsLoading] = useState(false);
+  const [flowsLoading, setFlowsLoading] = useState(open);
   const [flowLoadError, setFlowLoadError] = useState<string | null>(null);
-  const [title, setTitle] = useState('');
-  const [openingPrompt, setOpeningPrompt] = useState('');
-  const [openingMedia, setOpeningMedia] = useState<ModelMediaPart[]>([]);
-  const [participants, setParticipants] = useState<DraftParticipant[]>([]);
-  const [moderatorMode, setModeratorMode] = useState<MeetingModeratorMode>('none');
-  const [moderatorParticipantId, setModeratorParticipantId] = useState('');
-  const [maxRounds, setMaxRounds] = useState(6);
-  const [concurrencyLimit, setConcurrencyLimit] = useState(4);
-  const [finishThreshold, setFinishThreshold] = useState<MeetingPolicy['finishThreshold']>('majority');
-  const [errorStrategy, setErrorStrategy] = useState<MeetingPolicy['errorStrategy']>('collect-all');
+  const [title, setTitle] = useState(openingDraft.title);
+  const [openingPrompt, setOpeningPrompt] = useState(openingDraft.openingPrompt);
+  const [openingMedia, setOpeningMedia] = useState<ModelMediaPart[]>(openingDraft.openingMedia);
+  const [participants, setParticipants] = useState<DraftParticipant[]>(openingDraft.participants);
+  const [moderatorMode, setModeratorMode] = useState<MeetingModeratorMode>(openingDraft.moderatorMode);
+  const [moderatorParticipantId, setModeratorParticipantId] = useState(openingDraft.moderatorParticipantId);
+  const [maxRounds, setMaxRounds] = useState(openingDraft.maxRounds);
+  const [concurrencyLimit, setConcurrencyLimit] = useState(openingDraft.concurrencyLimit);
+  const [finishThreshold, setFinishThreshold] = useState<MeetingPolicy['finishThreshold']>(openingDraft.finishThreshold);
+  const [errorStrategy, setErrorStrategy] = useState<MeetingPolicy['errorStrategy']>(openingDraft.errorStrategy);
+
+  // Opening the wizard (or another language while open) loads Personas and agents again.
+  useResetOnChange(open ? locale : CLOSED, (key) => {
+    if (key === CLOSED) return;
+    setPersonasLoading(true);
+    setPersonasLoadError(null);
+    setFlowsLoading(true);
+    setFlowLoadError(null);
+  });
 
   useEffect(() => {
     if (!open) return;
-    setPersonasLoading(true);
-    setPersonasLoadError(null);
     personasService.list()
-      .then(setPersonas)
+      .then((loaded) => {
+        setPersonas(loaded);
+        setParticipants((current) => withSourceNames(current, loaded, (participant) => participant.personaId));
+      })
       .catch((loadError) => {
         setPersonas([]);
         setPersonasLoadError(
@@ -153,10 +217,11 @@ export default function MeetingWizard({
 
   useEffect(() => {
     if (!open) return;
-    setFlowsLoading(true);
-    setFlowLoadError(null);
     flowService.loadFlows()
-      .then(setFlows)
+      .then((loaded) => {
+        setFlows(loaded);
+        setParticipants((current) => withSourceNames(current, loaded, (participant) => participant.flowId));
+      })
       .catch((loadError) => {
         setFlows([]);
         setFlowLoadError(
@@ -168,77 +233,48 @@ export default function MeetingWizard({
       .finally(() => setFlowsLoading(false));
   }, [open, t]);
 
-  useEffect(() => {
-    if (!open) return;
+  useResetOnChange(open ? initialInput ?? null : CLOSED, (key) => {
+    if (key === CLOSED) return;
+    const draft = draftFromInput(key);
     setStep(0);
-    setTitle(initialInput?.title ?? '');
-    setOpeningPrompt(initialInput?.openingPrompt ?? '');
-    setOpeningMedia(initialInput?.openingMedia?.map((part) => ({ ...part })) ?? []);
-    setParticipants(initialInput?.participants.map((participant) => ({
-      id: participant.id ?? makeId(),
-      flowId: participant.flowId,
-      personaId: participant.personaId,
-      behaviorSlotKey: participant.behaviorSlotKey === 'primary'
-        ? undefined
-        : participant.behaviorSlotKey,
-      behaviorName: participant.behaviorName,
-      sourceName: participant.name,
-      name: participant.name,
-    })) ?? []);
-    setParticipantSource(
-      initialInput?.participants.some((participant) => participant.personaId)
-        ? 'persona'
-        : initialInput?.participants.length
-          ? 'flow'
-          : 'persona',
-    );
+    setTitle(draft.title);
+    setOpeningPrompt(draft.openingPrompt);
+    setOpeningMedia(draft.openingMedia);
+    setParticipants(draft.participants);
+    setParticipantSource(draft.participantSource);
     setPersonaSkills({});
-    setModeratorMode(initialInput?.policy?.moderatorMode ?? 'none');
-    setModeratorParticipantId(initialInput?.moderatorParticipantId ?? '');
-    setMaxRounds(initialInput?.policy?.maxRounds ?? 6);
-    setConcurrencyLimit(initialInput?.policy?.concurrencyLimit ?? 4);
-    setFinishThreshold(initialInput?.policy?.finishThreshold ?? 'majority');
-    setErrorStrategy(initialInput?.policy?.errorStrategy ?? 'collect-all');
-  }, [initialInput, open]);
+    setModeratorMode(draft.moderatorMode);
+    setModeratorParticipantId(draft.moderatorParticipantId);
+    setMaxRounds(draft.maxRounds);
+    setConcurrencyLimit(draft.concurrencyLimit);
+    setFinishThreshold(draft.finishThreshold);
+    setErrorStrategy(draft.errorStrategy);
+  });
 
-  useEffect(() => {
-    if (!flows.length) return;
-    setParticipants((current) => current.map((participant) => ({
-      ...participant,
-      ...(() => {
-        const sourceName = flows.find((flow) => flow.id === participant.flowId)?.name;
-        if (!sourceName) return {};
-        return { sourceName };
-      })(),
-    })));
-  }, [flows]);
 
-  useEffect(() => {
-    if (!personas.length) return;
-    setParticipants((current) => current.map((participant) => ({
-      ...participant,
-      ...(() => {
-        const sourceName = personas.find((persona) => persona.id === participant.personaId)?.name;
-        if (!sourceName) return {};
-        return { sourceName };
-      })(),
-    })));
-  }, [personas]);
-
-  useEffect(() => {
-    if (!open) return;
-    const missingPersonaIds = [...new Set(participants
+  const missingPersonaIds = open
+    ? [...new Set(participants
       .map((participant) => participant.personaId)
       .filter((personaId): personaId is string => Boolean(personaId)))]
-      .filter((personaId) => !personaSkills[personaId]);
-    if (missingPersonaIds.length === 0) return;
-
+      .filter((personaId) => !personaSkills[personaId])
+    : [];
+  if (missingPersonaIds.length > 0) {
     setPersonaSkills((current) => {
       const next = { ...current };
-      for (const personaId of missingPersonaIds) next[personaId] = { loading: true };
+      for (const personaId of missingPersonaIds) next[personaId] ??= { loading: true };
       return next;
     });
-    for (const personaId of missingPersonaIds) {
+  }
+
+  useEffect(() => {
+    if (!open) return;
+    const pendingPersonaIds = Object.entries(personaSkills)
+      .filter(([, state]) => state.loading && !startedSkillLoads.current.has(state))
+      .map(([personaId, state]) => {
+        startedSkillLoads.current.add(state);
+        return personaId;
+      });
+    for (const personaId of pendingPersonaIds) {
       personasService.getComposition(personaId)
         .then((composition) => {
           setPersonaSkills((current) => ({
@@ -267,21 +303,18 @@ export default function MeetingWizard({
           },
         })));
     }
-  }, [open, participants, personaSkills, t]);
+  }, [open, personaSkills, t]);
 
-  useEffect(() => {
-    // Participant selection happens before facilitation, so arrive on that
-    // step with a useful parallel default instead of inheriting the temporary
-    // one-agent clamp from the first card selected.
-    setConcurrencyLimit(initialInput?.policy?.concurrencyLimit
-      ?? Math.max(1, Math.min(4, participants.length || 1)));
-  }, [initialInput?.policy?.concurrencyLimit, participants]);
+  // Participant selection happens before facilitation, so arrive on that
+  // step with a useful parallel default instead of inheriting the temporary
+  // one-agent clamp from the first card selected.
+  const suggestConcurrency = () => setConcurrencyLimit(suggestedConcurrency(initialInput, participants.length));
+  useResetOnChange(participants, suggestConcurrency);
+  useResetOnChange(initialInput?.policy?.concurrencyLimit, suggestConcurrency);
 
-  useEffect(() => {
-    if (moderatorParticipantId && !participants.some((person) => person.id === moderatorParticipantId)) {
-      setModeratorParticipantId('');
-    }
-  }, [moderatorParticipantId, participants]);
+  if (moderatorParticipantId && !participants.some((person) => person.id === moderatorParticipantId)) {
+    setModeratorParticipantId('');
+  }
 
   const duplicateAliases = useMemo(() => {
     const counts = new Map<string, number>();

@@ -45,6 +45,7 @@ import type { McpTroubleshootPatch } from '@/shared/types/mcp/assistant';
 import McpInstallTroubleshooter from './McpInstallTroubleshooter';
 import ToolParameterPresetsEditor from '@/frontend/components/mcp/ToolParameterPresetsEditor';
 import { useServerTools } from '@/frontend/hooks/useServerTools';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
 
 /**
  * The single configure-and-verify sink for every transport and every
@@ -156,13 +157,13 @@ const ConfigureTab: React.FC<TabProps> = ({
 
   // A new handoff/configuration must not inherit failures from the server that
   // previously occupied this tab (including repeat Marketplace installs).
-  useEffect(() => {
+  useResetOnChange(JSON.stringify([handoffId, initialConfig?.name ?? null]), () => {
     setFormError(null);
     setAuthError(null);
     setInstallError(null);
     setBuildError(null);
     setTestRunError(null);
-  }, [handoffId, initialConfig?.name]);
+  });
 
   const setFormOperationMessage = (nextMessage: MessageState | null) => {
     setMessage(nextMessage);

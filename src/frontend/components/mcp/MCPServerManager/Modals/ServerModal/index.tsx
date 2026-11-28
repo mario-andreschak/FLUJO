@@ -25,6 +25,7 @@ import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderAction
 import { useEditLease } from '@/frontend/hooks/useEditLease';
 import EditingNotice from '@/frontend/components/shared/sharedEditing/EditingNotice';
 import ChangeHistoryDialog from '@/frontend/components/shared/sharedEditing/ChangeHistoryDialog';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
 
 const ServerModal: React.FC<ServerModalProps> = ({
   isOpen,
@@ -67,12 +68,6 @@ const ServerModal: React.FC<ServerModalProps> = ({
     setActiveTab(next.to === 'github' ? 'github' : 'configure');
   };
   
-  // Preserve only read-only discovery state during this modal session. Other
-  // setup tabs can start processes, so their existing unmount lifecycle remains.
-  useEffect(() => {
-    if (isOpen && !initialConfig && activeTab === 'marketplace') setMarketplaceVisited(true);
-  }, [activeTab, initialConfig, isOpen]);
-
   useEffect(() => onWorkspaceChanged(() => {
     setWorkspace(getSelectedWorkspace());
     setMarketplaceVisited(false);
@@ -82,13 +77,20 @@ const ServerModal: React.FC<ServerModalProps> = ({
 
   // Each wizard route opens the existing setup experience at the relevant
   // destination. Re-apply it on open so a previous visit never leaks through.
-  useEffect(() => {
+  const applyOpening = () => {
     if (isOpen && !initialConfig) setActiveTab(initialTab);
     if (!isOpen) {
       setMarketplaceVisited(false);
       setHandoff(null);
     }
-  }, [initialConfig, initialTab, isOpen]);
+  };
+  useResetOnChange(isOpen, applyOpening);
+  useResetOnChange(initialTab, applyOpening);
+  useResetOnChange(initialConfig, applyOpening);
+
+  // Preserve only read-only discovery state during this modal session. Other
+  // setup tabs can start processes, so their existing unmount lifecycle remains.
+  if (isOpen && !initialConfig && activeTab === 'marketplace' && !marketplaceVisited) setMarketplaceVisited(true);
   
   const handleTabChange = (event: React.SyntheticEvent, newValue: ServerSetupTab) => {
     // A manual tab change is not a handoff — don't re-trigger the auto run or

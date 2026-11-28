@@ -144,6 +144,7 @@ export default function PackageWizard({ open, onClose }: Props) {
   // Step 2 — content-secret derivation (issue #195).
   const [contentProposals, setContentProposals] = useState<SecretProposal[]>([]);
   const [deriving, setDeriving] = useState(false);
+  const [autoDeriveRun, setAutoDeriveRun] = useState(0);
   const [derivedOnce, setDerivedOnce] = useState(false);
   const [deriveError, setDeriveError] = useState<string | null>(null);
   const [deriveWarnings, setDeriveWarnings] = useState<string[]>([]);
@@ -335,16 +336,13 @@ export default function PackageWizard({ open, onClose }: Props) {
     [importedDraft],
   );
 
-  const runDerive = useCallback(
-    async (modelIdentifier?: string) => {
-      setDeriving(true);
-      setDeriveError(null);
-      try {
-        const res = await getPackageService().deriveSecrets(selection, {
-          modelIdentifier,
-          enableEntropy: scanEntropy,
-          enableRepoSlug: scanRepoSlug,
-        });
+  /** Scans the selection for secrets; the caller shows the deriving state first. */
+  const fetchDerive = useCallback(
+    (modelIdentifier?: string) => getPackageService().deriveSecrets(selection, {
+      modelIdentifier,
+      enableEntropy: scanEntropy,
+      enableRepoSlug: scanRepoSlug,
+    }).then((res) => {
         setContentProposals((prev) => {
           // Keep the user's per-row accept/rename choices across a re-scan, and
           // preserve any manually-added rows (they never come back from the API).
@@ -368,15 +366,20 @@ export default function PackageWizard({ open, onClose }: Props) {
           return [...scanned, ...manual.filter((p) => !scannedIds.has(p.id))];
         });
         setDeriveWarnings(res.warnings ?? []);
-      } catch (err) {
+    }).catch((err) => {
         setDeriveError(err instanceof Error ? err.message : t('packages.wizard.deriveFailed'));
-      } finally {
+    }).finally(() => {
         setDeriving(false);
         setDerivedOnce(true);
-      }
-    },
+    }),
     [selection, scanEntropy, scanRepoSlug, importedSecretNames, t],
   );
+
+  const runDerive = useCallback((modelIdentifier?: string) => {
+    setDeriving(true);
+    setDeriveError(null);
+    return fetchDerive(modelIdentifier);
+  }, [fetchDerive]);
 
   const toggleProposalGroup = (ids: string[]) =>
     setContentProposals((prev) => {
@@ -516,12 +519,16 @@ export default function PackageWizard({ open, onClose }: Props) {
     return Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
   }, [groupedProposals]);
 
-  // Auto-run the offline heuristic derivation when the user reaches the step.
+  // Auto-run the offline heuristic derivation when the user reaches the step
+  // (or changes a scan option there): mark it running now, scan in the effect.
+  if (activeStep === 2 && resolveResult && !derivedOnce && !deriving) {
+    setDeriving(true);
+    setDeriveError(null);
+    setAutoDeriveRun((run) => run + 1);
+  }
   useEffect(() => {
-    if (activeStep === 2 && resolveResult && !derivedOnce && !deriving) {
-      void runDerive();
-    }
-  }, [activeStep, resolveResult, derivedOnce, deriving, runDerive]);
+    if (autoDeriveRun > 0) void fetchDerive();
+  }, [autoDeriveRun]);
 
   const runBuild = useCallback(async () => {
     setBuilding(true);

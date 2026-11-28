@@ -34,6 +34,13 @@ const CATEGORIES: Array<RuntimeEnvironmentCategory | 'all'> = [
   'all', 'runtime', 'mcpApps', 'access', 'integration',
 ];
 
+async function readRuntimeEnvironment(failedMessage: string): Promise<RuntimeEnvironmentResponse> {
+  const response = await fetch('/api/runtime-environment', { cache: 'no-store' });
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error || failedMessage);
+  return body as RuntimeEnvironmentResponse;
+}
+
 export default function RuntimeEnvironmentSettings() {
   const { t } = useI18n();
   const [data, setData] = useState<RuntimeEnvironmentResponse>();
@@ -43,13 +50,11 @@ export default function RuntimeEnvironmentSettings() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ severity: 'success' | 'error'; text: string }>();
 
-  const load = async () => {
-    const response = await fetch('/api/runtime-environment', { cache: 'no-store' });
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.error || t('settings.runtimeEnv.loadFailed'));
-    setData(body);
-    setValues(body.configured);
-  };
+  const load = () => readRuntimeEnvironment(t('settings.runtimeEnv.loadFailed'))
+    .then((body) => {
+      setData(body);
+      setValues(body.configured);
+    });
 
   useEffect(() => {
     void load().catch((error) => setMessage({

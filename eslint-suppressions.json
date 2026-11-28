@@ -17,17 +17,6 @@
   "src/app/flows/page.tsx": {
     "flujo/no-raw-timers": {
       "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/app/models/ModelClient.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 2
     }
   },
   "src/app/page.tsx": {
@@ -383,34 +372,13 @@
       "count": 3
     }
   },
-  "src/frontend/components/AppWrapper.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/AskFlujo/AskFlujoDock.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/AvatarWorld/ConnectionSetup.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "src/frontend/components/AvatarWorld/index.tsx": {
     "flujo/no-raw-timers": {
       "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 3
     }
   },
   "src/frontend/components/BugReport/BugReportButton.tsx": {
     "flujo/no-raw-timers": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
@@ -548,19 +516,6 @@
       "count": 1
     }
   },
-  "src/frontend/components/ClientOnly.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/ConversationChainGraph/ChainConversationCard.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "src/frontend/components/ConversationChainGraph/ChainFlowTree.tsx": {
     "flujo/no-raw-timers": {
       "count": 1
@@ -574,26 +529,10 @@
   "src/frontend/components/ConversationChainGraph/index.tsx": {
     "flujo/no-raw-timers": {
       "count": 4
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 2
-    }
-  },
-  "src/frontend/components/CredentialMigrationRecovery.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
     }
   },
   "src/frontend/components/Docs/index.tsx": {
     "flujo/no-raw-timers": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/EncryptionAuthDialog.tsx": {
-    "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
@@ -770,66 +709,18 @@
       "count": 1
     }
   },
-  "src/frontend/components/HarnessLab/TargetVersions.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/HarnessLab/index.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "src/frontend/components/Meetings/MeetingTranscript.tsx": {
     "flujo/no-raw-timers": {
       "count": 1
     }
   },
-  "src/frontend/components/Meetings/MeetingWizard.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 8
-    }
-  },
   "src/frontend/components/Meetings/index.tsx": {
     "flujo/no-raw-timers": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 3
-    }
-  },
-  "src/frontend/components/Navigation/QuickActionsMenu.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 3
-    }
-  },
-  "src/frontend/components/Packages/InstallPackageCard.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/Packages/InstalledPackagesList.tsx": {
-    "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
   "src/frontend/components/Packages/PackageFlowPreview.tsx": {
     "flujo/no-double-cast": {
-      "count": 2
-    }
-  },
-  "src/frontend/components/Packages/PackageInstallWizard.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/Packages/PackageWizard.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/Packages/RegistryAccountSettings.tsx": {
-    "react-hooks/set-state-in-effect": {
       "count": 2
     }
   },
@@ -949,28 +840,8 @@
       "count": 1
     }
   },
-  "src/frontend/components/Projects/BranchDialog.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/Roles/RoleDetail.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/Roles/RolesGallery.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "src/frontend/components/Settings/EncryptionSettings.tsx": {
     "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/Settings/ExperimentalFeaturesSettings.tsx": {
-    "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
@@ -979,47 +850,14 @@
       "count": 1
     }
   },
-  "src/frontend/components/Settings/RuntimeEnvironmentSettings.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/Settings/SnapshotStorageSettings.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/Settings/SpeechRecognitionSettings.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "src/frontend/components/Settings/UpdateSettings.tsx": {
     "flujo/no-raw-timers": {
       "count": 2
     }
   },
-  "src/frontend/components/Statistics/index.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 2
-    }
-  },
-  "src/frontend/components/Tickets/AllTicketsDialog.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 2
-    }
-  },
-  "src/frontend/components/Tickets/TicketsSection.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "src/frontend/components/Tour/BigTutorialOverlay.tsx": {
     "flujo/no-raw-timers": {
       "count": 5
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 3
     }
   },
   "src/frontend/components/Tour/TourOverlay.tsx": {
@@ -1027,9 +865,6 @@
       "count": 1
     },
     "flujo/no-raw-timers": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
@@ -1085,29 +920,6 @@
   "src/frontend/components/mcp/MCPCapabilitiesManager/index.tsx": {
     "flujo/no-raw-timers": {
       "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/mcp/MCPEnvManager/EnvEditor.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/mcp/MCPServerManager/McpAiConnectionPanel.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/mcp/MCPServerManager/McpConnectionWizard.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/mcp/MCPServerManager/Modals/ServerModal/index.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 2
     }
   },
   "src/frontend/components/mcp/MCPServerManager/Modals/ServerModal/tabs/ConfigureTab/BuildTools.tsx": {
@@ -1115,122 +927,39 @@
       "count": 2
     }
   },
-  "src/frontend/components/mcp/MCPServerManager/Modals/ServerModal/tabs/ConfigureTab/hooks/useLocalServerState.ts": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/mcp/MCPServerManager/Modals/ServerModal/tabs/ConfigureTab/index.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/mcp/MCPServerManager/Modals/ServerModal/tabs/MarketplaceTab/index.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "src/frontend/components/mcp/MCPServerManager/ServerCard.tsx": {
     "flujo/no-raw-timers": {
       "count": 5
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 4
-    }
-  },
-  "src/frontend/components/mcp/MCPServerManager/ServerDetailsModal.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/mcp/MCPServerManager/ServerUpdateDialog.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 2
     }
   },
   "src/frontend/components/mcp/MCPServerManager/index.tsx": {
     "flujo/no-double-cast": {
       "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 3
-    }
-  },
-  "src/frontend/components/mcp/MCPSkillsManager/index.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/mcp/MCPToolManager/ToolTester.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/mcp/McpAppsDashboard.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 2
     }
   },
   "src/frontend/components/mcp/McpModelRiskAssessmentPanel.tsx": {
     "flujo/no-double-cast": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 2
-    }
-  },
-  "src/frontend/components/mcp/McpSecurityReviewPanel.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 2
-    }
-  },
-  "src/frontend/components/mcp/useMcpAppsDiscovery.ts": {
-    "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
   "src/frontend/components/models/ModelConnectionWizard.tsx": {
     "flujo/no-raw-timers": {
       "count": 2
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 3
     }
   },
   "src/frontend/components/models/modal/index.tsx": {
     "flujo/no-raw-timers": {
       "count": 3
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 3
-    }
-  },
-  "src/frontend/components/shared/FolderPickerDialog.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
     }
   },
   "src/frontend/components/shared/GlobalReferenceEditor.tsx": {
     "flujo/no-raw-timers": {
       "count": 2
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 3
     }
   },
   "src/frontend/contexts/AllowanceContext.tsx": {
     "flujo/no-raw-timers": {
       "count": 2
-    }
-  },
-  "src/frontend/contexts/I18nContext.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/frontend/contexts/TourContext.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 3
     }
   },
   "src/frontend/hooks/useAutoFocusSearch.ts": {
@@ -1241,25 +970,16 @@
   "src/frontend/hooks/useAutoHideOnIdle.ts": {
     "flujo/no-raw-timers": {
       "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
     }
   },
   "src/frontend/hooks/useProjects.ts": {
     "flujo/no-raw-timers": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
   "src/frontend/hooks/useScrollNav.ts": {
     "flujo/no-raw-timers": {
       "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 2
     }
   },
   "src/frontend/hooks/useScrollRestoration.ts": {
@@ -1268,16 +988,10 @@
     },
     "flujo/no-raw-timers": {
       "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
     }
   },
   "src/frontend/hooks/useServerTools.ts": {
     "flujo/no-raw-timers": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },

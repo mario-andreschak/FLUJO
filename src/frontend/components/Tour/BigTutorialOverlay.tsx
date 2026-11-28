@@ -28,6 +28,7 @@ import {
   type BigTutorialStep,
 } from './bigTutorialSteps';
 import { emitBigTutorialEvent } from './bigTutorialEvents';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
 
 const SPOTLIGHT_PADDING = 8;
 const CARD_WIDTH = 390;
@@ -109,7 +110,11 @@ export default function BigTutorialOverlay() {
   const mainSteps = useMemo(() => BIG_TUTORIAL_STEPS.filter(candidate => !candidate.nested), []);
   const mainIndex = step ? Math.max(0, mainSteps.findIndex(candidate => candidate.id === step.id)) : 0;
 
-  useEffect(() => { setFailedRunStep(null); }, [step?.id]);
+  useResetOnChange(step?.id, () => setFailedRunStep(null));
+  // A failed answer run stays failed for its step, even if the live status moves on.
+  const waitingForAnswer = Boolean(step?.waitFor) && pathname === step?.path
+    && (step.id === 'wait-for-first-answer' || step.id === 'wait-for-second-answer');
+  if (waitingForAnswer && step && bigTutorialRunStatus === 'error' && failedRunStep !== step.id) setFailedRunStep(step.id);
 
   useEffect(() => {
     if (!step) return;
@@ -144,10 +149,7 @@ export default function BigTutorialOverlay() {
   }, [bigTutorialProgress.recommendedServerName, pathname, step]);
 
   useLayoutEffect(() => {
-    if (!step || pathname !== step.path || !target) {
-      setRect(null);
-      return;
-    }
+    if (!step || pathname !== step.path || !target) return;
     let timer = 0;
     let scrolled = false;
     const measure = () => {
@@ -201,10 +203,7 @@ export default function BigTutorialOverlay() {
       return;
     }
     if (step.id === 'wait-for-first-answer' || step.id === 'wait-for-second-answer') {
-      if (bigTutorialRunStatus === 'error') {
-        setFailedRunStep(step.id);
-        return;
-      }
+      if (bigTutorialRunStatus === 'error') return;
       // Live events own an in-flight run. Only use durable DOM status when
       // restoring a tutorial; a previous answer must not finish the new run.
       if (bigTutorialRunStatus === 'running') return;
@@ -245,7 +244,8 @@ export default function BigTutorialOverlay() {
   if (!isBigTutorialActive || !step) return null;
 
   const onRightPage = pathname === step.path;
-  const showSpotlight = onRightPage && rect !== null;
+  // The measured spotlight only belongs to a step whose target is on this page.
+  const showSpotlight = onRightPage && Boolean(target) && rect !== null;
   const position = cardPosition(showSpotlight ? rect : null, step.placement);
   const hasBack = !!step.back;
   const waiting = !!step.waitFor;

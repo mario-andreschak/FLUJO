@@ -50,6 +50,7 @@ import {
   parseAskFlujoResponse,
 } from '@/frontend/utils/askFlujoActions';
 import { askFlujoModelStorageKey } from '@/frontend/utils/workspaceContentKeys';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
 
 const SHIPPED_TOOLS = [
   { key: 'flujo', label: 'FLUJO', packageId: '@mario.andreschak/mcp-flujo' },
@@ -161,56 +162,64 @@ function AskFlujoDockContent() {
   const [tools, setTools] = useState<ToolConnection[]>([]);
   const [messages, setMessages] = useState<DockMessage[]>([]);
   const [draft, setDraft] = useState('');
-  const [loadingSetup, setLoadingSetup] = useState(false);
+  const [loadingSetup, setLoadingSetup] = useState(open);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actionStatus, setActionStatus] = useState<Record<string, string>>({});
   const conversationIdRef = useRef<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
-  const loadSetup = useCallback(async () => {
+  /** Loads the models and tools; the caller shows the loading state first. */
+  const loadSetup = useCallback(() => Promise.all([
+    modelService.loadModels(),
+    mcpService.loadServerConfigs(),
+  ]).then(([loadedModels, serverConfigs]) => {
+    const usableModels = loadedModels.filter(model => model.supportsTools !== false);
+    setModels(usableModels);
+    const savedModel = typeof window === 'undefined'
+      ? ''
+      : window.localStorage.getItem(askFlujoModelStorageKey()) || '';
+    setModelId(current => {
+      const preferred = current || savedModel;
+      return usableModels.some(model => model.id === preferred) ? preferred : usableModels[0]?.id || '';
+    });
+
+     const configs = Array.isArray(serverConfigs) ? serverConfigs.map(asRecord).filter(Boolean) : [];
+     setTools(SHIPPED_TOOLS.map(tool => {
+       const config = configs.find((candidate) => {
+         const source = asRecord(candidate?.source);
+         return source?.id === tool.packageId || candidate?.name === tool.key;
+       },
+       );
+      return {
+        key: tool.key,
+        label: tool.label,
+        serverName: typeof config?.name === 'string' ? config.name : undefined,
+        configured: Boolean(config),
+        enabled: Boolean(config && !config.disabled),
+      };
+    }));
+  }).catch((setupError) => {
+    setError(setupError instanceof Error ? setupError.message : 'Could not load models and tools.');
+  }).finally(() => {
+    setLoadingSetup(false);
+  }), []);
+
+  const reloadSetup = () => {
     setLoadingSetup(true);
     setError(null);
-    try {
-      const [loadedModels, serverConfigs] = await Promise.all([
-        modelService.loadModels(),
-        mcpService.loadServerConfigs(),
-      ]);
-      const usableModels = loadedModels.filter(model => model.supportsTools !== false);
-      setModels(usableModels);
-      const savedModel = typeof window === 'undefined'
-        ? ''
-        : window.localStorage.getItem(askFlujoModelStorageKey()) || '';
-      setModelId(current => {
-        const preferred = current || savedModel;
-        return usableModels.some(model => model.id === preferred) ? preferred : usableModels[0]?.id || '';
-      });
+    void loadSetup();
+  };
 
-       const configs = Array.isArray(serverConfigs) ? serverConfigs.map(asRecord).filter(Boolean) : [];
-       setTools(SHIPPED_TOOLS.map(tool => {
-         const config = configs.find((candidate) => {
-           const source = asRecord(candidate?.source);
-           return source?.id === tool.packageId || candidate?.name === tool.key;
-         },
-         );
-        return {
-          key: tool.key,
-          label: tool.label,
-          serverName: typeof config?.name === 'string' ? config.name : undefined,
-          configured: Boolean(config),
-          enabled: Boolean(config && !config.disabled),
-        };
-      }));
-    } catch (setupError) {
-      setError(setupError instanceof Error ? setupError.message : 'Could not load models and tools.');
-    } finally {
-      setLoadingSetup(false);
-    }
-  }, []);
-
+  // Opening the dock without models loads them (again).
+  useResetOnChange(open, (isOpen) => {
+    if (!isOpen || models.length > 0) return;
+    setLoadingSetup(true);
+    setError(null);
+  });
   useEffect(() => {
-    if (open && models.length === 0 && !loadingSetup) void loadSetup();
-  }, [open, models.length, loadingSetup, loadSetup]);
+    if (open && models.length === 0) void loadSetup();
+  }, [open, loadSetup]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -444,7 +453,7 @@ function AskFlujoDockContent() {
               </Select>
             </FormControl>
             <Tooltip title="Reload models and MCP connections">
-              <IconButton onClick={() => void loadSetup()} disabled={loadingSetup} aria-label="Reload Ask FLUJO setup">
+              <IconButton onClick={reloadSetup} disabled={loadingSetup} aria-label="Reload Ask FLUJO setup">
                 {loadingSetup ? <CircularProgress size={18} /> : <SyncRounded fontSize="small" />}
               </IconButton>
             </Tooltip>

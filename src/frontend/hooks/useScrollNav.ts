@@ -140,6 +140,7 @@ export function useScrollNav<T extends HTMLElement = HTMLDivElement>(
       if (el.firstElementChild) observer.observe(el.firstElementChild);
     }
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the scroll position and sizes exist only once the browser has laid the surface out, so they are measured here, not while rendering
     measure();
 
     return () => {
@@ -157,8 +158,8 @@ export function useScrollNav<T extends HTMLElement = HTMLDivElement>(
 
   // Re-measure when the caller's content changes (async load, load-more, filter).
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- new content changes the scroll sizes only after the browser lays it out, so it is measured here, not while rendering
     measure();
-     
   }, deps);
 
   const scrollTo = useCallback(

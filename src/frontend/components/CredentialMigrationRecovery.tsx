@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Checkbox, FormControlLabel, Stack, TextField, Typography } from '@mui/material';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
 
 export default function CredentialMigrationRecovery({ workspace, onSettled }: {
   workspace: string; onSettled: () => Promise<void>;
@@ -15,9 +16,12 @@ export default function CredentialMigrationRecovery({ workspace, onSettled }: {
   const [failed, setFailed] = useState(false);
   const controller = useRef<AbortController | null>(null);
   const generation = useRef(0);
+  // Another workspace starts with an empty form; its old request no longer counts.
+  useResetOnChange(workspace, () => {
+    setPassphrase(''); setConfirmed(false); setFailed(false); setBusy(false);
+  });
   useEffect(() => {
     ++generation.current;
-    setPassphrase(''); setConfirmed(false); setFailed(false); setBusy(false);
     return () => { ++generation.current; controller.current?.abort(); controller.current = null; };
   }, [workspace]);
   const recover = async (action: 'resume' | 'rollback') => {

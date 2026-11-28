@@ -59,6 +59,7 @@ import {
   Chip,
 } from "@mui/material";
 import { useI18n } from "@/frontend/contexts/I18nContext";
+import { useResetOnChange, useStateFromProp } from "@/frontend/hooks/useResetOnChange";
 
 interface ServerCardProps {
   name: string;
@@ -179,7 +180,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
   const [toastSeverity, setToastSeverity] = useState<"success" | "error">(
     "success",
   );
-  const [isPolling, setIsPolling] = useState(false);
+  const [retryPending, setRetryPending] = useState(false);
   const [isResettingTokens, setIsResettingTokens] = useState(false);
   const [isPreparingAuthorization, setIsPreparingAuthorization] =
     useState(false);
@@ -190,25 +191,12 @@ const ServerCard: React.FC<ServerCardProps> = ({
   const authorizationPollRef = useRef<ReturnType<typeof setInterval> | null>(
     null,
   );
-  // Local optimistic state for the "expose as MCP server" toggle (#17A).
-  const [exposed, setExposed] = useState(exposeAsMcpServer);
-  // Local optimistic state for the "MCP Apps" opt-in toggle (#97).
-  const [appsEnabled, setAppsEnabled] = useState(enableMcpApps);
-  const [skillsEnabled, setSkillsEnabled] = useState(enableMcpSkills);
+  // Local optimistic state for the "expose as MCP server" (#17A), "MCP Apps"
+  // (#97) and skills toggles. Each starts over when the parent reloads configs.
+  const [exposed, setExposed] = useStateFromProp(exposeAsMcpServer);
+  const [appsEnabled, setAppsEnabled] = useStateFromProp(enableMcpApps);
+  const [skillsEnabled, setSkillsEnabled] = useStateFromProp(enableMcpSkills);
   const muiTheme = useTheme();
-
-  // Keep the toggle in sync if the parent reloads configs.
-  useEffect(() => {
-    setExposed(exposeAsMcpServer);
-  }, [exposeAsMcpServer]);
-
-  useEffect(() => {
-    setAppsEnabled(enableMcpApps);
-  }, [enableMcpApps]);
-
-  useEffect(() => {
-    setSkillsEnabled(enableMcpSkills);
-  }, [enableMcpSkills]);
 
   useEffect(
     () => () => {
@@ -334,26 +322,21 @@ const ServerCard: React.FC<ServerCardProps> = ({
   }[status];
 
   // Poll for status updates when server is connecting or initializing
+  const autoPolling =
+    (status === "connecting" || status === "initialization") &&
+    enabled &&
+    !pickerMode;
+  // A manual retry shows the spinner until the status moves on or 10 s pass.
+  useResetOnChange(status, () => setRetryPending(false));
+  const isPolling = autoPolling || retryPending;
   useEffect(() => {
-    if (
-      (status === "connecting" || status === "initialization") &&
-      enabled &&
-      !pickerMode
-    ) {
-      setIsPolling(true);
-      const timer = setTimeout(() => {
-        log.debug(`Polling status for server: ${name}`);
-        onRetry();
-      }, 2000);
-
-      return () => {
-        clearTimeout(timer);
-        setIsPolling(false);
-      };
-    } else if (status !== "connecting" && status !== "initialization") {
-      setIsPolling(false);
-    }
-  }, [status, enabled, name, onRetry]);
+    if (!autoPolling) return;
+    const timer = setTimeout(() => {
+      log.debug(`Polling status for server: ${name}`);
+      onRetry();
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [autoPolling, status, name, onRetry]);
 
   // Reference to store the timeout ID
   const [retryTimeoutId, setRetryTimeoutId] = useState<ReturnType<
@@ -380,16 +363,14 @@ const ServerCard: React.FC<ServerCardProps> = ({
     }
 
     // Set polling immediately to show spinner right away
-    setIsPolling(true);
+    setRetryPending(true);
 
     // Then call the retry function
     onRetry();
 
     // If status doesn't change to 'connecting' or 'initialization' within 10 seconds, stop showing spinner
     const timeoutId = setTimeout(() => {
-      if (status !== "connecting" && status !== "initialization") {
-        setIsPolling(false);
-      }
+      setRetryPending(false);
       setRetryTimeoutId(null);
     }, 10000);
 

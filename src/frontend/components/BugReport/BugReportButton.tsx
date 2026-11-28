@@ -86,12 +86,6 @@ export default function BugReportButton({ variant = 'icon' }: BugReportButtonPro
     }
   }, []);
 
-  useEffect(() => {
-    if (open) {
-      void loadDialogData();
-    }
-  }, [open, loadDialogData]);
-
   const contextPreview = useMemo(
     () => (context ? formatContextBlock(context) : t('bugReport.collectingContext')),
     [context, t]
@@ -159,7 +153,11 @@ export default function BugReportButton({ variant = 'icon' }: BugReportButtonPro
     setLabels(['bug']);
     setNotice(null);
   }, []);
-  const handleOpen = useCallback(() => setOpen(true), []);
+  // The safe context is collected fresh every time the dialog opens.
+  const handleOpen = useCallback(() => {
+    setOpen(true);
+    void loadDialogData();
+  }, [loadDialogData]);
 
   return (
     <>

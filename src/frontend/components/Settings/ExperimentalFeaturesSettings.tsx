@@ -94,6 +94,12 @@ function ExperimentalToggle({
   );
 }
 
+async function readConsentEntries(): Promise<{ entries?: ConsentEntry[] }> {
+  const response = await fetch('/api/mcp/app-consent?manage=true');
+  if (!response.ok) throw new Error('Unable to load MCP App consent');
+  return await response.json() as { entries?: ConsentEntry[] };
+}
+
 function McpAppConsentManager() {
   const { t } = useI18n();
   const [entries, setEntries] = useState<ConsentEntry[]>([]);
@@ -101,20 +107,14 @@ function McpAppConsentManager() {
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const loadEntries = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await fetch('/api/mcp/app-consent?manage=true');
-      if (!response.ok) throw new Error('Unable to load MCP App consent');
-      const data = await response.json() as { entries?: ConsentEntry[] };
+  /** Fetches the consent entries; the list starts loading. */
+  const loadEntries = useCallback(() => readConsentEntries()
+    .then((data) => {
       setEntries(Array.isArray(data.entries) ? data.entries : []);
-    } catch {
-      setError(t('settings.experimental.mcpAppConsentLoadFailed'));
-    } finally {
-      setLoading(false);
-    }
-  }, [t]);
+      setError(null);
+    })
+    .catch(() => setError(t('settings.experimental.mcpAppConsentLoadFailed')))
+    .finally(() => setLoading(false)), [t]);
 
   useEffect(() => { void loadEntries(); }, [loadEntries]);
 

@@ -25,6 +25,7 @@ import type { MCPServerConfig } from '@/shared/types/mcp';
 import type { TutorialProgress } from '@/shared/types/storage/storage';
 import { LEGACY_HIDDEN_DASHBOARD_CARD_IDS, type DashboardCardId, type Settings } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
 
 const log = createLogger('frontend/contexts/TourContext');
 
@@ -119,8 +120,6 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [bigTutorialError, setBigTutorialError] = useState<string | null>(null);
   const [bigTutorialRunStatus, setBigTutorialRunStatus] = useState<'running' | 'completed' | 'error' | null>(null);
   const [bigTutorialConnectedServer, setBigTutorialConnectedServer] = useState<string | null>(null);
-  const autoStartChecked = useRef(false);
-  const bigAutoStartChecked = useRef(false);
   const bigPersistenceQueueRef = useRef<Promise<void>>(Promise.resolve());
   const tourPersistenceQueueRef = useRef<Promise<void>>(Promise.resolve());
 
@@ -186,10 +185,15 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await persistBigProgress(progress);
   }, [persistBigProgress]);
 
-  const startTour = useCallback(() => {
-    if (!canStartTour) return;
+  const applyTourStart = useCallback(() => {
     log.info('Starting guided tour');
     setDashboardRestoreId((id) => id + 1);
+    setIsBigTutorialActive(false);
+    setStepIndex(0);
+    setIsActive(true);
+  }, []);
+
+  const persistTourStart = useCallback(() => {
     persistTourSettings((current) => {
       const onboarding = current.onboarding;
       const dismissed = Array.isArray(onboarding?.dashboardDismissedCards) ? onboarding.dashboardDismissedCards : [];
@@ -205,10 +209,13 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
         },
       };
     });
-    setIsBigTutorialActive(false);
-    setStepIndex(0);
-    setIsActive(true);
-  }, [canStartTour, persistTourSettings]);
+  }, [persistTourSettings]);
+
+  const startTour = useCallback(() => {
+    if (!canStartTour) return;
+    applyTourStart();
+    persistTourStart();
+  }, [canStartTour, applyTourStart, persistTourStart]);
 
   const endTour = useCallback(() => {
     log.info('Ending guided tour');
@@ -503,41 +510,52 @@ export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => window.removeEventListener(BIG_TUTORIAL_EVENT, listener);
   }, [commitBigProgress, isBigTutorialActive]);
 
-  useEffect(() => {
-    if (isLoading || !settingsHydrated || autoStartChecked.current) return;
-    autoStartChecked.current = true;
+  // Once settings have loaded, decide while rendering whether to start the tour
+  // and whether to restore a big tutorial; saving and reopening its chat follow
+  // in effects.
+  const [settingsChecked, setSettingsChecked] = useState(false);
+  const [autoStartedTour, setAutoStartedTour] = useState(false);
+  const [restoredTutorial, setRestoredTutorial] = useState<TutorialProgress | null>(null);
+  if (!settingsChecked && !isLoading && settingsHydrated) {
+    setSettingsChecked(true);
     // A first visit may be a Persona/Role setup link. Do not redirect that
     // explicit destination to the tour's home step or discard an open form.
     if (settings.onboarding?.completed !== true && window.location.pathname === '/') {
       log.info('First run detected — auto-starting guided tour');
-      startTour();
+      applyTourStart();
+      setAutoStartedTour(true);
     }
-  }, [isLoading, settingsHydrated, settings.onboarding?.completed, startTour]);
-
-  useEffect(() => {
-    if (isLoading || !settingsHydrated || bigAutoStartChecked.current) return;
     // The long hands-on tutorial is opt-in from Settings > Onboarding. Only
     // restore a tutorial that the user explicitly started and left active.
-    bigAutoStartChecked.current = true;
     const stored = settings.onboarding?.tutorials?.bigTutorialStage1;
     if (stored?.status === 'active') {
-      bigProgressRef.current = stored;
       setBigTutorialProgress(stored);
       setIsBigTutorialActive(true);
-      if (stored.stepId !== 'intro' && stored.stepId !== 'connect-ai') {
-        void ensureTutorialChat().catch(handleTutorialError);
-      }
+      setRestoredTutorial(stored);
     }
-  }, [ensureTutorialChat, handleTutorialError, isLoading, settings.onboarding, settingsHydrated]);
+  }
 
   useEffect(() => {
-    if (!settingsHydrated || isBigTutorialActive) return;
-    const stored = settings.onboarding?.tutorials?.bigTutorialStage1;
-    if (stored) {
-      bigProgressRef.current = stored;
-      setBigTutorialProgress(stored);
+    if (autoStartedTour) persistTourStart();
+  }, [autoStartedTour]);
+
+  useEffect(() => {
+    if (!restoredTutorial) return;
+    bigProgressRef.current = restoredTutorial;
+    if (restoredTutorial.stepId !== 'intro' && restoredTutorial.stepId !== 'connect-ai') {
+      void ensureTutorialChat().catch(handleTutorialError);
     }
-  }, [isBigTutorialActive, settings.onboarding?.tutorials?.bigTutorialStage1, settingsHydrated]);
+  }, [restoredTutorial]);
+
+  // While no big tutorial runs, its progress follows the saved settings.
+  const storedBigProgress = settings.onboarding?.tutorials?.bigTutorialStage1;
+  const followedBigProgress = settingsHydrated && !isBigTutorialActive ? storedBigProgress ?? null : null;
+  useResetOnChange(followedBigProgress, (stored) => {
+    if (stored) setBigTutorialProgress(stored);
+  });
+  useEffect(() => {
+    if (followedBigProgress) bigProgressRef.current = followedBigProgress;
+  }, [followedBigProgress]);
 
   return (
     <TourContext.Provider value={{

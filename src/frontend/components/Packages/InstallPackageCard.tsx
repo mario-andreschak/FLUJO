@@ -66,7 +66,7 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
   const { t, formatNumber } = useI18n();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<RegistryPackageSummary[]>([]);
-  const [searching, setSearching] = useState(false);
+  const [searching, setSearching] = useState(true);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searched, setSearched] = useState(false);
   const [publisherHandle, setPublisherHandle] = useState<string | null>(null);
@@ -77,28 +77,31 @@ export default function InstallPackageCard({ onInstalled }: { onInstalled?: () =
   /** The package the install wizard is currently open for. */
   const [selected, setSelected] = useState<RegistryPackageSummary | null>(null);
 
-  const runSearch = useCallback(async (q: string) => {
-    setSearching(true);
-    setSearchError(null);
-    try {
-      const data = await packageService.searchRegistry({ q: q.trim() || undefined, pageSize: 24 });
+  /** Searches the registry; the caller shows the searching state first. */
+  const fetchSearch = useCallback((q: string) => packageService.searchRegistry({ q: q.trim() || undefined, pageSize: 24 })
+    .then((data) => {
       setResults(data.items ?? []);
       setSearched(true);
-    } catch (err) {
+    })
+    .catch((err) => {
       log.warn('Failed to search package registry', err);
       setSearchError(err instanceof Error ? err.message : String(err));
       setResults([]);
-    } finally {
-      setSearching(false);
-    }
-  }, []);
+    })
+    .finally(() => setSearching(false)), []);
+
+  const runSearch = useCallback((q: string) => {
+    setSearching(true);
+    setSearchError(null);
+    return fetchSearch(q);
+  }, [fetchSearch]);
 
   useEffect(() => {
-    void runSearch('');
+    void fetchSearch('');
     void registryService.getStatus()
       .then((status) => setPublisherHandle(status.signedIn ? status.publisherHandle : null))
       .catch((err) => log.debug('Registry account status unavailable', err));
-  }, [runSearch]);
+  }, [fetchSearch]);
 
   const confirmDelete = useCallback(async () => {
     if (!deleteTarget) return;

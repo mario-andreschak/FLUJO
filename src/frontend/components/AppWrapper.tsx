@@ -1,6 +1,6 @@
 "use client";
 
-import React, { Suspense, useEffect, useState } from 'react';
+import React, { Suspense } from 'react';
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import LivingWorldGate from './AmbientWorld/LivingWorldGate';
@@ -16,6 +16,7 @@ import { AllowanceProvider } from '@/frontend/contexts/AllowanceContext';
 import PhoneHostBoundary from './PhoneHostBoundary';
 import AvatarPanelBridge from './AvatarWorld/AvatarPanelBridge';
 import './AvatarWorld/embed.css';
+import { useBrowserValue } from '@/frontend/hooks/useBrowserValue';
 
 const log = createLogger('frontend/components/AppWrapper');
 
@@ -185,14 +186,13 @@ export default function AppWrapper({ children, phoneHost = false }: AppWrapperPr
   );
 }
 
+const isAvatarPanelFrame = () => window.frameElement?.getAttribute('data-flujo-avatar-panel') === 'true';
+
 function LocalizedAppShell({ children }: { children: React.ReactNode }) {
   const { t } = useI18n();
   const pathname = usePathname();
-  const [embedded, setEmbedded] = useState(false);
+  const embedded = useBrowserValue(isAvatarPanelFrame, false);
   const world = pathname === '/world';
-  useEffect(() => {
-    setEmbedded(window.frameElement?.getAttribute('data-flujo-avatar-panel') === 'true');
-  }, []);
   useCompactAppChrome();
 
   return (

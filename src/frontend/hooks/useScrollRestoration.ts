@@ -122,6 +122,7 @@ export function useScrollRestoration<T extends HTMLElement = HTMLDivElement>(
     const now = getScrollTop();
     if (now > 0) {
       restoredRef.current = true;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- the restored scroll position exists only after the browser applied it to the laid-out page, so it is read here, not while rendering
       setShowBackToTop(now > threshold);
     }
   }, deps);

@@ -6,6 +6,7 @@ import { Alert, Box, Button, Stack, Typography } from '@mui/material';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { getSelectedWorkspace, onWorkspaceChanged, withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import type { McpSecurityReview } from '@/shared/mcpSecurityReview';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
 
 function repositoryTarget(value: string): string | null {
   try {
@@ -49,8 +50,8 @@ export default function McpSecurityReviewPanel({ repositoryUrl, active = true }:
     url: string; workspace: string; pending?: boolean; review?: McpSecurityReview;
   } | null>(null);
 
+  useResetOnChange(repositoryUrl, () => setState(null));
   useEffect(() => {
-    setState(null);
     const unsubscribe = onWorkspaceChanged(() => {
       request.current?.abort();
       request.current = null;
@@ -63,13 +64,17 @@ export default function McpSecurityReviewPanel({ repositoryUrl, active = true }:
     };
   }, [repositoryUrl]);
 
+  // Hiding the panel stops its review and shows it as cancelled.
+  useResetOnChange(active, (isActive) => {
+    if (isActive) return;
+    setState(previous => previous?.pending
+      ? { ...previous, pending: false, review: { status: 'cancelled', message: '', limitations: [] } }
+      : previous);
+  });
   useEffect(() => {
     if (active) return;
     request.current?.abort();
     request.current = null;
-    setState(previous => previous?.pending
-      ? { ...previous, pending: false, review: { status: 'cancelled', message: '', limitations: [] } }
-      : previous);
   }, [active]);
 
   const visible = state?.url === repositoryUrl && state.workspace === getSelectedWorkspace() ? state : null;

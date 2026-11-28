@@ -31,6 +31,12 @@ function formatBytes(bytes: number) {
   return bytes >= GIB ? `${(bytes / GIB).toFixed(2)} GiB` : `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
+async function readSnapshotStatus(): Promise<SnapshotStatus> {
+  const response = await fetch('/api/snapshots');
+  if (!response.ok) throw new Error('Unable to load snapshot storage');
+  return await response.json() as SnapshotStatus;
+}
+
 /** Management surface for derived filesystem snapshot history. */
 export default function SnapshotStorageSettings() {
   const [status, setStatus] = useState<SnapshotStatus | null>(null);
@@ -43,23 +49,22 @@ export default function SnapshotStorageSettings() {
   const [showRepositories, setShowRepositories] = useState(false);
   const [confirmation, setConfirmation] = useState('');
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    try {
-      const response = await fetch('/api/snapshots');
-      if (!response.ok) throw new Error('Unable to load snapshot storage');
-      const next = await response.json() as SnapshotStatus;
+  /** Fetches the snapshot status; the page starts loading, and refresh shows it again. */
+  const fetchStatus = useCallback(() => readSnapshotStatus()
+    .then((next) => {
       setStatus(next);
       setDraft(next.policy);
       setError(null);
-    } catch {
-      setError('Unable to load filesystem snapshot storage.');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+    })
+    .catch(() => setError('Unable to load filesystem snapshot storage.'))
+    .finally(() => setLoading(false)), []);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  const refresh = useCallback(() => {
+    setLoading(true);
+    return fetchStatus();
+  }, [fetchStatus]);
+
+  useEffect(() => { void fetchStatus(); }, [fetchStatus]);
 
   const savePolicy = async () => {
     if (!draft) return;

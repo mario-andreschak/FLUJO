@@ -7,6 +7,7 @@ import { useI18n } from '@/frontend/contexts/I18nContext';
 import { getSelectedWorkspace, onWorkspaceChanged, withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import { supportsMcpModelRiskAssessment, type McpModelRiskAssessment } from '@/shared/mcpModelRiskAssessment';
 import type { Model } from '@/shared/types/model';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
 
 function repositoryTarget(value: string): string | null {
   try {
@@ -103,19 +104,22 @@ export default function McpModelRiskAssessmentPanel({ repositoryUrl, active = tr
     modelsRequest.current?.abort(); modelsRequest.current = null;
     reviewRequest.current?.abort(); reviewRequest.current = null;
   }, []);
+  useResetOnChange(repositoryUrl, () => setState(null));
   useEffect(() => {
-    setState(null);
     const unsubscribe = onWorkspaceChanged(() => { abort(); setState(null); });
     return () => { unsubscribe(); abort(); };
   }, [abort, repositoryUrl]);
-  useEffect(() => {
-    if (active) return;
-    abort();
+  // Hiding the panel stops its requests and shows them as cancelled.
+  useResetOnChange(active, (isActive) => {
+    if (isActive) return;
     setState(previous => previous && (previous.loading || previous.pending) ? {
       ...previous, loading: false, pending: false,
       loadError: previous.loading || previous.loadError,
       review: previous.pending ? { status: 'cancelled' } : previous.review,
     } : previous);
+  });
+  useEffect(() => {
+    if (!active) abort();
   }, [abort, active]);
   const visible = state?.url === repositoryUrl && state.workspace === getSelectedWorkspace() ? state : null;
 

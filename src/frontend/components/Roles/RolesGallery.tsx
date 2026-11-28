@@ -9,27 +9,32 @@ import { useI18n } from '@/frontend/contexts/I18nContext';
 import { RolesApiError, rolesService } from '@/frontend/services/roles';
 import type { PublicRole } from '@/shared/types/enduringAgent';
 import RoleCard from './RoleCard';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
 
 export default function RolesGallery() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [roles, setRoles] = useState<PublicRole[]>([]);
   const [includeArchived, setIncludeArchived] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
+  /** Fetches the roles; the caller shows the loading state first. */
+  const fetchRoles = useCallback(() => rolesService.list(includeArchived)
+    .then((result) => setRoles(result.roles))
+    .catch((caught) => setError(caught instanceof RolesApiError ? caught.message : t('roles.loadFailed')))
+    .finally(() => setLoading(false)), [includeArchived, t]);
+
+  const load = () => {
     setLoading(true);
     setError(null);
-    try {
-      setRoles((await rolesService.list(includeArchived)).roles);
-    } catch (caught) {
-      setError(caught instanceof RolesApiError ? caught.message : t('roles.loadFailed'));
-    } finally {
-      setLoading(false);
-    }
-  }, [includeArchived, t]);
+    void fetchRoles();
+  };
 
-  useEffect(() => { void load(); }, [load]);
+  useResetOnChange(JSON.stringify([includeArchived, locale]), () => {
+    setLoading(true);
+    setError(null);
+  });
+  useEffect(() => { void fetchRoles(); }, [fetchRoles]);
 
   const items = useMemo(() => roles.map((role) => ({
     key: role.id,
@@ -46,7 +51,7 @@ export default function RolesGallery() {
           <Typography color="text.secondary">{t('roles.description')}</Typography>
         </Box>
         <Stack direction="row" sx={{ gap: 1, alignItems: "center" }}>
-          <Button startIcon={<RefreshRounded />} onClick={() => void load()} disabled={loading}>
+          <Button startIcon={<RefreshRounded />} onClick={load} disabled={loading}>
             {t('roles.refresh')}
           </Button>
           <Button component={Link} href="/roles/new" variant="contained" startIcon={<AddRounded />}>
@@ -59,7 +64,7 @@ export default function RolesGallery() {
         control={<Checkbox checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} />}
         label={t('roles.includeArchived')}
       />
-      {error && <Alert severity="error" action={<Button color="inherit" onClick={() => void load()}>{t('roles.retry')}</Button>}>{error}</Alert>}
+      {error && <Alert severity="error" action={<Button color="inherit" onClick={load}>{t('roles.retry')}</Button>}>{error}</Alert>}
       <CardPickerGrid
         searchable
         searchPlaceholder={t('roles.search')}

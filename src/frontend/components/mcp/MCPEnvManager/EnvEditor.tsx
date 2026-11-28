@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { 
   Box, 
   Paper, 
@@ -32,6 +32,7 @@ import {
 import { isSecretEnvVar } from '@/utils/shared';
 import { MASKED_STRING } from '@/shared/types/constants';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
 
 const GLOBAL_BINDING_RE = /^\$\{global:([A-Za-z0-9_.-]+)\}$/;
 
@@ -54,6 +55,49 @@ interface EnvEditorProps {
   onServerRestart?: (serverName: string) => Promise<void>; // Add this new prop for server restart
 }
 
+/** The editable rows for a server's stored environment. */
+function variablesFromEnv(initialEnv: EnvEditorProps['initialEnv']): EnvVariable[] {
+  // Convert initial env object to array of variables
+  return Object.entries(initialEnv).map(([key, varData]) => {
+    // Handle both string values (old format) and object values (new format)
+    const value = typeof varData === 'object' && varData !== null && 'value' in varData
+      ? varData.value
+      : varData as string;
+      
+    const metadata = typeof varData === 'object' && varData !== null && 'metadata' in varData
+      ? varData.metadata
+      : { isSecret: isSecretEnvVar(key) };
+    
+    // Check if the value is a global variable binding
+    const bindingMatch = value.match(GLOBAL_BINDING_RE);
+    
+    if (bindingMatch) {
+      const boundTo = bindingMatch[1];
+      return {
+        key,
+        value,
+        isSecret: metadata.isSecret,
+        isBound: true,
+        boundTo
+      };
+    }
+    
+    // Check if this is an encrypted value
+    const isEncrypted = typeof value === 'string' && 
+      (value.startsWith('encrypted:') || value.startsWith('encrypted_failed:'));
+    
+    // For encrypted values, show asterisks in the UI for security
+    const displayValue = isEncrypted ? MASKED_STRING : value;
+
+    return {
+      key,
+      value: displayValue,
+      isSecret: metadata.isSecret,
+      isEncrypted: isEncrypted,
+    };
+  });
+}
+
 const EnvEditor: React.FC<EnvEditorProps> = ({
   serverName,
   initialEnv,
@@ -63,56 +107,16 @@ const EnvEditor: React.FC<EnvEditorProps> = ({
 }) => {
   const { t } = useI18n();
   const { globalEnvVars } = useStorage();
-  const [variables, setVariables] = useState<EnvVariable[]>([]);
+  const [variables, setVariables] = useState<EnvVariable[]>(() => variablesFromEnv(initialEnv));
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [showBindModal, setShowBindModal] = useState(false);
   const [selectedVarIndex, setSelectedVarIndex] = useState<number | null>(null);
 
-  useEffect(() => {
-    log.debug(`Initializing environment variables for server: ${serverName}`, { variableCount: Object.keys(initialEnv).length });
-    // Convert initial env object to array of variables
-    const vars = Object.entries(initialEnv).map(([key, varData]) => {
-      // Handle both string values (old format) and object values (new format)
-      const value = typeof varData === 'object' && varData !== null && 'value' in varData
-        ? varData.value
-        : varData as string;
-        
-      const metadata = typeof varData === 'object' && varData !== null && 'metadata' in varData
-        ? varData.metadata
-        : { isSecret: isSecretEnvVar(key) };
-      
-      // Check if the value is a global variable binding
-      const bindingMatch = value.match(GLOBAL_BINDING_RE);
-      
-      if (bindingMatch) {
-        const boundTo = bindingMatch[1];
-        return {
-          key,
-          value,
-          isSecret: metadata.isSecret,
-          isBound: true,
-          boundTo
-        };
-      }
-      
-      // Check if this is an encrypted value
-      const isEncrypted = typeof value === 'string' && 
-        (value.startsWith('encrypted:') || value.startsWith('encrypted_failed:'));
-      
-      // For encrypted values, show asterisks in the UI for security
-      const displayValue = isEncrypted ? MASKED_STRING : value;
-
-      return {
-        key,
-        value: displayValue,
-        isSecret: metadata.isSecret,
-        isEncrypted: isEncrypted,
-      };
-    });
-
-    setVariables(vars);
-  }, [initialEnv]);
+  useResetOnChange(initialEnv, (env) => {
+    log.debug(`Initializing environment variables for server: ${serverName}`, { variableCount: Object.keys(env).length });
+    setVariables(variablesFromEnv(env));
+  });
 
   const handleAddVariable = () => {
     log.debug('Adding new environment variable');

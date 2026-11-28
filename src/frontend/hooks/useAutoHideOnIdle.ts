@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useResetOnChange } from './useResetOnChange';
 
 export interface UseAutoHideOnIdleOptions {
   /**
@@ -55,14 +56,11 @@ export function useAutoHideOnIdle({ enabled, idleMs = 2500 }: UseAutoHideOnIdleO
     arm();
   }, [arm, clear, enabled]);
 
+  // Turning auto-hide on or off, or a new idle time, shows the controls again.
+  useResetOnChange(`${enabled}:${idleMs}`, () => setHidden(false));
   useEffect(() => {
-    if (!enabled) {
-      clear();
-      setHidden(false);
-      return clear;
-    }
-    setHidden(false);
-    arm();
+    if (enabled) arm();
+    else clear();
     return clear;
   }, [enabled, idleMs, arm, clear]);
 

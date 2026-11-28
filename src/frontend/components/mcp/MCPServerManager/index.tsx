@@ -89,9 +89,13 @@ import StickySearchBar from '@/frontend/components/shared/StickySearchBar';
 import { useListScrollNav } from '@/frontend/hooks/useListScrollNav';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useTheme as useAppTheme } from '@/frontend/contexts/ThemeContext';
+import { useBrowserValue } from '@/frontend/hooks/useBrowserValue';
 
 const log = createLogger('frontend/components/mcp/MCPServerManager');
 const MCP_JOURNEY_DISMISSED_KEY = 'flujo.mcpAgentJourney.dismissed';
+const readJourneyDismissed = () => {
+  try { return window.localStorage.getItem(MCP_JOURNEY_DISMISSED_KEY) === '1'; } catch { return false; }
+};
 
 type FilterOption = 'all' | 'connected' | 'disconnected' | 'error' | 'enabled' | 'disabled' | 'stdio' | 'websocket' | 'sse' | 'streamable';
 /** How server cards are folded into collapsible sections: off, by user folder (#71), or by the active sort key (#73). */
@@ -126,12 +130,11 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   const [showAddModal, setShowAddModal] = useState(false);
   const [showConnectionWizard, setShowConnectionWizard] = useState(false);
   // A per-viewer convenience: unavailable storage simply shows the guide again.
-  const [journeyDismissed, setJourneyDismissed] = useState(false);
-  useEffect(() => {
-    try { setJourneyDismissed(window.localStorage.getItem(MCP_JOURNEY_DISMISSED_KEY) === '1'); } catch { /* storage unavailable */ }
-  }, []);
+  const journeyDismissedEarlier = useBrowserValue(readJourneyDismissed, false);
+  const [journeyDismissedNow, setJourneyDismissedNow] = useState(false);
+  const journeyDismissed = journeyDismissedEarlier || journeyDismissedNow;
   const dismissJourney = useCallback(() => {
-    setJourneyDismissed(true);
+    setJourneyDismissedNow(true);
     try { window.localStorage.setItem(MCP_JOURNEY_DISMISSED_KEY, '1'); } catch { /* storage unavailable */ }
   }, []);
   const connectionWizardEpoch = useRef(0);
@@ -268,6 +271,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
         const parsed = JSON.parse(query.get('args') || '{}');
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) argumentsPrefill = parsed;
       } catch { /* malformed query arguments safely become an empty object */ }
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- the link is read from the address bar once the servers are known, then removed from it, so it cannot be worked out while rendering
       setToolPrefill({ toolName, arguments: argumentsPrefill });
     }
     setDetailsServerName(serverName);
@@ -299,6 +303,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     const serverName = query.get(MCP_APP_PARAM);
     if (!serverName) return;
     if (!consumeQuickActionToken(query.get(MCP_APP_TOKEN_PARAM))) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the one-time token is spent and the address is cleared here, so this arrival intent can only be taken once, after mount
     openMcpQuickTarget({ serverName, uri: query.get(MCP_APP_URI_PARAM) || undefined });
     router.replace('/mcp');
   }, [openMcpQuickTarget, router]);

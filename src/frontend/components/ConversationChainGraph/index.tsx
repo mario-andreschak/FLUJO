@@ -35,6 +35,7 @@ import { magicLinkPath } from '@/frontend/utils/magicLink';
 import type { ConversationChainsResponse } from '@/shared/types/conversationChain';
 import { createLogger } from '@/utils/logger';
 import ChainFlowTree from './ChainFlowTree';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
 
 const log = createLogger('frontend/components/ConversationChainGraph');
 
@@ -77,11 +78,12 @@ export function ConversationChainGraph() {
   const abortRef = useRef<AbortController | null>(null);
   const liveRefreshTimerRef = useRef<number | null>(null);
 
+  // Every reload shows the loading state until its answer arrives.
+  useResetOnChange(reloadToken, () => setState('loading'));
   useEffect(() => {
     const controller = new AbortController();
     abortRef.current?.abort();
     abortRef.current = controller;
-    setState('loading');
 
     chatService
       .getConversationChains({ signal: controller.signal })
@@ -134,15 +136,11 @@ export function ConversationChainGraph() {
 
   const chains = useMemo(() => data?.chains ?? [], [data]);
 
-  useEffect(() => {
-    if (chains.length === 0) {
-      if (selectedRootId !== null) setSelectedRootId(null);
-      return;
-    }
-    if (!selectedRootId || !chains.some((chain) => chain.rootId === selectedRootId)) {
-      setSelectedRootId(chains[0].rootId);
-    }
-  }, [chains, selectedRootId]);
+  // The selected chain stays selected while it exists; otherwise the first one is.
+  const stickyRootId = selectedRootId && chains.some((chain) => chain.rootId === selectedRootId)
+    ? selectedRootId
+    : chains[0]?.rootId ?? null;
+  if (stickyRootId !== selectedRootId) setSelectedRootId(stickyRootId);
 
   const selectedChain = useMemo(
     () => chains.find((chain) => chain.rootId === selectedRootId) ?? chains[0] ?? null,

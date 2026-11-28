@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useLayoutEffect, useRef } from 'react
 import { mcpService } from '@/frontend/services/mcp';
 import { createLogger } from '@/utils/logger';
 import type { MCPToolResponse } from '@/shared/types/mcp';
+import { useResetOnChange } from './useResetOnChange';
 
 // Create a logger instance for this file
 const log = createLogger('frontend/hooks/useServerTools');
@@ -22,7 +23,7 @@ export type ServerTool = Omit<MCPToolResponse, 'description'> & { description: s
  */
 export function useServerTools(serverName: string | null) {
   const [tools, setTools] = useState<ServerTool[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(Boolean(serverName));
   const [error, setError] = useState<string | null>(null);
   const [toolsServerName, setToolsServerName] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
@@ -62,6 +63,76 @@ export function useServerTools(serverName: string | null) {
   }, []);
 
   /**
+   * Fetch tools for the selected server. The caller shows the loading state
+   * first; only the answer to the newest request is applied.
+   */
+  const fetchTools = useCallback((requestedServer: string, force: boolean) => {
+    if (retryTimeoutRef.current) {
+      clearTimeout(retryTimeoutRef.current);
+      retryTimeoutRef.current = null;
+    }
+
+    const requestGeneration = requestGenerationRef.current + 1;
+    requestGenerationRef.current = requestGeneration;
+    const ownsRequest = () => (
+      mountedRef.current
+      && selectedServerRef.current === requestedServer
+      && requestGenerationRef.current === requestGeneration
+    );
+
+    if (force) mcpService.clearToolsCache(requestedServer);
+    lastRefreshRef.current = null;
+
+    log.debug(`Loading tools for server: ${requestedServer}`);
+    const dropOtherServersTools = () => {
+      if (toolsServerNameRef.current !== requestedServer) {
+        toolsServerNameRef.current = null;
+        setTools([]);
+        setToolsServerName(null);
+      }
+    };
+    return mcpService.listServerTools(requestedServer)
+      .then((result) => {
+        if (!ownsRequest()) {
+          log.debug(`Ignoring stale tool load for server: ${requestedServer}`);
+          return;
+        }
+        if (result.error) {
+          log.warn(`Error loading tools for ${requestedServer}:`, result.error);
+          setError(result.error);
+          dropOtherServersTools();
+          return;
+        }
+        const toolsArray: ServerTool[] = (result.tools || []).map((tool: MCPToolResponse) => ({
+          ...tool,
+          description: tool.description || '',
+        }));
+        log.debug(`Loaded ${toolsArray.length} tools for ${requestedServer}`);
+        toolsServerNameRef.current = requestedServer;
+        setTools(toolsArray);
+        setToolsServerName(requestedServer);
+        lastRefreshRef.current = {
+          serverName: requestedServer,
+          timestamp: Date.now(),
+          toolCount: toolsArray.length,
+        };
+        setRetryCount(0);
+      })
+      .catch((loadError) => {
+        if (!ownsRequest()) {
+          log.debug(`Ignoring stale tool load failure for server: ${requestedServer}`);
+          return;
+        }
+        log.warn(`Failed to load tools for server ${requestedServer}:`, loadError);
+        setError(`Failed to load tools: ${loadError instanceof Error ? loadError.message : 'Unknown error'}`);
+        dropOtherServersTools();
+      })
+      .finally(() => {
+        if (ownsRequest()) setIsLoading(false);
+      });
+  }, []);
+
+  /**
    * Load tools for the specified server
    */
   const loadTools = useCallback(async (force: boolean = false) => {
@@ -88,76 +159,11 @@ export function useServerTools(serverName: string | null) {
       return;
     }
 
-    if (retryTimeoutRef.current) {
-      clearTimeout(retryTimeoutRef.current);
-      retryTimeoutRef.current = null;
-    }
     setIsRetrying(false);
-
-    const requestGeneration = requestGenerationRef.current + 1;
-    requestGenerationRef.current = requestGeneration;
-    const ownsRequest = () => (
-      mountedRef.current
-      && selectedServerRef.current === requestedServer
-      && requestGenerationRef.current === requestGeneration
-    );
-
-    if (force) mcpService.clearToolsCache(requestedServer);
-    lastRefreshRef.current = null;
-
-    log.debug(`Loading tools for server: ${requestedServer}`);
     setIsLoading(true);
     setError(null);
-
-    try {
-      const result = await mcpService.listServerTools(requestedServer);
-
-      if (!ownsRequest()) {
-        log.debug(`Ignoring stale tool load for server: ${requestedServer}`);
-        return;
-      }
-
-      if (result.error) {
-        log.warn(`Error loading tools for ${requestedServer}:`, result.error);
-        setError(result.error);
-        if (toolsServerNameRef.current !== requestedServer) {
-          toolsServerNameRef.current = null;
-          setTools([]);
-          setToolsServerName(null);
-        }
-      } else {
-        const toolsArray: ServerTool[] = (result.tools || []).map((tool: MCPToolResponse) => ({
-          ...tool,
-          description: tool.description || '',
-        }));
-        log.debug(`Loaded ${toolsArray.length} tools for ${requestedServer}`);
-        toolsServerNameRef.current = requestedServer;
-        setTools(toolsArray);
-        setToolsServerName(requestedServer);
-        lastRefreshRef.current = {
-          serverName: requestedServer,
-          timestamp: Date.now(),
-          toolCount: toolsArray.length,
-        };
-        setRetryCount(0);
-      }
-    } catch (loadError) {
-      if (!ownsRequest()) {
-        log.debug(`Ignoring stale tool load failure for server: ${requestedServer}`);
-        return;
-      }
-
-      log.warn(`Failed to load tools for server ${requestedServer}:`, loadError);
-      setError(`Failed to load tools: ${loadError instanceof Error ? loadError.message : 'Unknown error'}`);
-      if (toolsServerNameRef.current !== requestedServer) {
-        toolsServerNameRef.current = null;
-        setTools([]);
-        setToolsServerName(null);
-      }
-    } finally {
-      if (ownsRequest()) setIsLoading(false);
-    }
-  }, [serverName]);
+    await fetchTools(requestedServer, force);
+  }, [serverName, fetchTools]);
 
   /**
    * Retry loading tools with exponential backoff
@@ -242,31 +248,32 @@ export function useServerTools(serverName: string | null) {
     }
   }, [serverName]);
 
-  // Load tools when the server name changes
+  // Load tools when the server name changes: start from an empty list at once.
+  useResetOnChange(serverName, (name) => {
+    setRetryCount(0);
+    setIsRetrying(false);
+    setTools([]);
+    setToolsServerName(null);
+    setError(null);
+    setIsLoading(Boolean(name));
+  });
   useEffect(() => {
     log.debug(`Server name changed to: ${serverName || 'null'}`);
-    
+
     // Clear any existing retry timeout
     if (retryTimeoutRef.current) {
       clearTimeout(retryTimeoutRef.current);
       retryTimeoutRef.current = null;
     }
-
-    setRetryCount(0);
-    setIsRetrying(false);
     toolsServerNameRef.current = null;
-    setTools([]);
-    setToolsServerName(null);
 
     if (serverName) {
-      void loadTools();
+      void fetchTools(serverName, false);
     } else {
       log.debug('Clearing tools as no server is selected');
       requestGenerationRef.current += 1;
-      setError(null);
-      setIsLoading(false);
     }
-  }, [serverName, loadTools]);
+  }, [serverName, fetchTools]);
 
   const ownedTools = toolsServerName === serverName ? tools : [];
 

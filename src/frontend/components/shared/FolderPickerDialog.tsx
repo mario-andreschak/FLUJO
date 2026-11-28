@@ -26,6 +26,7 @@ import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import HomeIcon from '@mui/icons-material/Home';
 import { createLogger } from '@/utils/logger';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
 
 const log = createLogger('frontend/components/shared/FolderPickerDialog');
 
@@ -84,15 +85,13 @@ const FolderPickerDialog = ({
   const { t } = useI18n();
   const [data, setData] = useState<BrowseResponse | null>(null);
   const [pathInput, setPathInput] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(open);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async (target?: string, homeIfMissing = false): Promise<void> => {
-    setLoading(true);
-    setError(null);
-    try {
-      let listing = await browse(target);
-      if (listing.failed && homeIfMissing && target) listing = await browse();
+  /** Lists `target`; the caller shows the loading state first. */
+  const browseTo = useCallback((target?: string, homeIfMissing = false) => browse(target)
+    .then((listing) => (listing.failed && homeIfMissing && target ? browse() : listing))
+    .then((listing) => {
       const { body } = listing;
       if (listing.failed) {
         setError(body.error || `HTTP ${listing.status}`);
@@ -100,22 +99,28 @@ const FolderPickerDialog = ({
       }
       setData(body);
       setPathInput(body.path);
-    } catch (err) {
+    })
+    .catch((err) => {
       log.warn('Browse failed', err);
       setError(t('folderPicker.backendError'));
-    } finally {
-      setLoading(false);
-    }
-  }, [t]);
+    })
+    .finally(() => setLoading(false)), [t]);
 
+  const load = useCallback((target?: string) => {
+    setLoading(true);
+    setError(null);
+    return browseTo(target);
+  }, [browseTo]);
+
+  // Opening shows the starting folder; closing forgets the listing.
+  useResetOnChange(open ? initialPath ?? '' : null, (openedAt) => {
+    setError(null);
+    if (openedAt === null) setData(null);
+    else setLoading(true);
+  });
   useEffect(() => {
-    if (open) {
-      void load(initialPath || undefined, true);
-    } else {
-      setData(null);
-      setError(null);
-    }
-  }, [open, initialPath, load]);
+    if (open) void browseTo(initialPath || undefined, true);
+  }, [open, initialPath, browseTo]);
 
   const pick = (value: string) => {
     onSelect(value);

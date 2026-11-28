@@ -6,6 +6,12 @@ import type { ModelTestResult } from '@/shared/types/model/response';
 import { worldCopy, type WorldLocale } from './copy';
 import styles from './world.module.css';
 
+async function readConnections(): Promise<AvatarConnectionDiscovery> {
+  const response = await fetch('/api/avatar/connections');
+  if (!response.ok) throw new Error(`Flujo (${response.status})`);
+  return response.json() as Promise<AvatarConnectionDiscovery>;
+}
+
 export default function ConnectionSetup({ locale, onClose, onVerified, onOther }: { locale: WorldLocale; onClose: () => void; onVerified: () => Promise<void>; onOther: () => void }) {
   const c = worldCopy(locale);
   const [discovery, setDiscovery] = useState<AvatarConnectionDiscovery | null>(null);
@@ -23,16 +29,13 @@ export default function ConnectionSetup({ locale, onClose, onVerified, onOther }
     sheet.current?.focus();
     return () => { previous?.focus(); };
   }, []);
-  const refresh = async () => {
-    setLoading(true); setError(null);
-    try {
-      const response = await fetch('/api/avatar/connections');
-      if (!response.ok) throw new Error(`Flujo (${response.status})`);
-      setDiscovery(await response.json());
-    } catch (err) { setError(err instanceof Error ? err.message : c.unavailable); }
-    finally { setLoading(false); }
-  };
-  useEffect(() => { void refresh(); /* User explicitly refreshes discovery after changes. */ }, []);
+  // Loads the discovery; the caller shows the loading state first.
+  const discover = () => readConnections()
+    .then(value => setDiscovery(value))
+    .catch((err: unknown) => setError(err instanceof Error ? err.message : c.unavailable))
+    .finally(() => setLoading(false));
+  const refresh = () => { setLoading(true); setError(null); void discover(); };
+  useEffect(() => { void discover(); /* User explicitly refreshes discovery after changes. */ }, []);
   const select = (value: AvatarConnectionCandidate) => { setCandidate(value); setChoice(value.modelId ? value.modelChoices[0]?.id ?? '' : ''); setToken(''); setTest(null); setError(null); savedDraft.current = null; };
   const verify = async () => {
     if (!candidate || busy) return;

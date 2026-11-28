@@ -21,6 +21,7 @@ import { MCPResource, MCPResourceTemplate, MCPPrompt } from '@/shared/types/mcp'
 import { createLogger } from '@/utils/logger';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { Translator } from '@/frontend/i18n/core';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
 
 const log = createLogger('frontend/components/mcp/MCPCapabilitiesManager');
 
@@ -37,13 +38,13 @@ interface MCPCapabilitiesManagerProps {
  * the flow builder instead.
  */
 const MCPCapabilitiesManager: React.FC<MCPCapabilitiesManagerProps> = ({ serverName, show = 'both' }) => {
-  const { t, formatNumber } = useI18n();
+  const { t, formatNumber, locale } = useI18n();
   const showResources = show === 'both' || show === 'resources';
   const showPrompts = show === 'both' || show === 'prompts';
   const [resources, setResources] = useState<MCPResource[]>([]);
   const [resourceTemplates, setResourceTemplates] = useState<MCPResourceTemplate[]>([]);
   const [prompts, setPrompts] = useState<MCPPrompt[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(Boolean(serverName));
   const [error, setError] = useState<string | undefined>();
 
   // Preview state: a single open preview at a time (resource read or prompt get).
@@ -55,40 +56,48 @@ const MCPCapabilitiesManager: React.FC<MCPCapabilitiesManagerProps> = ({ serverN
   // Per-prompt argument inputs, keyed by prompt name then arg name.
   const [promptArgs, setPromptArgs] = useState<Record<string, Record<string, string>>>({});
 
-  const load = useCallback(async () => {
-    if (!serverName) return;
-    setIsLoading(true);
-    setError(undefined);
-    try {
-      // Only fetch what this view shows — fetching the other capability would issue a
-      // needless round-trip (and on a stale server pay a reconnect) and could surface its
-      // unrelated error on this tab.
-      const [res, prm] = await Promise.all([
-        showResources ? mcpService.listServerResources(serverName) : Promise.resolve(null),
-        showPrompts ? mcpService.listServerPrompts(serverName) : Promise.resolve(null),
-      ]);
-      if (res) {
-        setResources(res.resources || []);
-        setResourceTemplates(res.resourceTemplates || []);
-      }
-      if (prm) {
-        setPrompts(prm.prompts || []);
-      }
-      setError(res?.error || prm?.error);
-    } catch (e) {
+  /** Fetches the capabilities; the caller shows the loading state first. */
+  const load = useCallback(() => {
+    if (!serverName) return Promise.resolve();
+    // Only fetch what this view shows — fetching the other capability would issue a
+    // needless round-trip (and on a stale server pay a reconnect) and could surface its
+    // unrelated error on this tab.
+    return Promise.all([
+      showResources ? mcpService.listServerResources(serverName) : Promise.resolve(null),
+      showPrompts ? mcpService.listServerPrompts(serverName) : Promise.resolve(null),
+    ]).then(([res, prm]) => {
+    if (res) {
+      setResources(res.resources || []);
+      setResourceTemplates(res.resourceTemplates || []);
+    }
+    if (prm) {
+      setPrompts(prm.prompts || []);
+    }
+    setError(res?.error || prm?.error);
+    }).catch((e) => {
       log.warn('Failed to load capabilities', e);
       setError(e instanceof Error ? e.message : t('mcp.capabilities.loadFailed'));
-    } finally {
+    }).finally(() => {
       setIsLoading(false);
-    }
+    });
   }, [serverName, showResources, showPrompts, t]);
 
-  useEffect(() => {
-    // Reset preview when switching servers.
+  const reload = useCallback(() => {
+    if (serverName) setIsLoading(true);
+    setError(undefined);
+    return load();
+  }, [serverName, load]);
+
+  // Reset preview when switching servers.
+  useResetOnChange(JSON.stringify([serverName, show, locale]), () => {
     setPreviewTitle(null);
     setPreviewContent('');
     setPreviewError(undefined);
-    load();
+    setIsLoading(Boolean(serverName));
+    setError(undefined);
+  });
+  useEffect(() => {
+    void load();
   }, [load]);
 
   // Poll the server-status endpoint for a changing resourceListVersion (#240).
@@ -105,14 +114,14 @@ const MCPCapabilitiesManager: React.FC<MCPCapabilitiesManagerProps> = ({ serverN
         const changed = mcpService.checkResourceListVersion(serverName, version);
         if (changed) {
           log.debug(`MCPCapabilitiesManager: resource list changed for ${serverName} — auto-refreshing`);
-          await load();
+          await reload();
         }
       } catch {
         // Ignore polling errors — the Refresh button is always available as a fallback.
       }
     }, 10000); // 10-second poll interval
     return () => clearInterval(intervalId);
-  }, [serverName, showResources, load]);
+  }, [serverName, showResources, reload]);
 
   const handleReadResource = async (uri: string, label: string) => {
     setPreviewTitle(t('mcp.capabilities.resourceTitle', { name: label }));
@@ -177,7 +186,7 @@ const MCPCapabilitiesManager: React.FC<MCPCapabilitiesManagerProps> = ({ serverN
     <Paper variant="outlined" sx={{ p: 2 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
         <Typography variant="h6">{heading}</Typography>
-        <Button size="small" onClick={() => { mcpService.clearCapabilitiesCache(serverName); load(); }} disabled={isLoading}>
+        <Button size="small" onClick={() => { mcpService.clearCapabilitiesCache(serverName); void reload(); }} disabled={isLoading}>
           {t('mcp.capabilities.refresh')}
         </Button>
       </Box>

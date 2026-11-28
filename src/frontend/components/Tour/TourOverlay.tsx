@@ -124,16 +124,10 @@ export default function TourOverlay() {
 
   // Track the target element's position. Polls while the step is active so the
   // spotlight follows layout shifts, scrolling, and post-navigation mounts.
+  // Off the step's page no spotlight is drawn, so a rect measured earlier is ignored.
   useLayoutEffect(() => {
-    if (!step) {
-      setRect(null);
-      return;
-    }
     // Don't try to locate the target until we're on the right page.
-    if (pathname !== step.path) {
-      setRect(null);
-      return;
-    }
+    if (!step || pathname !== step.path) return;
 
     let raf = 0;
     let scrolledIntoView = false;

@@ -823,6 +823,7 @@ const FlowsPage = () => {
     // editor URL via enterEditor() — no separate replace needed to drop
     // `?create=assistant` (a replace here would just clear the mode=edit we
     // just pushed).
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the arrival link is read from the address bar once the flow list has loaded, and opening the editor replaces that address, so it can only be taken once, after mount
     createNewFlow('guided');
   }, [createNewFlow, isLoading]);
 
