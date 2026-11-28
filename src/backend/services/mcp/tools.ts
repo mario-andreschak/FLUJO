@@ -334,17 +334,24 @@ export async function callTool(
 
     if (classified.kind === "task") {
       const serverIdentity = dispatchIdentity ?? await resolveServerIdentity(serverName);
+      const { mcpService } = await import('@/backend/services/mcp');
+      // A task on FLUJO's own registered connection, or one followed onto a new
+      // connection, must stay on that server's current, unchanged connection. A
+      // caller's own connection that FLUJO never registered cannot be replaced, so
+      // its task is followed where it started, as before tasks were always recorded.
+      const registered = mcpService.getClient(serverName) === client;
       const assertCurrent = async (current: Client) => {
         await assertMcpIsolationDispatch(current, serverName);
         await assertBundledFlujoWorkloadEffectCurrent();
-        const { mcpService } = await import('@/backend/services/mcp');
-        if (serverIdentity === 'unknown' || mcpService.getClient(serverName) !== current || await resolveServerIdentity(serverName) !== serverIdentity) throw new Error('MCP task server connection identity changed');
+        if ((registered || current !== client)
+            && (serverIdentity === 'unknown' || mcpService.getClient(serverName) !== current || await resolveServerIdentity(serverName) !== serverIdentity)) {
+          throw new Error('MCP task server connection identity changed');
+        }
         if (originatingInputContext && getElicitationContext(serverName) !== originatingInputContext) throw new Error('MCP task originating run is no longer current');
       };
       // Only a durably recorded task with a known server identity may be
       // followed onto a replacement connection of that same server.
       const reacquireClient = serverIdentity !== 'unknown' ? async () => {
-        const { mcpService } = await import('@/backend/services/mcp');
         const current = mcpService.getClient(serverName);
         return current && await resolveServerIdentity(serverName) === serverIdentity ? current : undefined;
       } : undefined;

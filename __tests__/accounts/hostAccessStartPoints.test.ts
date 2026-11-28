@@ -36,6 +36,8 @@ const REVIEWED: Readonly<Record<string, string>> = {
   'src/backend/services/ollama/capability.ts': 'fixed `nvidia-smi` probe for model suggestions',
   'src/backend/services/snapshot/openSnapshotFolder.ts': 'only reachable from /api/snapshots/open-folder, a host route',
   'src/utils/process/killProcessTree.ts': 'stops FLUJO\'s own child processes',
+  'src/utils/encryption/systemKeyStore.ts': 'keeps FLUJO\'s own encryption key in the system key store with the system\'s fixed tools '
+    + '(PowerShell data protection, macOS `security`, `secret-tool`); nobody chooses what runs, and every person needs that key to open FLUJO',
   'src/utils/mcp/directExecution.ts': 'not called anywhere; a caller must add assertHostAccess',
 };
 
@@ -68,6 +70,17 @@ describe('programs started on the server check host access', () => {
     expect(claude).toMatch(/await assertHostAccess\('command-line-model'\);\s*try \{\s*if \(nativeOriginalProcessHost\)/);
     const beta = fs.readFileSync(path.join(ROOT, 'src/backend/services/mcp/betaClient.ts'), 'utf8');
     expect(beta).toMatch(/if \(!isolation\) attachHostAccessCheck\(transport\)/);
+  });
+
+  it('starts only the system\'s own key tools, at fixed paths and without a shell, from the key store', () => {
+    const keyStore = fs.readFileSync(path.join(ROOT, 'src/utils/encryption/systemKeyStore.ts'), 'utf8');
+    expect(keyStore.match(/\bexecFile\(/g)).toHaveLength(1);
+    expect(keyStore).not.toMatch(/\b(?:exec|spawn|execSync|spawnSync|execFileSync|fork)\(|shell:\s*true/);
+    expect(keyStore).toMatch(/'WindowsPowerShell', 'v1\.0', 'powershell\.exe'\)/);
+    expect(keyStore).toMatch(/const security = '\/usr\/bin\/security';/);
+    expect(keyStore).toMatch(/for \(const candidate of \['\/usr\/bin\/secret-tool', '\/usr\/local\/bin\/secret-tool'\]\)/);
+    // The Linux store is only ever created for one of those two fixed paths.
+    expect(keyStore.match(/secretServiceStore\([^)]*\)/g)).toEqual(['secretServiceStore(secretTool: string)', 'secretServiceStore(candidate)']);
   });
 
   it('lists no file that is gone or no longer starts programs', () => {
