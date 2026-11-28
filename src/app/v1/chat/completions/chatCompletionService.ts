@@ -126,7 +126,7 @@ const persistState = persistConversationState;
 async function processChatCompletionInternal(
   data: ChatCompletionRequest,
   flujo: boolean,
-  requireApproval: boolean,
+  requireApproval: boolean | undefined,
   flujodebug: boolean,
   conversationId?: string,
   // When true, bypass debugger single-stepping and run until a natural stop.
@@ -315,7 +315,7 @@ function personaIdempotencyKey(
   conversationId: string,
   flags: {
     flujo: boolean;
-    requireApproval: boolean;
+    requireApproval: boolean | undefined;
     flujodebug: boolean;
     continueDebug: boolean;
     userTurn: boolean;
@@ -333,6 +333,7 @@ function personaIdempotencyKey(
       processNodeId: data.processNodeId,
       conversationId,
       ...flags,
+      requireApproval: flags.requireApproval === true,
     }))
     .digest('hex');
   return `chat:${conversationId}:${requestDigest}`;
@@ -462,7 +463,7 @@ async function processPersonaChatCompletion(
   data: ChatCompletionRequest,
   target: PersonaChatCompletionTarget,
   flujo: boolean,
-  requireApproval: boolean,
+  requireApproval: boolean | undefined,
   flujodebug: boolean,
   conversationId: string | undefined,
   continueDebug: boolean,
@@ -598,7 +599,7 @@ async function processPersonaChatCompletion(
 export async function processChatCompletion(
   data: ChatCompletionRequest,
   flujo: boolean,
-  requireApproval: boolean,
+  requireApproval: boolean | undefined,
   flujodebug: boolean,
   conversationId?: string,
   continueDebug: boolean = false,
@@ -617,7 +618,7 @@ export async function processChatCompletion(
 async function processAdmittedChatCompletion(
   data: ChatCompletionRequest,
   flujo: boolean,
-  requireApproval: boolean,
+  requireApproval: boolean | undefined,
   flujodebug: boolean,
   conversationId?: string,
   continueDebug: boolean = false,

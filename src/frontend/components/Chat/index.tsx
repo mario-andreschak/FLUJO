@@ -1278,6 +1278,9 @@ const Chat: React.FC = () => {
     pendingInputPositionRef.current = { conversationId: id, seq: snapshot.nextSeq - 1 };
     setPendingQuestion(snapshot.questions.at(-1) ?? null);
     setPendingElicitation(snapshot.elicitations.at(-1) ?? null);
+    // A running agent or sub-flow waiting on a tool decision has no saved pause
+    // to rebuild the card from, so the snapshot carries its calls (#1284).
+    if (snapshot.toolCalls?.length) setPendingToolCalls(unansweredToolCalls(snapshot.toolCalls, answeredToolCallIdsRef.current));
   }, []);
 
   const refreshPendingInputs = useCallback(async (id: string) => {
@@ -1564,6 +1567,9 @@ const Chat: React.FC = () => {
       if (attempt !== approvalSaveAttemptRef.current || currentConversationIdRef.current !== conversationId) return;
       const saved = savedApprovalRef.current;
       setRequireApproval(saved.conversationId === conversationId ? saved.value : !value);
+      // The line shows the details of `errorInfo` when there are any, so drop an
+      // older run error (for example a Stop) or this message would stay hidden.
+      setErrorInfo(null);
       setError(t('chat.page.approvalSaveFailed'));
     }
   }, [currentConversationId, t]);
@@ -1574,6 +1580,17 @@ const Chat: React.FC = () => {
   const currentConversationSummary = conversationList.find(
     (conv) => conv.id === currentConversationId
   ) || null;
+  // The chat cannot be used at all: an archived Persona, details still loading,
+  // or no agent or Persona to talk to.
+  const conversationUnavailable = Boolean(
+    detailedConversation?.personaArchived
+    || currentConversationSummary?.personaArchived
+  ) || isLoadingDetails || !(
+    detailedConversation?.personaId
+    || currentConversationSummary?.personaId
+    || detailedConversation?.flowId
+    || currentConversationSummary?.flowId
+  );
 
   // flowId → flow name map for the sidebar, so each conversation can show which
   // flow it used (issue #147). Memoized off the loaded flows list; quick-chat
@@ -3417,8 +3434,11 @@ const Chat: React.FC = () => {
     if (data.status === 'awaiting_tool_approval') {
       log.info('API Response/Polling: Pausing for tool approval', { conversationId });
       // The approval prompt belongs to the viewed conversation only — same
-      // bleed rule as the SSE run:awaiting_approval handler.
-      if (isViewed) setPendingToolCalls(unansweredToolCalls(data.pendingToolCalls || [], answeredToolCallIdsRef.current));
+      // bleed rule as the SSE run:awaiting_approval handler. A reply that
+      // arrives after the person pressed Stop must not bring the card back (#1284).
+      if (isViewed && !stoppedConversationIdsRef.current.has(conversationId)) {
+        setPendingToolCalls(unansweredToolCalls(data.pendingToolCalls || [], answeredToolCallIdsRef.current));
+      }
       if (isTracked) {
         setIsLoading(false); // Stop loading indicator
         setLoadingConversationId(null);
@@ -4290,10 +4310,15 @@ const Chat: React.FC = () => {
   // Handle Approve/Reject Tool Call
   const handleToolResponse = async (action: 'approve' | 'reject', toolCallId: string) => {
     if (!currentConversationId) return;
+    // A second click on the same call (a double click, or one before the card
+    // closed) is the answer already on its way, not a new request (#1284).
+    if (answeredToolCallIdsRef.current.has(toolCallId)) return;
     log.info(`Handling tool response: ${action}`, { conversationId: currentConversationId, toolCallId });
 
     rememberAnsweredToolCall(answeredToolCallIdsRef.current, toolCallId);
-    setPendingToolCalls(null);
+    // Only this call leaves the card: the others of the batch stay open to be
+    // decided while this one runs (#1284). The card closes with the last one.
+    setPendingToolCalls((calls) => unansweredToolCalls(calls, answeredToolCallIdsRef.current));
     setIsLoading(true); // Indicate processing and potentially restart polling
     setLoadingConversationId(currentConversationId);
     markConvRunning(currentConversationId, true);
@@ -6296,17 +6321,12 @@ const Chat: React.FC = () => {
             // Keep the input enabled while a run is in flight so the user can type and
             // QUEUE follow-up messages (issue #177); still disabled for load, missing
             // target, a pending tool approval, or a debugger pause.
-            disabled={Boolean(
-              detailedConversation?.personaArchived
-              || currentConversationSummary?.personaArchived
-            ) || isLoadingDetails || !(
-              detailedConversation?.personaId
-              || currentConversationSummary?.personaId
-              || detailedConversation?.flowId
-              || currentConversationSummary?.flowId
-            ) || !!pendingToolCalls || isDebugPaused}
+            disabled={conversationUnavailable || !!pendingToolCalls || isDebugPaused}
             requireApproval={requireApproval}
             onRequireApprovalChange={handleRequireApprovalChange}
+            // The box stays usable while a card waits: a change applies to the
+            // next batch and never releases a call already on the card (#1284).
+            approvalSettingDisabled={conversationUnavailable}
             // ONE Debugger control (issue: two overlapping controls). The old
             // "run in debugger" checkbox + the live indicator's "attach
             // debugger" floater are now this single toggle: it opens the panel

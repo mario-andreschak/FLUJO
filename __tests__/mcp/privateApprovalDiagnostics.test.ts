@@ -5,7 +5,6 @@ import { PrivateApprovalReadError, readPrivateApprovalSetAsync, type PrivateAppr
 import { windowsPrivateAuthorityStampAsync } from '@/backend/services/security/windowsPrivateAuthority';
 
 jest.mock('@/backend/services/security/windowsPrivateAuthority', () => ({
-  windowsPrivateAuthorityStamp: jest.fn(),
   windowsPrivateAuthorityStampAsync: jest.fn(),
 }));
 jest.mock('@/utils/paths', () => ({ getDataDir: () => path.resolve('synthetic-data') }));

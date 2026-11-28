@@ -3,20 +3,33 @@ import { FLUJO_AUTHORING_TOOLS, FLUJO_FLOW_TOOLS, FLUJO_SERVER_TOOLS, FLUJO_AUTO
 import { assertVerifiedBundledFlujoWorkloadStart } from '@/backend/services/mcp/trustedHost';
 import { resolveBundledFlujoWorkloadRequest, withBundledFlujoWorkloadAuthorization, type BundledFlujoWorkloadAuthorization, type PendingBundledFlujoWorkload } from '@/backend/services/security/bundledFlujoWorkload';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { getCurrentWorkspace, getWorkspaceDir } from '@/utils/workspace';
+import { getCurrentWorkspace } from '@/utils/workspace';
 import { createShippedServerConfig, SHIPPED_MCP_SERVERS } from '@/backend/services/mcp/shippedServers';
-import { ensureShippedWorkspacePackages } from '@/backend/services/mcp/shippedWorkspacePackages';
-import { saveConfig } from '@/backend/services/mcp/config';
-import { previewBundledHostConsent, approveBundledHostConsent } from '@/backend/services/security/bundledMcpConsent';
 import { attachTrustedHost, getManagedTrustedHost } from '@/backend/services/mcp/trustedHost';
 import { prepareBundledFlujoWorkload, getPendingWorkloadEnvironment } from '@/backend/services/security/bundledFlujoWorkload';
-import { installBundledFixtureOwner } from './fixtures/bundledFixtureOwner';
-import { assertMcpRuntimeAuthorityRetired, createStdioTransport, McpRuntimeAuthorityRetirementError, retireMcpRuntimeAuthority } from '@/backend/services/mcp/connection';
+import { APPROVED_BUNDLED_FLUJO_SETUP_MS, installApprovedBundledFlujo, type ApprovedBundledFlujo } from './fixtures/approvedBundledFlujo';
+import { assertMcpRuntimeAuthorityRetired, createStdioTransport, McpRuntimeAuthorityRetirementError, retireMcpRuntimeAuthority,
+  settleMcpRuntimeAuthorityRetirement } from '@/backend/services/mcp/connection';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { trustedHostMcpPolicySchema, verifyTrustedHostMcp } from '@/backend/services/security/trustedHostMcp';
+
+type FsCallback = (error: NodeJS.ErrnoException | null, ...values: unknown[]) => void;
+/**
+ * Runs the real callback-style call through `observe`, which sees the actual
+ * outcome and may answer with a fault instead. The production code keeps raw
+ * descriptor numbers, so faults land on the exact descriptor it acted on.
+ */
+function intercept(actual: (...args: never[]) => unknown, observe: (args: unknown[], error: NodeJS.ErrnoException | null, values: unknown[], done: FsCallback) => void) {
+  return (...args: unknown[]) => {
+    const done = args.pop() as FsCallback;
+    Reflect.apply(actual, fs, [...args, (error: NodeJS.ErrnoException | null, ...values: unknown[]) => observe(args, error, values, done)]);
+  };
+}
+const answer = (error: NodeJS.ErrnoException | null, values: unknown[], done: FsCallback) => done(error, ...values);
+const realFs = { open: fs.open, fstat: fs.fstat, close: fs.close };
+const ioFault = (message: string) => Object.assign(new Error(message), { code: 'EIO' });
 
 function reportRetirementSites(error: unknown, seen = new Set<unknown>()) {
   if (!(error instanceof Error) || seen.has(error)) return;
@@ -105,10 +118,32 @@ test.each(['object', 'unrelated-request'])('present public %s carrier never fall
   });
 });
 
+// Every private read on Windows starts two fresh native permission checks, and
+// one contract case makes dozens of them: 40 s on an idle PC and up to a minute
+// beside another worker on a busy one. The limit leaves room for more.
+const WORKLOAD_CASE_MS = 240_000;
+// Cancel early enough that retirement and fixture cleanup still finish in time.
+const WORKLOAD_CLEANUP_MS = 20_000;
+
+describe('real private consent and fresh guarded workload contract', () => {
+let consent!: ApprovedBundledFlujo;
+beforeAll(async () => {
+  const startedAt = performance.now();
+  consent = await installApprovedBundledFlujo({
+    prefix: 'flujo-workload-control-',
+    env: { FLUJO_SYSTEM_SCREENSHOT_ENABLED: '0', FLUJO_MCP_WORKLOAD_TRACE: '1' },
+    timed: async (name, operation) => {
+      console.info('[workload-control]', `${name}:start`, Math.round(performance.now() - startedAt));
+      try { return await operation(); } finally { console.info('[workload-control]', `${name}:settled`, Math.round(performance.now() - startedAt)); }
+    },
+  });
+}, APPROVED_BUNDLED_FLUJO_SETUP_MS);
+afterAll(async () => { await consent?.remove(); });
+
 test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','inventory-drift', 'deferred-owner-drift', 'retired-selected-context',
   'retire-unlink-retry', 'retire-closed-descriptor-retry', 'retire-unknown-parent', 'retire-quarantine-retry', 'retire-acquisition-ambiguous', 'verification-threeway-drain',
   'diagnostic-explicit', 'diagnostic-close', 'diagnostic-onclose', 'diagnostic-start-failed'] as const)
-('real private consent and fresh guarded workload contract: %s', async mode => {
+('%s', async mode => {
   const startedAt = performance.now();
   const stamp = (name: string) => console.info('[workload-control]', name, Math.round(performance.now() - startedAt));
   const timed = async <T,>(name: string, operation: () => Promise<T>): Promise<T> => {
@@ -119,7 +154,7 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
   const deadline = setTimeout(() => {
     cancellation.abort(new Error('Workload fixture cancellation deadline.'));
     try { stamp('deadline-abort'); } catch { /* Keep cancellation independent of diagnostic logging. */ }
-  }, 55_000);
+  }, WORKLOAD_CASE_MS - WORKLOAD_CLEANUP_MS);
   let graphB!: typeof import('@/backend/services/security/bundledFlujoWorkload');
   let readerDelegate!: { current: typeof import('@/backend/services/security/trustedHostMcp').readPrivateApprovalSetAsync };
   if (mode === 'deferred-owner-drift') jest.doMock('@/backend/services/security/trustedHostMcp', () => {
@@ -136,46 +171,17 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
   const serviceKey = Symbol('Source control global graph B service');
   const capturedService = Object.freeze({ assertEffect: graphB.assertBundledFlujoWorkloadEffectCurrent });
   Object.defineProperty(globalThis, serviceKey, { value: capturedService, configurable: true });
-  const names = ['FLUJO_APP_ROOT', 'FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR', 'FLUJO_BASE_URL', 'FLUJO_WORKER_MODE', 'FLUJO_SYSTEM_SCREENSHOT_ENABLED', 'FLUJO_MCP_WORKLOAD_TRACE'];
-  const saved = Object.fromEntries(names.map(name => [name, process.env[name]]));
-  const parent = path.resolve(process.platform === 'win32' ? process.env.LOCALAPPDATA ?? os.tmpdir() : os.tmpdir());
-  const fixture = fs.mkdtempSync(path.join(parent, 'flujo-workload-control-'));
-  const fixtureIdentity = fs.lstatSync(fixture, { bigint: true });
-  const canonicalParent = fs.realpathSync.native(parent);
-  const parentIdentity = fs.lstatSync(canonicalParent, { bigint: true });
-  if (!parentIdentity.isDirectory() || parentIdentity.isSymbolicLink()) throw new Error('Unsafe workload fixture parent.');
-  const application = path.join(fixture, 'application');
-  const write = (relative: string, content: string) => {
-    const filename = path.join(application, relative); fs.mkdirSync(path.dirname(filename), { recursive: true }); fs.writeFileSync(filename, content);
-  };
-  let owner: ReturnType<typeof installBundledFixtureOwner> | undefined;
+  const { application, proposed } = consent;
+  const approved = { config: consent.approved };
+  // Files a case creates for itself; the shared consent stays untouched.
+  const scratch = fs.mkdtempSync(path.join(consent.fixture, 'case-'));
   let transport: { start(): Promise<void>; close(): Promise<void> } | undefined;
   let primaryFailed = false;
   let primaryError: unknown;
   const foreignDescriptors: number[] = [];
-  let retireQuarantinedAuthority: (() => void) | undefined;
+  let retireQuarantinedAuthority: (() => Promise<void>) | undefined;
+  let preservedUnknown: string | undefined;
   try {
-    process.env.FLUJO_APP_ROOT = application; process.env.FLUJO_DATA_DIR = path.join(fixture, 'data');
-    process.env.FLUJO_BASE_URL = 'http://127.0.0.1:4200'; delete process.env.FLUJO_PARENT_DATA_DIR; delete process.env.FLUJO_WORKER_MODE;
-    process.env.FLUJO_SYSTEM_SCREENSHOT_ENABLED = '0';
-    process.env.FLUJO_MCP_WORKLOAD_TRACE = '1';
-    const descriptor = SHIPPED_MCP_SERVERS.find(item => item.packageDirectory === 'flujo')!;
-    write('package.json', '{"name":"flujo-ai","version":"1.0.0"}');
-    write('node_modules/fixture-dependency/package.json', '{"name":"fixture-dependency","version":"1.0.0","type":"module","exports":"./index.js"}');
-    write('node_modules/fixture-dependency/index.js', 'export const value = 1;');
-    write('mcp-servers/flujo/package.json', JSON.stringify({ name: descriptor.packageId, version: '1.0.0', type: 'module', dependencies: { 'fixture-dependency': '1.0.0' } }));
-    write('mcp-servers/flujo/src/index.ts', '// genuine fixture source');
-    write('mcp-servers/flujo/dist/index.js', 'export { value } from "fixture-dependency";');
-    fs.mkdirSync(getWorkspaceDir(getCurrentWorkspace()), { recursive: true });
-    await timed('package-copy', () => ensureShippedWorkspacePackages(getWorkspaceDir(getCurrentWorkspace()), application, ['flujo']));
-    const proposed = createShippedServerConfig(descriptor);
-    expect((await timed('persist-config', () => saveConfig(new Map([[proposed.name, proposed]])))).success).toBe(true);
-    const fixtureOwner = installBundledFixtureOwner();
-    owner = fixtureOwner;
-    const preview = await timed('preview', () => previewBundledHostConsent(proposed.name, { runtimeHome: 'host' }));
-    const approved = await timed('approve', () => approveBundledHostConsent(new Request(fixtureOwner.request(proposed.name), { signal: cancellation.signal }), proposed.name, {
-      runtimeHome: 'host', reviewedDigest: preview.policyDigest, expiresAt: fixtureOwner.expiresAt,
-    }));
     if (mode === 'verification-threeway-drain') {
       const actualOpen = fs.promises.open.bind(fs.promises);
       const sourceFile = trustedHostMcpPolicySchema.parse(approved.config.trustedHost).entryPoint;
@@ -263,6 +269,9 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
         expect(failure).toBeInstanceOf(AggregateError);
         const errors = (failure as AggregateError).errors;
         expect(errors).toEqual(reason === 'start-failed' ? [original, cleanup] : [reason === 'close' ? cleanup : original]);
+        // A server that closed by itself retires in the background; the same
+        // retirement is joined here before the durable outcome is checked.
+        if (reason === 'onclose') await getManagedTrustedHost(controlled)!.retire();
         expect(observations).toHaveLength(1);
         expect(observations[0].slice(0, 3)).toEqual(['[trusted-host-retirement]', reason, reason === 'start-failed' ? 'transport-start' : 'ready']);
         expect(Number.isSafeInteger(observations[0][3])).toBe(true);
@@ -283,12 +292,10 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
     await attachTrustedHost(transport, approved.config, undefined, capsule);
     const key = createHash('sha256').update(token).digest('hex');
     let recordDescriptor: number | undefined;
-    const actualOpen = fs.openSync;
-    const opened = mode.startsWith('retire-') ? jest.spyOn(fs, 'openSync').mockImplementation((...args: Parameters<typeof fs.openSync>) => {
-      const fd = Reflect.apply(actualOpen, fs, args) as number;
-      if (String(args[0]).endsWith(`${key}.pending`) && typeof args[1] === 'number' && (args[1] & fs.constants.O_EXCL)) recordDescriptor = fd;
-      return fd;
-    }) : undefined;
+    const opened = mode.startsWith('retire-') ? jest.spyOn(fs, 'open').mockImplementation(intercept(realFs.open, (args, error, values, done) => {
+      if (!error && String(args[0]).endsWith(`${key}.pending`) && typeof args[1] === 'number' && (args[1] & fs.constants.O_EXCL)) recordDescriptor = values[0] as number;
+      answer(error, values, done);
+    })) : undefined;
     try { await timed('guarded-start', () => transport!.start()); } finally { opened?.mockRestore(); }
     expect(start).toHaveBeenCalledTimes(1);
     expect((await timed('resolve-active', () => resolveBundledFlujoWorkloadRequest(request()))).kind).toBe('authorized');
@@ -415,59 +422,64 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
     if (mode === 'retire-quarantine-retry') {
       const retireOwned = () => retireMcpRuntimeAuthority(proposed.name, getCurrentWorkspace(), capsule, undefined);
       retireQuarantinedAuthority = retireOwned;
-      const actualUnlink = fs.unlinkSync;
+      const actualUnlink = fs.promises.unlink.bind(fs.promises);
       let injected = 0;
-      const fault = jest.spyOn(fs, 'unlinkSync').mockImplementation(filename => {
+      const fault = jest.spyOn(fs.promises, 'unlink').mockImplementation(async filename => {
         if (path.resolve(String(filename)) === path.join(workloadDirectory, `${key}.json`)) {
-          injected += 1; throw Object.assign(new Error('Owned quarantine unlink fault.'), { code: 'EIO' });
+          injected += 1; throw ioFault('Owned quarantine unlink fault.');
         }
         return actualUnlink(filename);
       });
       try {
-        expect(retireOwned).toThrow(McpRuntimeAuthorityRetirementError);
+        await expect(retireOwned()).rejects.toThrow(McpRuntimeAuthorityRetirementError);
         expect(injected).toBe(1);
         expect(() => assertMcpRuntimeAuthorityRetired(proposed.name)).toThrow(McpRuntimeAuthorityRetirementError);
+        // A launch first retries the failed retirement; the fault is still there.
         await expect(createStdioTransport(approved.config)).rejects.toThrow(McpRuntimeAuthorityRetirementError);
+        expect(injected).toBe(2);
         const unrelated = prepareBundledFlujoWorkload(approved.config);
         if (!unrelated) throw new Error('Genuine unrelated pending authority unavailable.');
-        retireMcpRuntimeAuthority(proposed.name, getCurrentWorkspace(), unrelated, undefined);
+        await retireMcpRuntimeAuthority(proposed.name, getCurrentWorkspace(), unrelated, undefined);
         expect(() => assertMcpRuntimeAuthorityRetired(proposed.name)).toThrow(McpRuntimeAuthorityRetirementError);
       } finally { fault.mockRestore(); }
-      retireOwned();
+      // Once the cause is gone, the step every launch runs first heals the quarantine by itself.
+      await settleMcpRuntimeAuthorityRetirement(proposed.name);
+      expect(injected).toBe(2);
       expect(() => assertMcpRuntimeAuthorityRetired(proposed.name)).not.toThrow();
       expect(() => getPendingWorkloadEnvironment(approved.config, capsule)).toThrow();
       expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied');
     }
     let unknownSiblingCreated = false;
     if (mode === 'retire-acquisition-ambiguous') {
-      const actualOpen = fs.openSync, actualStat = fs.fstatSync, actualClose = fs.closeSync, actualUnlink = fs.unlinkSync;
+      const actualOpen = fs.openSync, actualStat = fs.fstatSync, actualClose = fs.closeSync;
+      const actualUnlink = fs.promises.unlink.bind(fs.promises);
       const recordName = path.join(workloadDirectory, `${key}.json`);
       let acquired: number | undefined, failedStat = false;
-      const opened = jest.spyOn(fs, 'openSync').mockImplementation((...args: Parameters<typeof fs.openSync>) => {
-        const fd = actualOpen(...args);
-        const stack = new Error().stack ?? '';
-        if (String(args[0]) === recordName && typeof args[1] === 'number' && (args[1] & fs.constants.O_RDWR) === 0
-            && acquired === undefined && stack.includes('closeOwnedFile') && !stack.includes('readStableFile')) acquired = fd;
-        return fd;
+      // Private file checks read through file handles, so the first read-only
+      // descriptor this close opens on the record is its close witness.
+      const opened = jest.spyOn(fs, 'open').mockImplementation(intercept(realFs.open, (openArgs, error, values, done) => {
+        if (!error && String(openArgs[0]) === recordName && typeof openArgs[1] === 'number' && (openArgs[1] & fs.constants.O_RDWR) === 0
+            && (openArgs[1] & fs.constants.O_WRONLY) === 0 && acquired === undefined) acquired = values[0] as number;
+        answer(error, values, done);
+      }));
+      const stat = jest.spyOn(fs, 'fstat').mockImplementation((...args: unknown[]) => {
+        if (args[0] === acquired && !failedStat) { failedStat = true; (args.at(-1) as FsCallback)(ioFault('Owned acquisition validation fault.')); return; }
+        intercept(realFs.fstat, (_args, error, values, done) => answer(error, values, done))(...args);
       });
-      const stat = jest.spyOn(fs, 'fstatSync').mockImplementation((...args: Parameters<typeof fs.fstatSync>) => {
-        if (args[0] === acquired && !failedStat) { failedStat = true; throw Object.assign(new Error('Owned acquisition validation fault.'), { code: 'EIO' }); }
-        return actualStat(...args);
+      const closed = jest.spyOn(fs, 'close').mockImplementation((...args: unknown[]) => {
+        if (args[0] === acquired) { (args.at(-1) as FsCallback)(ioFault('Ambiguous acquired descriptor close.')); return; }
+        intercept(realFs.close, (_args, error, values, done) => answer(error, values, done))(...args);
       });
-      const closed = jest.spyOn(fs, 'closeSync').mockImplementation(fd => {
-        if (fd === acquired) throw Object.assign(new Error('Ambiguous acquired descriptor close.'), { code: 'EIO' });
-        actualClose(fd);
-      });
-      const unlink = jest.spyOn(fs, 'unlinkSync').mockImplementation(filename => {
-        if (String(filename) === recordName) throw Object.assign(new Error('Owned unlink fault.'), { code: 'EIO' });
-        actualUnlink(filename);
+      const unlink = jest.spyOn(fs.promises, 'unlink').mockImplementation(async filename => {
+        if (String(filename) === recordName) throw ioFault('Owned unlink fault.');
+        return actualUnlink(filename);
       });
       try { await expect(transport.close()).rejects.toThrow(); }
       finally { opened.mockRestore(); stat.mockRestore(); closed.mockRestore(); unlink.mockRestore(); }
       expect(failedStat).toBe(true); expect(acquired).toBeDefined();
       foreignDescriptors.push(acquired!);
       expect(actualStat(acquired!).isFile()).toBe(true);
-      const retryOpen = jest.spyOn(fs, 'openSync');
+      const retryOpen = jest.spyOn(fs, 'open');
       let retryRecordOpens = 0;
       try { await expect(transport.close()).rejects.toThrow(); retryRecordOpens = retryOpen.mock.calls.filter(args => String(args[0]) === recordName).length; }
       finally { retryOpen.mockRestore(); }
@@ -477,7 +489,7 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
       // The fixture owns this genuinely acquired handle. Closing it establishes
       // authoritative EBADF; no production clear or authority mock is involved.
       actualClose(acquired!); foreignDescriptors.pop();
-      const unrelated = path.join(fixture, 'ambiguous-acquisition-foreign.json');
+      const unrelated = path.join(scratch, 'ambiguous-acquisition-foreign.json');
       fs.writeFileSync(unrelated, '{"unrelated":"preserve"}');
       for (let count = 0; count < 64; count++) {
         const fd = actualOpen(unrelated, 'r'); foreignDescriptors.push(fd);
@@ -492,24 +504,26 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
       expectedCloseCount = 4;
     }
     if (mode === 'retire-unlink-retry' || mode === 'retire-unknown-parent') {
-      const actualUnlink = fs.unlinkSync;
-      const actualClose = fs.closeSync;
+      const actualUnlink = fs.promises.unlink.bind(fs.promises);
       let closeObserved = false;
-      const observedClose = jest.spyOn(fs, 'closeSync').mockImplementation(fd => {
+      const observedClose = jest.spyOn(fs, 'close').mockImplementation((...args: unknown[]) => {
+        const fd = args[0] as number;
         const observe = !closeObserved && fd === recordDescriptor;
         if (observe) closeObserved = true;
         const before = observe ? fs.fstatSync(fd, { bigint: true }) : undefined;
-        actualClose(fd);
-        if (before) try {
-          const after = fs.lstatSync(path.join(workloadDirectory, `${key}.json`), { bigint: true });
-          const fields = ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'gid', 'nlink'] as const;
-          console.info('[workload-recovery-close-fields]', fields.filter(field => before[field] !== after[field]));
-        } catch { /* Observation cannot change the actual close result. */ }
+        intercept(realFs.close, (_args, error, values, done) => {
+          if (before && !error) try {
+            const after = fs.lstatSync(path.join(workloadDirectory, `${key}.json`), { bigint: true });
+            const fields = ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'gid', 'nlink'] as const;
+            console.info('[workload-recovery-close-fields]', fields.filter(field => before[field] !== after[field]));
+          } catch { /* Observation cannot change the actual close result. */ }
+          answer(error, values, done);
+        })(...args);
       });
       let injected = false;
-      const fault = jest.spyOn(fs, 'unlinkSync').mockImplementation(filename => {
+      const fault = jest.spyOn(fs.promises, 'unlink').mockImplementation(async filename => {
         if (!injected && path.resolve(String(filename)) === path.join(workloadDirectory, `${key}.json`)) {
-          injected = true; throw Object.assign(new Error('Owned record unlink fault.'), { code: 'EIO' });
+          injected = true; throw ioFault('Owned record unlink fault.');
         }
         return actualUnlink(filename);
       });
@@ -541,6 +555,7 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
         await expect(transport.close()).rejects.toThrow();
         expect(fs.readFileSync(unknown, 'utf8')).toBe('{"unknown":"preserve"}');
         fs.renameSync(workloadDirectory, preserved);
+        preservedUnknown = preserved;
         fs.renameSync(held, workloadDirectory);
         expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied');
         expectedCloseCount = 3;
@@ -549,15 +564,14 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
     }
     if (mode === 'retire-closed-descriptor-retry') {
       expect(recordDescriptor).toBeDefined();
-      const actualClose = fs.closeSync;
       let injected = false;
-      const fault = jest.spyOn(fs, 'closeSync').mockImplementation(fd => {
-        actualClose(fd);
-        if (!injected && fd === recordDescriptor) { injected = true; throw Object.assign(new Error('Completed owned close fault.'), { code: 'EIO' }); }
-      });
+      const fault = jest.spyOn(fs, 'close').mockImplementation(intercept(realFs.close, (args, error, values, done) => {
+        if (!error && !injected && args[0] === recordDescriptor) { injected = true; done(ioFault('Completed owned close fault.')); return; }
+        answer(error, values, done);
+      }));
       try { await expect(transport.close()).rejects.toThrow(); } finally { fault.mockRestore(); }
       expect(injected).toBe(true);
-      const unrelated = path.join(fixture, 'unrelated-descriptor.json');
+      const unrelated = path.join(scratch, 'unrelated-descriptor.json');
       fs.writeFileSync(unrelated, '{"unrelated":"preserve"}');
       for (let count = 0; count < 64; count++) {
         const fd = fs.openSync(unrelated, 'r'); foreignDescriptors.push(fd);
@@ -586,6 +600,7 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
       // the actual production retirement preserved it.
       fs.unlinkSync(path.join(workloadDirectory, 'unknown.json'));
     }
+    if (preservedUnknown) { fs.rmSync(preservedUnknown, { recursive: true, force: true }); preservedUnknown = undefined; }
     expect(fs.readdirSync(workloadDirectory)).toEqual([]);
     expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied');
     for (const fd of foreignDescriptors) expect(fs.fstatSync(fd).isFile()).toBe(true);
@@ -599,26 +614,13 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
     cancellation.abort(new Error('Workload fixture cleanup.'));
     stamp('cleanup:start');
     try { Reflect.deleteProperty(globalThis, serviceKey); } catch (error) { cleanupErrors.push(error); }
-    try { retireQuarantinedAuthority?.(); } catch (error) { cleanupErrors.push(error); }
+    try { await retireQuarantinedAuthority?.(); } catch (error) { cleanupErrors.push(error); }
     try { await transport?.close(); } catch (error) { cleanupErrors.push(error); }
     for (const fd of foreignDescriptors) { try { fs.closeSync(fd); } catch (error) { cleanupErrors.push(error); } }
-    try { owner?.restore(); } catch (error) { cleanupErrors.push(error); }
-    for (const [name, value] of Object.entries(saved)) {
-      try { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
-      catch (error) { cleanupErrors.push(error); }
-    }
-    if (cleanupErrors.length === 0) try {
-      const current = fs.lstatSync(fixture, { bigint: true });
-      const currentParent = fs.lstatSync(canonicalParent, { bigint: true });
-      if (path.dirname(fixture) !== parent || fs.realpathSync.native(parent) !== canonicalParent
-          || !currentParent.isDirectory() || currentParent.isSymbolicLink()
-          || currentParent.dev !== parentIdentity.dev || currentParent.ino !== parentIdentity.ino || currentParent.birthtimeNs !== parentIdentity.birthtimeNs
-          || !/^flujo-workload-control-[A-Za-z0-9]+$/.test(path.basename(fixture)) || !current.isDirectory() || current.isSymbolicLink()
-          || current.dev !== fixtureIdentity.dev || current.ino !== fixtureIdentity.ino || current.birthtimeNs !== fixtureIdentity.birthtimeNs) throw new Error('Unsafe workload fixture cleanup.');
-      fs.rmSync(fixture, { recursive: true, force: true });
-    } catch (error) { cleanupErrors.push(error); }
+    if (cleanupErrors.length === 0) try { fs.rmSync(scratch, { recursive: true, force: true }); } catch (error) { cleanupErrors.push(error); }
     if (cleanupErrors.length) throw new AggregateError(primaryFailed ? [primaryError, ...cleanupErrors] : cleanupErrors,
       'Workload fixture cleanup failed.', primaryFailed ? { cause: primaryError } : undefined);
     stamp('cleanup:settled');
   }
-}, 60_000);
+}, WORKLOAD_CASE_MS);
+});

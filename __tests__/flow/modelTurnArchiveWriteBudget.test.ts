@@ -152,6 +152,17 @@ describe('archive write allocation ownership', () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
+  it('reserves the same bytes for plain ASCII as for escaped and non-ASCII text, character by character', () => {
+    // 2 UTF-16 bytes per character and 40 for quotes per string, then JSON and UTF-8 bytes per character.
+    const perCharacter = (text: string) => estimateArchivePayload(text) - text.length * 2 - 40;
+    expect(perCharacter('plain text 123 ~!')).toBe(17 * 3);
+    expect(perCharacter('a"b\\c')).toBe(3 * 3 + 2 * 6);
+    expect(perCharacter('\u0001\n')).toBe(18 + 6);
+    expect(perCharacter('é漢🙂\ud800')).toBe(4 + 5 + 8 + 18);
+    expect(perCharacter('\u007f')).toBe(3);
+    expect(perCharacter('x'.repeat(100_000))).toBe(300_000);
+  });
+
   it('charges repeated references for each serialization occurrence', () => {
     const shared = { text: 'retained'.repeat(100) };
     expect(estimateArchivePayload([shared, shared])).toBeGreaterThan(estimateArchivePayload([shared]) * 1.8);

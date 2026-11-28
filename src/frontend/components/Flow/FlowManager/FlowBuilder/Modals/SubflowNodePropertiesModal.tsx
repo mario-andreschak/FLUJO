@@ -95,7 +95,10 @@ export const SubflowNodePropertiesModal = ({
   const [captureKvScope, setCaptureKvScope] = useState<KvRefScope>('folder');
   const [captureKvKey, setCaptureKvKey] = useState('');
 
-  useEffect(() => {
+  const seedDeps = [node, open];
+  const [seededFor, setSeededFor] = useState<readonly unknown[] | null>(null);
+  if (!seededFor || seedDeps.some((dep, index) => dep !== seededFor[index])) {
+    setSeededFor(seedDeps);
     if (node) {
       const existing = (node.data.properties || {}) as SubflowNodeProperties;
       // Issue #138: do NOT seed default values (previously `allowCallerPrompt`/
@@ -118,13 +121,17 @@ export const SubflowNodePropertiesModal = ({
       setCaptureKvScope(kvParsed.scope);
       setCaptureKvKey(kvParsed.key || '');
     }
-  }, [node, open]);
+  }
 
   // Load the available flows to choose from when the modal opens.
+  const [flowsLoadedOpen, setFlowsLoadedOpen] = useState(false);
+  if (open !== flowsLoadedOpen) {
+    setFlowsLoadedOpen(open);
+    if (open) setLoadingFlows(true);
+  }
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    setLoadingFlows(true);
     flowService.loadFlows()
       .then((loaded) => {
         if (!cancelled) setFlows(loaded || []);

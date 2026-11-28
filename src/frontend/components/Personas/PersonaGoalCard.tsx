@@ -2,7 +2,7 @@
 
 import { PauseCircleOutlineRounded, ReplayRounded, StopCircleRounded } from '@mui/icons-material';
 import { Alert, Box, Button, Checkbox, Chip, FormControlLabel, Paper, Stack, TextField, Typography } from '@mui/material';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useReachedAt } from '@/frontend/hooks/timing';
@@ -25,15 +25,19 @@ export default function PersonaGoalCard({ item, busy, mutate, children }: {
   const [dirty, setDirty] = useState(false);
   const [expectedUpdatedAt, setExpectedUpdatedAt] = useState(item.updatedAt);
   const nextRunReached = useReachedAt(goal?.pendingTaskId ? goal.nextRunAt : undefined);
-  useEffect(() => {
-    if (dirty) return;
-    setCriteria(goal?.successCriteria ?? '');
-    setFinishOnSuccess(goal?.completionPolicy !== 'until_stopped');
-    setCadence(String((goal?.continuationIntervalMs ?? 60_000) / 1_000));
-    setLimit(goal?.maxRounds === undefined ? '' : String(goal.maxRounds));
-    setDailyLimit(String(goal?.maxRoundsPerDay ?? ''));
-    setExpectedUpdatedAt(item.updatedAt);
-  }, [dirty, goal?.successCriteria, goal?.completionPolicy, goal?.continuationIntervalMs, goal?.maxRounds, goal?.maxRoundsPerDay, item.updatedAt]);
+  const seedDeps = [dirty, goal?.successCriteria, goal?.completionPolicy, goal?.continuationIntervalMs, goal?.maxRounds, goal?.maxRoundsPerDay, item.updatedAt];
+  const [seededFor, setSeededFor] = useState<readonly unknown[] | null>(null);
+  if (!seededFor || seedDeps.some((dep, index) => dep !== seededFor[index])) {
+    setSeededFor(seedDeps);
+    if (!dirty) {
+      setCriteria(goal?.successCriteria ?? '');
+      setFinishOnSuccess(goal?.completionPolicy !== 'until_stopped');
+      setCadence(String((goal?.continuationIntervalMs ?? 60_000) / 1_000));
+      setLimit(goal?.maxRounds === undefined ? '' : String(goal.maxRounds));
+      setDailyLimit(String(goal?.maxRoundsPerDay ?? ''));
+      setExpectedUpdatedAt(item.updatedAt);
+    }
+  }
   if (!goal) return null;
   const terminal = goal.state === 'completed' || goal.state === 'stopped';
   const currentSession = Boolean(goal.pendingTaskId) && (goal.nextRunAt === undefined || nextRunReached);

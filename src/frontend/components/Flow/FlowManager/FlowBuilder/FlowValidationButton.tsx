@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback, useEffect, useId, useRef } from 'react';
+import React, { useState, useCallback, useId, useRef } from 'react';
 import {
   Button,
   ClickAwayListener,
@@ -35,6 +35,7 @@ import { mcpService } from '@/frontend/services/mcp';
 import { MCPServerConfig } from '@/shared/types/mcp';
 import { createLogger } from '@/utils/logger';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useDebouncedCallback, useTimeout } from '@/frontend/hooks/timing';
 import { localizeFlowIssue } from '@/frontend/i18n/flowValidation';
 
 const log = createLogger('components/flow/FlowBuilder/FlowValidationButton');
@@ -82,30 +83,20 @@ export const FlowValidationButton: React.FC<FlowValidationButtonProps> = ({ node
   const dialogId = useId();
   const dialogTitleId = useId();
 
-  useEffect(() => {
-    if (!open) return;
-    const frame = window.requestAnimationFrame(() => {
-      dialogRef.current?.focus();
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [open]);
+  // The popper mounts its content after this render, so focus moves once it is there.
+  useTimeout(() => dialogRef.current?.focus(), open ? 0 : null);
+  const focusTriggerAfterClose = useDebouncedCallback(() => triggerRef.current?.focus(), 0);
 
   const closeAndRestoreFocus = useCallback(() => {
     setOpen(false);
-    window.requestAnimationFrame(() => {
-      triggerRef.current?.focus();
-    });
-  }, []);
+    focusTriggerAfterClose();
+  }, [focusTriggerAfterClose]);
 
   const handleClickAway = useCallback(() => {
     const focusWasInside = dialogRef.current?.contains(document.activeElement);
     setOpen(false);
-    if (focusWasInside) {
-      window.requestAnimationFrame(() => {
-        triggerRef.current?.focus();
-      });
-    }
-  }, []);
+    if (focusWasInside) focusTriggerAfterClose();
+  }, [focusTriggerAfterClose]);
 
   const runCheck = useCallback(async () => {
     setLoading(true);

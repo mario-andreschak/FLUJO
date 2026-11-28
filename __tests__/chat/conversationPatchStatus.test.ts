@@ -73,6 +73,8 @@ jest.mock('@/backend/execution/flow/conversationSummaryStore', () => ({
 // In-memory storage backing the route's loadItem/saveItem.
 const stored: Record<string, SharedState> = {};
 jest.mock('@/utils/storage/backend', () => ({
+  // The running-conversation save path (#1284) writes through persistConversationState.
+  assertSafeCollectionId: jest.fn(),
   loadItem: jest.fn(async (key: string) => stored[key]),
   saveItem: jest.fn(async (key: string, value: SharedState) => {
     stored[key] = value;
@@ -90,6 +92,12 @@ import {
 import { withConversationExecutionLock } from '@/backend/execution/flow/conversationExecutionLock';
 import { registerPendingQuestion, clearPendingQuestions } from '@/backend/services/questionRegistry';
 import { registerPendingElicitation, clearPendingElicitations } from '@/backend/services/mcp/elicitationRegistry';
+import { waitForLiveToolDecision } from '@/backend/execution/flow/toolApprovalGate';
+import { clearPendingApprovals, resolvePendingApproval } from '@/backend/execution/flow/toolApprovalRegistry';
+import { getConversationStates } from '@/backend/execution/flow/conversationStateRegistry';
+import { approvalSettingNow } from '@/backend/execution/flow/approvalSetting';
+import { registerCancellableRun } from '@/backend/execution/flow/cancellationCoordinator';
+import { saveItem as mockedSaveItem } from '@/utils/storage/backend';
 
 function seedConversation(id: string, status: SharedState['status']) {
   stored[`conversations/${id}`] = {
@@ -131,6 +139,69 @@ async function patchFlow(conversationId: string) {
   expect(res.status).toBe(200);
   return res.json();
 }
+
+describe('PATCH of "Require tool approvals" while a run goes on (#1284, R8)', () => {
+  /** A run of the conversation as runFlow starts one: registered, and holding the conversation. */
+  const holdRun = async (conversationId: string) => {
+    const registration = await registerCancellableRun({ conversationId });
+    let release!: () => void;
+    const held = withConversationExecutionLock(conversationId, () => new Promise<void>((resolve) => { release = resolve; }))
+      .finally(() => registration.release());
+    return { release: () => release(), held };
+  };
+  const live = (conversationId: string): SharedState => {
+    seedConversation(conversationId, 'running');
+    const state = structuredClone(stored[`conversations/${conversationId}`]);
+    state.requireApproval = false;
+    getConversationStates().set(conversationId, state);
+    return state;
+  };
+
+  it('saves into the running conversation at once instead of after the run', async () => {
+    const conversationId = 'conv-patch-during-run';
+    const state = live(conversationId);
+    const run = await holdRun(conversationId);
+    try {
+      const res = await PATCH(patchRequest({ requireApproval: true }), { params: Promise.resolve({ conversationId }) });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ id: conversationId, status: 'running' });
+      expect(state.requireApproval).toBe(true);
+      expect(stored[`conversations/${conversationId}`].requireApproval).toBe(true);
+    } finally {
+      run.release();
+      await run.held;
+      getConversationStates().delete(conversationId);
+    }
+  });
+
+  it('asks while the change is being saved, and puts the old value back when the save fails', async () => {
+    const conversationId = 'conv-patch-fails';
+    const state = live(conversationId);
+    const run = await holdRun(conversationId);
+    let finishSave!: (error?: Error) => void;
+    jest.mocked(mockedSaveItem).mockImplementationOnce(() => new Promise<void>((resolve, reject) => {
+      finishSave = (error) => (error ? reject(error) : resolve());
+    }));
+    try {
+      state.requireApproval = true; // the box was ticked before
+      const patching = PATCH(patchRequest({ requireApproval: false }), { params: Promise.resolve({ conversationId }) });
+      for (let attempt = 0; attempt < 100 && !finishSave; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+      // Not saved yet: the next batch still asks.
+      expect(approvalSettingNow(conversationId, false)).toBe(true);
+      finishSave(new Error('disk full'));
+      const res = await patching;
+
+      expect(res.status).toBe(500);
+      expect(state.requireApproval).toBe(true);
+      expect(approvalSettingNow(conversationId, false)).toBe(true);
+    } finally {
+      run.release();
+      await run.held;
+      getConversationStates().delete(conversationId);
+    }
+  });
+});
 
 describe('PATCH /v1/chat/conversations/:id status pass-through', () => {
   it('names the calls waiting for a person, so a reopened chat can ask again', async () => {
@@ -210,6 +281,25 @@ describe('PATCH /v1/chat/conversations/:id status pass-through', () => {
     } finally {
       clearPendingQuestions(conversationId); clearPendingElicitations(conversationId);
       await Promise.all([question, form]);
+    }
+  });
+
+  it('brings back the card of a tool call a running agent waits on, and drops it once answered (#1284)', async () => {
+    const conversationId = 'conv-live-tool';
+    seedConversation(conversationId, 'running');
+    const decision = waitForLiveToolDecision(conversationId, { id: 'sdk-1', type: 'function', function: { name: 'send_email', arguments: '{"to":"a@b.c"}' } });
+    const read = async () => (await GET(new NextRequest(`http://localhost/v1/chat/conversations/${conversationId}`, {
+      headers: { host: 'localhost', origin: 'http://localhost' },
+    }), { params: Promise.resolve({ conversationId }) })).json();
+    try {
+      expect((await read()).pendingInputs.toolCalls).toEqual([
+        { id: 'sdk-1', type: 'function', function: { name: 'send_email', arguments: '{"to":"a@b.c"}' } },
+      ]);
+      resolvePendingApproval(conversationId, 'sdk-1', true);
+      await expect(decision).resolves.toBe(true);
+      expect((await read()).pendingInputs.toolCalls).toBeUndefined();
+    } finally {
+      clearPendingApprovals(conversationId);
     }
   });
 

@@ -106,6 +106,14 @@ export async function registerCancellableRun(input: {
   }
 }
 
+/** A runFlow invocation for this conversation is registered and still going. */
+export function hasRegisteredRun(conversationId: string): boolean {
+  for (const run of currentRuns().values()) {
+    if (run.conversationId === conversationId) return true;
+  }
+  return false;
+}
+
 /**
  * Wait until no Super-Exclusive/EMERGENCY run owns the workspace admission
  * barrier. The holder itself passes by presenting the same logical run id.

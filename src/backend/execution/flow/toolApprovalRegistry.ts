@@ -1,4 +1,5 @@
 import type OpenAI from 'openai';
+import { randomUUID } from 'crypto';
 import { workspaceCacheKey } from '@/utils/workspace';
 
 /**
@@ -13,8 +14,23 @@ import { workspaceCacheKey } from '@/utils/workspace';
  * ExecutionEventBus (survives Next.js dev hot-reloads via globalThis).
  */
 interface PendingApproval {
+  conversationId: string;
   toolCall: OpenAI.ChatCompletionMessageFunctionToolCall;
   resolve: (approved: boolean) => void;
+  /** Opaque id the approval inbox lists for this one call (#1284); it stops working once the call is answered. */
+  receipt: string;
+  createdAt: number;
+  /** When the wait gives up without running the tool. */
+  expiresAt?: number;
+}
+
+/** A live wait as the approval inbox lists it: ids, tool name and times, never arguments. */
+export interface LiveApprovalListing {
+  receipt: string;
+  conversationId: string;
+  toolCall: { id: string; name: string };
+  createdAt: number;
+  expiresAt?: number;
 }
 
 const globalForRegistry = globalThis as unknown as {
@@ -23,19 +39,22 @@ const globalForRegistry = globalThis as unknown as {
 const registry: Map<string, Map<string, PendingApproval>> =
   globalForRegistry.__flujoToolApprovals ?? (globalForRegistry.__flujoToolApprovals = new Map());
 
-/** Register a tool call awaiting approval, keyed by conversation + tool-call id. */
+/** Register a tool call awaiting approval, keyed by conversation + tool-call id. Returns its inbox receipt. */
 export function registerPendingApproval(
   conversationId: string,
   toolCall: OpenAI.ChatCompletionMessageFunctionToolCall,
-  resolve: (approved: boolean) => void
-): void {
+  resolve: (approved: boolean) => void,
+  expiresAt?: number,
+): string {
   const key = workspaceCacheKey(conversationId);
   let perConv = registry.get(key);
   if (!perConv) {
     perConv = new Map();
     registry.set(key, perConv);
   }
-  perConv.set(toolCall.id, { toolCall, resolve });
+  const receipt = `apr_${randomUUID()}`;
+  perConv.set(toolCall.id, { conversationId, toolCall, resolve, receipt, createdAt: Date.now(), ...(expiresAt ? { expiresAt } : {}) });
+  return receipt;
 }
 
 /**
@@ -77,6 +96,29 @@ export function listPendingToolCalls(
   const perConv = registry.get(workspaceCacheKey(conversationId));
   if (!perConv) return [];
   return Array.from(perConv.values(), p => p.toolCall);
+}
+
+/** Every live wait of the current workspace, oldest first, for the approval inbox. */
+export function listLiveApprovals(): LiveApprovalListing[] {
+  const listed: LiveApprovalListing[] = [];
+  for (const [key, perConv] of registry) {
+    for (const pending of perConv.values()) {
+      if (workspaceCacheKey(pending.conversationId) !== key) continue;
+      listed.push({
+        receipt: pending.receipt,
+        conversationId: pending.conversationId,
+        toolCall: { id: pending.toolCall.id, name: pending.toolCall.function.name },
+        createdAt: pending.createdAt,
+        ...(pending.expiresAt ? { expiresAt: pending.expiresAt } : {}),
+      });
+    }
+  }
+  return listed.sort((a, b) => a.createdAt - b.createdAt);
+}
+
+/** The live wait an inbox receipt names in the current workspace, while it still waits. */
+export function findLiveApproval(receipt: string): LiveApprovalListing | undefined {
+  return listLiveApprovals().find((listed) => listed.receipt === receipt);
 }
 
 /** Reject and clear all pending approvals for a conversation (e.g. on cancel). */

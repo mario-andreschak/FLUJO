@@ -89,6 +89,12 @@ function selectedIssueRepairRequest(entries: PlausibilityIssueEntry[]): string {
   );
 }
 
+function openingStage(nodeId: string | null | undefined, modelId: string | null | undefined, initialFocus: string): Stage {
+  if (!nodeId || initialFocus === 'review') return 'checking';
+  if (!modelId) return initialFocus === 'agents' ? 'agents' : 'tools';
+  return initialFocus === 'agents' ? 'suggesting-agents' : 'suggesting';
+}
+
 export default function FlowAssistanceDialog({
   open,
   flow,
@@ -117,23 +123,30 @@ export default function FlowAssistanceDialog({
   const [discussionTurns, setDiscussionTurns] = useState<ToolSuggestionDiscussionTurn[]>([]);
   const [error, setError] = useState<string | null>(null);
 
+  const runPlausibilityCheck = (
+    candidate: Flow,
+    checkModelId: string | undefined,
+    isCurrent: () => boolean = () => true,
+  ) => flowService.checkPlausibility({
+    flow: candidate,
+    relatedFlows,
+    modelId: checkModelId,
+    intendedContext: 'chat',
+  }).then((result) => {
+    if (!isCurrent()) return;
+    setPlausibility(result);
+    setSelectedIssueKeys(new Set());
+    setStage('plausibility');
+  }).catch((caught) => {
+    if (!isCurrent()) return;
+    setError(caught instanceof Error ? caught.message : t('flows.assistance.checkFailed'));
+    setStage('plausibility');
+  });
+
   const check = async (candidate: Flow) => {
     setStage('checking');
     setError(null);
-    try {
-      const result = await flowService.checkPlausibility({
-        flow: candidate,
-        relatedFlows,
-        modelId: chosenModelId || modelId || undefined,
-        intendedContext: 'chat',
-      });
-      setPlausibility(result);
-      setSelectedIssueKeys(new Set());
-      setStage('plausibility');
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : t('flows.assistance.checkFailed'));
-      setStage('plausibility');
-    }
+    await runPlausibilityCheck(candidate, chosenModelId || modelId || undefined);
   };
 
   const suggestAgents = async (candidate: Flow, requestedModelId?: string) => {
@@ -161,32 +174,38 @@ export default function FlowAssistanceDialog({
     }
   };
 
+  const openingKey = open ? [nodeId ?? '', modelId ?? '', initialFocus].join('\u0000') : null;
+  const [openedFor, setOpenedFor] = useState<string | null>(null);
+  if (openingKey !== openedFor) {
+    setOpenedFor(openingKey);
+    if (openingKey !== null) {
+      setWorkingFlow(flow);
+      setSuggestion(null);
+      setAgentSuggestion(null);
+      setPlausibility(null);
+      setSelected(new Set());
+      setSelectedAgents(new Set());
+      setApprovedAppPrompt(null);
+      setSelectedIssueKeys(new Set());
+      setChosenModelId(modelId ?? '');
+      setDiscussionOpen(false);
+      setDiscussionDraft('');
+      setDiscussionTurns([]);
+      setError(null);
+      setStage(openingStage(nodeId, modelId, initialFocus));
+    }
+  }
+
   useEffect(() => {
     if (!open) return;
     let active = true;
-    setWorkingFlow(flow);
-    setSuggestion(null);
-    setAgentSuggestion(null);
-    setPlausibility(null);
-    setSelected(new Set());
-    setSelectedAgents(new Set());
-    setApprovedAppPrompt(null);
-    setSelectedIssueKeys(new Set());
-    setChosenModelId(modelId ?? '');
-    setDiscussionOpen(false);
-    setDiscussionDraft('');
-    setDiscussionTurns([]);
-    setError(null);
+    const isCurrent = () => active;
     if (!nodeId || initialFocus === 'review') {
-      void check(flow);
+      void runPlausibilityCheck(flow, modelId || undefined, isCurrent);
       return () => { active = false; };
     }
-    if (!modelId) {
-      setStage(initialFocus === 'agents' ? 'agents' : 'tools');
-      return () => { active = false; };
-    }
+    if (!modelId) return () => { active = false; };
     if (initialFocus === 'agents') {
-      setStage('suggesting-agents');
       void flowService.suggestAgentsForStep({
         flow,
         nodeId,
@@ -204,7 +223,6 @@ export default function FlowAssistanceDialog({
       });
       return () => { active = false; };
     }
-    setStage('suggesting');
     void flowService.suggestToolsForStep({
       flow,
       relatedFlows,

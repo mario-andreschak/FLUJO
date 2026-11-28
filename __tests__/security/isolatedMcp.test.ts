@@ -1,21 +1,30 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
-import { windowsPrivateAuthorityStamp } from '@/backend/services/security/windowsPrivateAuthority';
+import { windowsPrivateAuthorityStampAsync } from '@/backend/services/security/windowsPrivateAuthority';
 import { assertIsolatedMcpContainerInspection } from '@/backend/services/security/isolatedMcpInspection';
 import {
   createIsolatedMcpLaunch, isDockerCliPath, isolatedMcpPolicyDigest, McpIsolationError,
   type IsolatedMcpPolicy,
 } from '@/backend/services/security/isolatedMcp';
 
-jest.mock('node:child_process', () => ({ execFileSync: jest.fn() }));
-jest.mock('@/backend/services/security/windowsPrivateAuthority', () => ({ windowsPrivateAuthorityStamp: jest.fn() }));
+const mockExecute = jest.fn<string, [string, string[], { env?: Record<string, string> }]>();
+// Docker answers on a later turn of the event loop, like the real CLI.
+jest.mock('node:child_process', () => ({
+  execFile: (command: string, args: string[], options: { env?: Record<string, string> }, callback: (error: Error | null, stdout: string) => void) => {
+    let stdout = '';
+    let failure: Error | null = null;
+    try { stdout = mockExecute(command, args, options); } catch (error) { failure = error as Error; }
+    setImmediate(() => callback(failure, stdout));
+    return {};
+  },
+}));
+jest.mock('@/backend/services/security/windowsPrivateAuthority', () => ({ windowsPrivateAuthorityStampAsync: jest.fn() }));
 jest.mock('@/backend/services/security/isolatedMcpInspection', () => ({
   ...jest.requireActual('@/backend/services/security/isolatedMcpInspection'), assertIsolatedMcpContainerInspection: jest.fn(),
 }));
 const daemonInfo = { OSType: 'linux', MemoryLimit: true, SwapLimit: true, CpuCfsPeriod: true, CpuCfsQuota: true, PidsLimit: true, SecurityOptions: [] };
-const execute = jest.mocked(execFileSync);
+const execute = mockExecute;
 const id = 'c'.repeat(64);
 const controls = new Set<string>();
 let workspace: string;
@@ -45,7 +54,7 @@ beforeEach(() => {
   wrongOwner = false;
   grantsFilename = undefined;
   grantsContent = undefined;
-  jest.mocked(windowsPrivateAuthorityStamp).mockReset().mockReturnValue('private-file');
+  jest.mocked(windowsPrivateAuthorityStampAsync).mockReset().mockResolvedValue('private-file');
   jest.mocked(assertIsolatedMcpContainerInspection).mockReset();
   execute.mockReset();
   execute.mockImplementation((_command, arguments_) => {
@@ -87,8 +96,8 @@ afterEach(() => {
 const launch = () => createIsolatedMcpLaunch(policy, isolatedMcpPolicyDigest(policy), workspace,
   { TEST_GRANTED_TOKEN: 'approved secret', HOST_SECRET: 'must not escape' });
 
-test('creates a stopped container with OS restrictions, then attaches by its exact immutable ID', () => {
-  const result = launch();
+test('creates a stopped container with OS restrictions, then attaches by its exact immutable ID', async () => {
+  const result = await launch();
   const createCall = execute.mock.calls.find(([, args]) => args?.includes('create'))!;
   const args = createCall[1] as string[];
   expect(args).toEqual(expect.arrayContaining([
@@ -115,29 +124,92 @@ test('creates a stopped container with OS restrictions, then attaches by its exa
   }));
   expect(Object.isFrozen(result)).toBe(true);
   expect(Object.isFrozen(result.args)).toBe(true);
-  expect(result.close().outcome).toBe('removed');
+  expect((await result.close()).outcome).toBe('removed');
   expect(fs.existsSync(result.cwd)).toBe(false);
   const calls = execute.mock.calls.length;
-  expect(result.close().outcome).toBe('removed');
+  expect((await result.close()).outcome).toBe('removed');
   expect(execute).toHaveBeenCalledTimes(calls);
 });
 
-test('changes to capabilities require renewed approval before contacting Docker', () => {
+test('callers that close while a removal runs share it instead of racing a second removal', async () => {
+  const result = await launch();
+  const [first, second] = await Promise.all([result.close(), result.close()]);
+  expect(first).toEqual({ outcome: 'removed' });
+  expect(second).toBe(first);
+  expect(execute.mock.calls.filter(([, args]) => args?.includes('rm'))).toHaveLength(1);
+  expect(fs.existsSync(result.cwd)).toBe(false);
+});
+
+test('changes to capabilities require renewed approval before contacting Docker', async () => {
   const approved = isolatedMcpPolicyDigest(policy);
   policy.memoryMiB = 256;
-  expect(() => createIsolatedMcpLaunch(policy, approved, workspace)).toThrow(expect.objectContaining({ code: 'ISOLATION_RECONSENT_REQUIRED' }));
+  await expect(createIsolatedMcpLaunch(policy, approved, workspace)).rejects.toThrow(expect.objectContaining({ code: 'ISOLATION_RECONSENT_REQUIRED' }));
   expect(execute).not.toHaveBeenCalled();
 });
 
-test('a trusted ownership key binds the atomic container name across random generations', () => {
+test('a trusted ownership key binds the atomic container name across random generations', async () => {
   const key = 'd'.repeat(64);
-  const result = createIsolatedMcpLaunch(policy, isolatedMcpPolicyDigest(policy), workspace,
+  const result = await createIsolatedMcpLaunch(policy, isolatedMcpPolicyDigest(policy), workspace,
     { TEST_GRANTED_TOKEN: 'fixture' }, { key });
   const args = execute.mock.calls.find(([, args]) => args?.includes('create'))![1]!;
   expect(args).toContain(`flujo-mcp-${key}`);
   expect(args).toContain(`co.flujo.mcp-ownership=${key}`);
   expect(result.ownershipKey).toBe(key);
-  result.close();
+  expect(args).toContain(`co.flujo.mcp-control=${path.basename(result.cwd)}`);
+  await result.close();
+});
+
+describe('a start after FLUJO crashed', () => {
+  const key = 'd'.repeat(64);
+  const stale = 'e'.repeat(64);
+  let leftoverFolder: string;
+  let leftover: boolean;
+  const stopped = (args: string[]) => args.includes('ls') && args.includes('status=exited')
+    && args.includes(`name=^/flujo-mcp-${key}$`) && args.includes(`label=co.flujo.mcp-ownership=${key}`);
+  beforeEach(() => {
+    const temp = path.resolve(process.platform === 'win32' ? process.env.LOCALAPPDATA! : os.tmpdir());
+    leftoverFolder = fs.mkdtempSync(path.join(temp, 'flujo-mcp-isolation-'));
+    controls.add(leftoverFolder);
+    leftover = true;
+  });
+  const launchOwned = () => createIsolatedMcpLaunch(policy, isolatedMcpPolicyDigest(policy), workspace, { TEST_GRANTED_TOKEN: 'fixture' }, { key });
+
+  test('removes the stopped sandbox the crashed process left under the same name, and its control folder', async () => {
+    const normal = execute.getMockImplementation()!;
+    execute.mockImplementation((command, args, options) => {
+      if (stopped(args)) return leftover ? `${stale} ${path.basename(leftoverFolder)}\n` : '';
+      if (args.includes('ls') && args.includes(`id=${stale}`)) return leftover ? `${stale} crashed-generation\n` : '';
+      if (args.includes('rm') && args.includes(stale)) { leftover = false; return `${stale}\n`; }
+      return normal(command, args, options);
+    });
+    const result = await launchOwned();
+    expect(leftover).toBe(false);
+    expect(fs.existsSync(leftoverFolder)).toBe(false);
+    // Without --force, Docker refuses a container that is running again by then.
+    expect(execute.mock.calls.find(([, args]) => args.includes('rm') && args.includes(stale))![1]).not.toContain('--force');
+    const order = execute.mock.calls.map(([, args]) => args.includes('create') ? 'create' : args.includes(stale) && args.includes('rm') ? 'rm' : '').filter(Boolean);
+    expect(order).toEqual(['rm', 'create']);
+    expect(result.containerId).toBe(id);
+    await result.close();
+  });
+
+  test('a sandbox still running under the same name is never removed, and the start reports it unavailable', async () => {
+    const normal = execute.getMockImplementation()!;
+    execute.mockImplementation((command, args, options) => {
+      // It stopped while listed but runs again: Docker refuses a plain removal.
+      if (stopped(args)) return `${stale} ${path.basename(leftoverFolder)}\n`;
+      if (args.includes('rm') && args.includes(stale)) throw new Error('cannot remove a running container');
+      if (args.includes('create')) throw new Error('Conflict. The container name is already in use');
+      if (args.includes('ls') && args.includes(`name=^/flujo-mcp-${key}$`)) return `${stale} live-generation\n`;
+      return normal(command, args, options);
+    });
+    await expect(launchOwned()).rejects.toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
+    expect(fs.existsSync(leftoverFolder)).toBe(true);
+    expect(execute.mock.calls.filter(([, args]) => args.includes('rm') && args.includes('--force'))).toHaveLength(0);
+    // The other container holds the name, so this start made none: its own control folder goes.
+    const created = execute.mock.calls.find(([, args]) => args.includes('create'))![1];
+    expect(fs.existsSync(created[created.indexOf('--config') + 1])).toBe(false);
+  });
 });
 
 test('the digest is independent of set ordering and binds command, image, mounts and daemon', () => {
@@ -175,30 +247,30 @@ test.each([
   expect(execute).not.toHaveBeenCalled();
 });
 
-test('accepts only the Docker program itself as the host executable', () => {
+test('accepts only the Docker program itself as the host executable', async () => {
   expect(isDockerCliPath(path.join(workspace, 'docker'))).toBe(true);
   expect(isDockerCliPath(path.join(workspace, 'Docker.EXE'))).toBe(true);
   expect(isDockerCliPath(path.join(workspace, 'docker.cmd'))).toBe(false);
   expect(isDockerCliPath(path.join(workspace, 'podman'))).toBe(false);
   expect(isDockerCliPath(`${path.join(workspace, 'docker')}\0`)).toBe(false);
-  const result = launch();
+  const result = await launch();
   expect(new Set(execute.mock.calls.map(([command]) => command))).toEqual(new Set([policy.dockerExecutable]));
   expect(result.command).toBe(policy.dockerExecutable);
-  result.close();
+  await result.close();
 });
 
-test.each([undefined, 'a\0b', 'a\rB=bad', 'a\nB=bad', 'a'.repeat(16 * 1024 + 1)])('rejects missing or invalid environment grant values', value => {
-  expect(() => createIsolatedMcpLaunch(policy, isolatedMcpPolicyDigest(policy), workspace,
-    { TEST_GRANTED_TOKEN: value as string })).toThrow(McpIsolationError);
+test.each([undefined, 'a\0b', 'a\rB=bad', 'a\nB=bad', 'a'.repeat(16 * 1024 + 1)])('rejects missing or invalid environment grant values', async value => {
+  await expect(createIsolatedMcpLaunch(policy, isolatedMcpPolicyDigest(policy), workspace,
+    { TEST_GRANTED_TOKEN: value as string })).rejects.toThrow(McpIsolationError);
   expect(execute).not.toHaveBeenCalled();
 });
 
-test('container loader and CLI controls cannot influence any host Docker process', () => {
+test('container loader and CLI controls cannot influence any host Docker process', async () => {
   policy.environmentNames = ['LD_PRELOAD', 'GODEBUG', 'SSLKEYLOGFILE', 'PATH', 'SYSTEMROOT'];
   const values = Object.fromEntries(policy.environmentNames.map(name => [name, `container-only-${name}`]));
-  const result = createIsolatedMcpLaunch(policy, isolatedMcpPolicyDigest(policy), workspace, values);
+  const result = await createIsolatedMcpLaunch(policy, isolatedMcpPolicyDigest(policy), workspace, values);
   expect(grantsContent).toBe(policy.environmentNames.map(name => `${name}=${values[name]}\n`).join(''));
-  result.close();
+  await result.close();
   for (const [, args, options] of execute.mock.calls) {
     for (const [name, value] of Object.entries(values)) {
       expect(args).not.toContain(value);
@@ -207,92 +279,92 @@ test('container loader and CLI controls cannot influence any host Docker process
   }
 });
 
-test('environment files preserve literal equals signs, quotes, spaces and empty values', () => {
+test('environment files preserve literal equals signs, quotes, spaces and empty values', async () => {
   policy.environmentNames = ['TOKEN', 'EMPTY'];
-  const result = createIsolatedMcpLaunch(policy, isolatedMcpPolicyDigest(policy), workspace,
+  const result = await createIsolatedMcpLaunch(policy, isolatedMcpPolicyDigest(policy), workspace,
     { TOKEN: 'a=b # literal "value" ', EMPTY: '' });
   expect(grantsContent).toBe('TOKEN=a=b # literal "value" \nEMPTY=\n');
-  result.close();
+  await result.close();
 });
 
-test('private grants refuse outsider-readable files before writing secret bytes', () => {
-  const open = fs.openSync;
+test('private grants refuse outsider-readable files before writing secret bytes', async () => {
+  const open = fs.promises.open.bind(fs.promises);
   let restore = () => {};
   if (process.platform === 'win32') {
-    jest.mocked(windowsPrivateAuthorityStamp).mockImplementation(filename => {
+    jest.mocked(windowsPrivateAuthorityStampAsync).mockImplementation(async filename => {
       expect(fs.readFileSync(filename as string)).toHaveLength(0);
       throw new Error('nonprivate fixture');
     });
   } else {
-    const spy = jest.spyOn(fs, 'openSync').mockImplementation((filename, flags, mode) => {
-      const fd = open(filename, flags, mode);
+    const spy = jest.spyOn(fs.promises, 'open').mockImplementation(async (filename, flags, mode) => {
+      const handle = await open(filename, flags, mode);
       if (typeof filename === 'string' && filename.endsWith(`${path.sep}container.env`)) {
-        expect(fs.fstatSync(fd).size).toBe(0);
-        fs.fchmodSync(fd, 0o644);
+        expect((await handle.stat()).size).toBe(0);
+        await handle.chmod(0o644);
       }
-      return fd;
+      return handle;
     });
     restore = () => spy.mockRestore();
   }
   try {
-    expect(launch).toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
+    await expect(launch()).rejects.toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
     expect(execute.mock.calls.some(([, args]) => args?.includes('create'))).toBe(false);
   } finally { restore(); }
 });
 
-test('NODE_ENV cannot override the deliberately controlled CLI production environment', () => {
+test('NODE_ENV cannot override the deliberately controlled CLI production environment', async () => {
   policy.environmentNames = ['NODE_ENV'];
-  expect(() => createIsolatedMcpLaunch(policy, isolatedMcpPolicyDigest(policy), workspace,
-    { NODE_ENV: 'development' })).toThrow(McpIsolationError);
+  await expect(createIsolatedMcpLaunch(policy, isolatedMcpPolicyDigest(policy), workspace,
+    { NODE_ENV: 'development' })).rejects.toThrow(McpIsolationError);
   expect(execute).not.toHaveBeenCalled();
-  const result = createIsolatedMcpLaunch(policy, isolatedMcpPolicyDigest(policy), workspace, { NODE_ENV: 'production' });
+  const result = await createIsolatedMcpLaunch(policy, isolatedMcpPolicyDigest(policy), workspace, { NODE_ENV: 'production' });
   expect(result.env.NODE_ENV).toBe('production');
-  result.close();
+  await result.close();
 });
 
-test('rejects a junction or symlink in a host grant', () => {
+test('rejects a junction or symlink in a host grant', async () => {
   const outside = path.join(workspace, 'private');
   fs.mkdirSync(outside);
   fs.symlinkSync(outside, path.join(workspace, 'storage/mcp-grants/link'), process.platform === 'win32' ? 'junction' : 'dir');
   policy.mounts = [{ name: 'link', source: 'storage/mcp-grants/link' }];
-  expect(launch).toThrow(expect.objectContaining({ code: 'ISOLATION_POLICY_INVALID' }));
+  await expect(launch()).rejects.toThrow(expect.objectContaining({ code: 'ISOLATION_POLICY_INVALID' }));
   expect(execute.mock.calls.some(([, args]) => args?.includes('create'))).toBe(false);
 });
 
-test('rejects image-declared volumes rather than granting implicit writable mounts', () => {
+test('rejects image-declared volumes rather than granting implicit writable mounts', async () => {
   execute.mockImplementationOnce(() => JSON.stringify(daemonInfo))
     .mockImplementationOnce(() => JSON.stringify({ Id: policy.image, Config: { Volumes: { '/data': {} } } }));
-  expect(launch).toThrow(expect.objectContaining({ code: 'ISOLATION_POLICY_INVALID' }));
+  await expect(launch()).rejects.toThrow(expect.objectContaining({ code: 'ISOLATION_POLICY_INVALID' }));
   expect(execute).toHaveBeenCalledTimes(2);
 });
 
-test('rejects a non-Linux daemon without creating or executing a host fallback', () => {
+test('rejects a non-Linux daemon without creating or executing a host fallback', async () => {
   execute.mockImplementationOnce(() => JSON.stringify({ ...daemonInfo, OSType: 'windows' }));
-  expect(launch).toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
+  await expect(launch()).rejects.toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
   expect(execute).toHaveBeenCalledTimes(1);
 });
 
-test.each(['MemoryLimit', 'SwapLimit', 'CpuCfsPeriod', 'CpuCfsQuota', 'PidsLimit'])('refuses a daemon without %s support before container creation', capability => {
+test.each(['MemoryLimit', 'SwapLimit', 'CpuCfsPeriod', 'CpuCfsQuota', 'PidsLimit'])('refuses a daemon without %s support before container creation', async capability => {
   execute.mockImplementationOnce(() => JSON.stringify({ ...daemonInfo, [capability]: false }));
-  expect(launch).toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
+  await expect(launch()).rejects.toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
   expect(execute).toHaveBeenCalledTimes(1);
 });
 
-test('an unverified created container is removed without returning a start command', () => {
+test('an unverified created container is removed without returning a start command', async () => {
   jest.mocked(assertIsolatedMcpContainerInspection).mockImplementation(() => { throw new Error('unsafe daemon record'); });
-  expect(launch).toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
+  await expect(launch()).rejects.toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
   expect(exists).toBe(false);
   expect(execute.mock.calls.some(([, args]) => args?.includes('start') || args?.includes('run'))).toBe(false);
 });
 
-test('reconciles a timed out create only by the matching owned generation', () => {
+test('reconciles a timed out create only by the matching owned generation', async () => {
   const normal = execute.getMockImplementation()!;
   execute.mockImplementation((command, args, options) => {
     const output = normal(command, args, options);
     if (args?.includes('create')) throw new Error('synthetic create timeout with private token');
     return output;
   });
-  expect(launch).toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
+  await expect(launch()).rejects.toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
   expect(exists).toBe(false);
   expect(execute.mock.calls.some(([, args]) => args?.includes('start') || args?.includes('run'))).toBe(false);
   expect(execute.mock.calls.find(([, args]) => args?.includes('rm'))?.[1]).toContain(id);
@@ -300,34 +372,34 @@ test('reconciles a timed out create only by the matching owned generation', () =
   expect(fs.existsSync(grantsFilename!)).toBe(false);
 });
 
-test('redacts daemon failures and provides no host fallback', () => {
+test('redacts daemon failures and provides no host fallback', async () => {
   execute.mockImplementationOnce(() => { throw new Error('private daemon token=secret'); });
   let failure: unknown;
-  try { launch(); } catch (error) { failure = error; }
+  try { await launch(); } catch (error) { failure = error; }
   expect(failure).toMatchObject({ code: 'ISOLATION_UNAVAILABLE' });
   expect(String(failure)).not.toContain('secret');
   expect(execute).toHaveBeenCalledTimes(1);
 });
 
-test('Docker removal acknowledgement alone cannot establish cleanup', () => {
-  const result = launch();
+test('Docker removal acknowledgement alone cannot establish cleanup', async () => {
+  const result = await launch();
   refuseRemoval = true;
-  expect(result.close()).toEqual({ outcome: 'unknown' });
+  expect(await result.close()).toEqual({ outcome: 'unknown' });
   expect(fs.existsSync(result.cwd)).toBe(true);
   refuseRemoval = false;
-  expect(result.close()).toEqual({ outcome: 'removed' });
+  expect(await result.close()).toEqual({ outcome: 'removed' });
 });
 
-test('cleanup refuses a container with an unexpected generation', () => {
-  const result = launch();
+test('cleanup refuses a container with an unexpected generation', async () => {
+  const result = await launch();
   wrongOwner = true;
-  expect(result.close()).toEqual({ outcome: 'unknown' });
+  expect(await result.close()).toEqual({ outcome: 'unknown' });
   expect(execute.mock.calls.some(([, args]) => args?.includes('rm'))).toBe(false);
 });
 
-test('cleanup observes already absent exact container without arbitrary removal', () => {
-  const result = launch();
+test('cleanup observes already absent exact container without arbitrary removal', async () => {
+  const result = await launch();
   exists = false;
-  expect(result.close()).toEqual({ outcome: 'absent' });
+  expect(await result.close()).toEqual({ outcome: 'absent' });
   expect(execute.mock.calls.some(([, args]) => args?.includes('rm'))).toBe(false);
 });

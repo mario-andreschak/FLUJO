@@ -17,11 +17,35 @@ what older conversations without the setting get), tool calls run right away.
 - **Off:** no card, no pause.
 - **Turning the box off while cards are open** does not run them. They still
   need a click, or the run can be stopped.
+- **Changing the box while the agent works** is saved at once and applies from
+  the agent's next tool call. Calls already on the card keep waiting.
+- **Reloading the page** brings the card back, also while an agent that runs
+  its own tools (Claude, Codex, a sub-flow) waits.
 - **Saving the setting failed:** the box goes back to the saved setting and the
   chat shows "Could not save "Require tool approvals"…". Nothing else appears
   on success.
+- **Keyboard and screen readers:** the card is a region named "Tool approval
+  required" whose help line is read out when it appears. Each "Approve" and
+  "Reject" button names its tool, and both work with Tab and Enter.
 
 Approval is never remembered for a tool, server, folder or later call.
+
+## Where the setting comes from
+
+The saved setting of the conversation is the only source:
+
+- The chat saves the box when it changes, and sends "on" with a message while
+  it is ticked.
+- `/v1/chat/completions` takes `metadata.requireApproval` as `"true"` or
+  `"false"` (the JSON booleans work too). A value saves that choice for this run
+  and the ones after it. **Left out, the conversation's saved setting applies**;
+  a new conversation starts with approval off. Any other value is refused with
+  `400 invalid_require_approval`. Before #1284 a request that left it out ran
+  tools unasked and switched the saved box off.
+- A run reads the setting each time it accepts a batch of tool calls, and an
+  agent that runs its own tools reads it before each call, so a change saved
+  mid-run applies from the next batch. While such a save is still being written,
+  the next batch asks.
 
 ## One gate for every path (#1284)
 
@@ -49,7 +73,8 @@ approvals, or pauses a run for approval itself.
 - **A live wait** (an AI with its own tool loop, or a sub-flow) holds a model
   process, so it ends after 30 minutes. The tool does not run, the run ends with
   "Nobody answered the approval request for … within 30 minutes, so it did not
-  run. Send a message to ask again.", and the conversation is free again.
+  run. Send a message to ask again.", and the conversation is free again. Live
+  waits are listed in the approval inbox too (see below).
 - **A run that has no conversation to ask in** never runs the tool on its own.
   It ends with an `approval_required` error.
 
@@ -58,10 +83,16 @@ The gate never says yes on its own.
 ### A restart in the middle
 
 - Calls that wait in a saved pause are still waiting after a restart.
-- FLUJO saves an approval before the tool starts. If FLUJO stopped while an
-  approved tool was running, the call is not run a second time when someone
-  clicks Approve again. Instead the call's result in the chat, which the AI
-  also reads, says that it was interrupted and may already have taken effect.
+- FLUJO saves an approval before the tool starts: the call leaves the card and
+  the saved batch. If FLUJO stopped while an approved tool was running, the call
+  is not offered again; the conversation shows the interruption on its error
+  line and the AI reads that the tool was interrupted. An attempt that failed
+  half way is settled the same way at once, with the result "This approved tool
+  call was interrupted … so FLUJO did not run it again".
+- This is stored in the shape every FLUJO version reads (the call is no longer
+  in the waiting batch), so going back to an older version cannot run such a
+  call a second time either. A conversation saved by an older version, where an
+  interrupted call still waits, is settled as interrupted on the next Approve.
 
 ## Automations and the approval inbox
 
@@ -83,6 +114,13 @@ makes after it continues are never included. An `approvalId` belongs to one
 batch: once that batch is decided it stops working (`404`), and the next batch
 gets a new one. Entries saved before this change keep the conversation id as
 their `approvalId` until their batch is decided.
+
+Calls a running agent or sub-flow waits on live are listed as well, one entry
+per call with `"live": true`, the conversation, the tool name (never the
+arguments) and `expiresAt`, when the wait gives up. `POST` its `approvalId` the
+same way: the run goes on at once and the answer is
+`{ "status": "running", "live": true }`. The id names that one call and stops
+working once the call is answered.
 
 ## Approval required by a flow step
 
@@ -123,4 +161,15 @@ read-only does not wait, because the hint comes from the server.
 - `__tests__/flow/stepToolApproval.test.ts`, `__tests__/flow/subflow.test.ts`:
   step rules and sub-flows.
 - `__tests__/chat/applyApprovalDecision.test.ts`: the decision is saved before
-  the tool starts.
+  the tool starts, in a form a rolled-back version also honours.
+- `__tests__/flow/toolApprovalDuringRun.test.ts`: real runs; the saved setting
+  when a request says nothing, ticking and unticking mid-run, a sub-flow's wait
+  answered from the inbox.
+- `__tests__/chat/requireApprovalMetadata.test.ts`: `metadata.requireApproval`.
+- `__tests__/chat/conversationPatchStatus.test.ts`: saving the box during a run,
+  the card after a reload.
+- `__tests__/frontend/components/ToolApprovalCard.test.tsx`: names, arguments,
+  the region and its read-out line.
+- `npm run journey:tool-approval` (`scripts/tool-approval-journey/run.mjs`): the
+  whole thing in a browser on a production build, in the `First-use journey`
+  job of `verify-full.yml`.

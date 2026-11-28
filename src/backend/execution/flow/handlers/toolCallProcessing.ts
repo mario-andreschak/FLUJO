@@ -184,6 +184,7 @@ export async function processToolCallsAdmitted(input: ToolCallProcessingInput): 
     const approveStepTool = createLiveToolApproval({
       conversationId: input.approvalConversationId ?? conversationId,
       requireApproval: requireApprovalOf(input.requireToolApproval),
+      followSetting: !(input.executionExtensionContext || input.personaAttribution || input.unattended),
       stepRequiresApproval: Object.values(toolNameMap ?? {}).some((tool) => tool.requiresApproval)
         ? (toolName) => toolNameMap?.[toolName]?.requiresApproval === true
         : undefined,

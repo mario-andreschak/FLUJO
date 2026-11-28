@@ -360,8 +360,8 @@ export class ModelHandler {
     // through FLUJO's one gate and wait for the answer on the conversation's
     // approval card. A sub-flow asks in the conversation the person is viewing.
     const requestToolApproval = createLiveToolApproval({
-      conversationId: input.approvalConversationId ?? conversationId,
-      requireApproval: requireApprovalOf(requireToolApproval),
+      conversationId: input.approvalConversationId ?? conversationId, requireApproval: requireApprovalOf(requireToolApproval),
+      followSetting: !(input.executionExtensionContext || input.nativeOriginalHost || input.personaAttribution || input.unattended),
       stepRequiresApproval: stepApprovalTools.length > 0 ? stepRequiresApproval : undefined,
       onApprovalRequired: input.onApprovalRequired,
       signal: input.signal ?? input.executionAuthority?.signal,

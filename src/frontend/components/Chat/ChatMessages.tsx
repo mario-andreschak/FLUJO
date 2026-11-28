@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useId, useMemo, useRef, useState, useCallback } from 'react';
 import {
   Box,
   Paper,
@@ -1850,6 +1850,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   anchorMessageId,
 }) => {
   const { t, tp } = useI18n();
+  const approvalCardId = useId();
   // A waiting Human step gets its own card; the rest are ordinary tool approvals.
   const { humanStepCalls, toolCallsToApprove } = useMemo(() => {
     const human: Array<{ call: OpenAI.ChatCompletionMessageFunctionToolCall; task: NonNullable<ReturnType<typeof parseHumanTaskCall>> }> = [];
@@ -2283,12 +2284,15 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
       {toolCallsToApprove.length > 0 && (
         <Paper
           elevation={2}
+          role="region"
+          aria-labelledby={`${approvalCardId}-title`}
           sx={{ p: 2, mt: 2, bgcolor: 'warning.light', border: '1px solid', borderColor: 'warning.main', borderRadius: 2 }}
         >
-          <Typography variant="h6" sx={{ mb: 1, display: 'flex', alignItems: 'center' }}>
-            <HandymanIcon sx={{ mr: 1 }} /> {t('chat.approval.title')}
+          <Typography id={`${approvalCardId}-title`} variant="h6" sx={{ mb: 1, display: 'flex', alignItems: 'center' }}>
+            <HandymanIcon sx={{ mr: 1 }} aria-hidden /> {t('chat.approval.title')}
           </Typography>
-          <Typography variant="body2" sx={{ mb: 2 }}>
+          {/* Read out when the card appears, so a screen reader user knows a decision waits (#1284, R12). */}
+          <Typography variant="body2" sx={{ mb: 2 }} role="status">
             {t('chat.approval.help')}
           </Typography>
           {toolCallsToApprove.map((toolCall, ptcIndex) => { // Added index for key
@@ -2307,8 +2311,8 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
               >
                 <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                   <Box sx={{ display: 'flex', alignItems: 'center', width: '100%' }}>
-                    <HandymanIcon fontSize="small" sx={{ mr: 1, color: 'primary.main' }} />
-                    <Typography variant="subtitle2" sx={{ fontWeight: 'bold', flexGrow: 1 }}>
+                    <HandymanIcon fontSize="small" sx={{ mr: 1, color: 'primary.main' }} aria-hidden />
+                    <Typography id={`${approvalCardId}-tool-${ptcIndex}`} variant="subtitle2" sx={{ fontWeight: 'bold', flexGrow: 1 }}>
                       {toolName}
                     </Typography>
                     <Chip
@@ -2331,6 +2335,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
                       variant="outlined" color="error" size="small" startIcon={<ThumbDownIcon />}
                       onClick={() => onRejectToolCall?.(toolCall.id)}
                       disabled={!onRejectToolCall}
+                      aria-describedby={`${approvalCardId}-tool-${ptcIndex}`}
                     >
                       {t('chat.approval.reject')}
                     </Button>
@@ -2338,6 +2343,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
                       variant="contained" color="success" size="small" startIcon={<ThumbUpIcon />}
                       onClick={() => onApproveToolCall?.(toolCall.id)}
                       disabled={!onApproveToolCall}
+                      aria-describedby={`${approvalCardId}-tool-${ptcIndex}`}
                     >
                       {t('chat.approval.approve')}
                     </Button>

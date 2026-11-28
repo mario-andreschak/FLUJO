@@ -9,6 +9,10 @@ import { createHash } from 'node:crypto';
 import type { ChildProcess } from 'node:child_process';
 import type { Model } from '@/shared/types/model';
 
+// Each case starts real child processes and waits for their exit and pipe
+// close: 10-35 s per case beside other heavy test files on a busy Windows PC.
+const NATIVE_CASE_MS = process.platform === 'win32' ? 90_000 : 30_000;
+
 const modelFixture: Model = { id: 'model-test', name: 'offline-native', displayName: 'Offline native',
   provider: 'claude-subscription', adapter: 'claude-cli', ApiKey: 'fixture', maxTurns: 3 } as Model;
 let selectedModel = { ...modelFixture };
@@ -59,9 +63,9 @@ jest.mock('@/backend/services/model/adapters/codexAppServerProcess', () => {
       register: async registration => { if (fixtureCleanupStarted) throw new Error('Native fixture is closing.');
         phase('Codex registration started'); codexRegistrations.push(registration); codexOwners.push(input.owner as import('@/backend/execution/flow/handlers/nativeOriginalHost').NativeOriginalProcessHost);
         let closeObserved = false;
-        codexCloseDelays.push(registration.exit.then(async () => {
+        codexCloseTimes.push(registration.exit.then(async () => {
           phase('Codex original exited');
-          const atExit = performance.now(); await registration.close; phase('Codex pipes closed'); return performance.now() - atExit;
+          await registration.close; phase('Codex pipes closed'); return Date.now();
         }));
         void registration.close.then(() => { closeObserved = true; });
         codexExitWitnesses.push(registration.exit.then(async () => {
@@ -148,7 +152,8 @@ let codexForeignScope = '';
 let codexAfterResponseBarrier = false;
 const workerModelToolAssertions: Array<{ name: string; server?: string; tool?: string }> = [];
 let codexOwners: import('@/backend/execution/flow/handlers/nativeOriginalHost').NativeOriginalProcessHost[] = [];
-let codexCloseDelays: Array<Promise<number>> = [];
+/** When FLUJO saw the Original's pipes close (wall clock, comparable with the keeper's exit). */
+let codexCloseTimes: Array<Promise<number>> = [];
 let codexExitWitnesses: Array<Promise<{ pipeCloseObservedAtExit: boolean; stateAtExit: string }>> = [];
 const codexChildFixture = `
 const fs=require('node:fs'), readline=require('node:readline'), wire=process.argv[1];
@@ -173,9 +178,12 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
      const raw=await response.text();const data=raw.split('\\n').find(line=>line.startsWith('data: '));return JSON.parse(data?data.slice(6):raw);
     };
     const tools=await rpc('tools/list',{});const tool=tools.result.tools.find(t=>t.name.startsWith('handoff_to_'));
-    const keeperScript='const parent='+process.pid+';const tick=setInterval(()=>{try{process.kill(parent,0)}catch{clearInterval(tick);setTimeout(()=>process.exit(0),700)}},10);setTimeout(()=>process.exit(0),15000);';
-    const keeper=require('node:child_process').spawn(process.execPath,['-e',keeperScript],{stdio:['ignore',process.stdout,process.stderr],windowsHide:true,detached:true});
-    await new Promise(resolve=>keeper.once('spawn',resolve));
+    const keeperScript='const parent='+process.pid+';const done='+JSON.stringify(wire+'.keeper-exit')+';const tick=setInterval(()=>{try{process.kill(parent,0)}catch{clearInterval(tick);setTimeout(()=>{require("node:fs").writeFileSync(done,String(Date.now()));process.exit(0)},700)}},10);setTimeout(()=>process.exit(0),15000);';
+    // The keeper's launcher exits at once, so no tree kill of this Original reaches
+    // the keeper: it always holds the pipes for 700 ms after this process exits.
+    const launcherScript='require("node:child_process").spawn(process.execPath,["-e",'+JSON.stringify(keeperScript)+'],{stdio:["ignore","inherit","inherit"],windowsHide:true,detached:true}).unref();';
+    const launcher=require('node:child_process').spawn(process.execPath,['-e',launcherScript],{stdio:['ignore',process.stdout,process.stderr],windowsHide:true});
+    await new Promise(resolve=>launcher.once('exit',resolve));
     fs.writeFileSync(wire+'.mcp',JSON.stringify({name:tool.name,callId:'codex-handoff-1',threadId}));
     if(process.argv[3]==='handoff-queued'){
      let pending=true,sent=0;
@@ -213,7 +221,7 @@ beforeEach(async () => {
   lateResultFirst = false; offeredLateUsage = undefined;
   observedPrompt = undefined;
   phaseStart = undefined;
-  codexLaunchArguments = []; codexRegistrations = []; codexFrames = []; codexForeignScope = ""; codexExitWitnesses = []; codexCloseDelays = []; codexOwners = []; codexAfterResponseBarrier = false; codexHandoffQueuedItem = false;
+  codexLaunchArguments = []; codexRegistrations = []; codexFrames = []; codexForeignScope = ""; codexExitWitnesses = []; codexCloseTimes = []; codexOwners = []; codexAfterResponseBarrier = false; codexHandoffQueuedItem = false;
   queryMock.mockReset().mockImplementation(({ prompt, options }: {
     prompt: AsyncIterable<unknown>; options: { spawnClaudeCodeProcess: (options: SpawnOptions) => SpawnedProcess;
       env: SpawnOptions['env']; abortController: AbortController };
@@ -293,8 +301,8 @@ afterEach(async () => {
   stopPersonaGoalRuntime();
   if (failures.length) throw new AggregateError(failures, 'Native fixture cleanup did not settle.');
   if (previousData === undefined) delete process.env.FLUJO_DATA_DIR; else process.env.FLUJO_DATA_DIR = previousData;
-  await fs.rm(directory, { recursive: true, force: true });
-});
+  await fs.rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+}, NATIVE_CASE_MS);
 
 async function withClaim(task: (input: FlowRunInput, goalId: string) => Promise<void>,
   after?: (personaId: string, goalId: string) => Promise<void>, production: false | 'no-handoff' | 'handoff' | 'handoff-refusal' | 'child' | 'child-refusal' | 'no-handoff-refusal' = false,
@@ -526,7 +534,7 @@ describe('Worker roots from trusted Source execution contexts / offline model ed
       const result=await port.dispatch({toolInvocationId:'fixture-context-forward',name:'owned_worker_read',args:{path:'repo/file'},signal:input.signal});
       expect(result.result.isError).not.toBe(true);expect(callTool).toHaveBeenCalledTimes(1);expect(promptCount).toBe(0);
     });
-  },30000);
+  }, NATIVE_CASE_MS);
   it('validates sealed Native MCP bindings only under their genuine Worker context and live authority', async () => {
     await withWorkerClaim(async ({ host, context, state, enrollment }) => {
       const toolName = 'owned_worker_read';
@@ -570,14 +578,14 @@ describe('Worker roots from trusted Source execution contexts / offline model ed
       enrollment.active = false;
       await expect(assertNativeToolPortModelTools(port, context)).rejects.toThrow();
     });
-  }, 30000);
+  }, NATIVE_CASE_MS);
   it('acquires the Worker host through production callModel instead of caller-supplied native capabilities', async () => {
     await withWorkerClaim(async ({ autoInvoke, workerLedger }) => {
       expect(await autoInvoke()).toMatchObject({ success: true });
       expect(promptCount).toBe(1);
       expect((await workerLedger()).reservations[0]).toMatchObject({ state: 'released', sdkOutcome: 'completed', exit: { code: 0, signal: null } });
     });
-  }, 30000);
+  }, NATIVE_CASE_MS);
   it('uses actual Worker lineage and its separate journal with no Persona attribution', async () => {
     await withWorkerClaim(async ({ host, invoke, context, workerLedger }) => {
       assertNativeOriginalExecutionContext(host.process, context);
@@ -600,7 +608,7 @@ describe('Worker roots from trusted Source execution contexts / offline model ed
       await expect(fs.access(path.join(getWorkspaceDataDir(), 'db', 'native-session-origins', 'host-ledger')))
         .rejects.toMatchObject({ code: 'ENOENT' });
     });
-  }, 30000);
+  }, NATIVE_CASE_MS);
   it.each(['revoked', 'target-drift'] as const)('refuses first prompt after %s and retains the Original hold', async condition => {
     await withWorkerClaim(async ({ invoke, enrollment, workerLedger }) => {
       beforePrompt = async () => {
@@ -611,7 +619,7 @@ describe('Worker roots from trusted Source execution contexts / offline model ed
       expect(promptCount).toBe(0);
       expect((await workerLedger()).reservations[0].state).not.toBe('released');
     });
-  }, 30000);
+  }, NATIVE_CASE_MS);
   it('refuses caller contexts, child root relabeling and changed model attestations before an SDK child', async () => {
     await withWorkerClaim(async ({ enrollment, context, state }) => {
       const input = { context, conversationId: state.conversationId, runId: state.logicalRunId,
@@ -624,7 +632,7 @@ describe('Worker roots from trusted Source execution contexts / offline model ed
       await expect(createWorkerNativeOriginalHost(input)).rejects.toThrow('execution_native_worker_root_invalid');
       expect(promptCount).toBe(0);
     });
-  }, 30000);
+  }, NATIVE_CASE_MS);
 });
 describe('Original host with real Persona lease and actual child / offline SDK edge', () => {
   function selectCodex() {
@@ -664,7 +672,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
         expect((await ledger()).reservations[0].state).not.toBe('released');
       } finally { FlowExecutor.conversationStates.delete(prepared.state.conversationId!); }
     }, undefined, false, drift === 'goal');
-  }, 60000);
+  }, 2 * NATIVE_CASE_MS);
   it('holds a Claude Original and never certifies stream completion when query close fails', async () => {
     const originalQuery = queryMock.getMockImplementation()!;
     queryMock.mockImplementation((...args: unknown[]) => {
@@ -688,7 +696,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
         expect(outcome.outcome).toBe('error');
       } finally { FlowExecutor.conversationStates.delete(state.conversationId!); }
     });
-  }, 30000);
+  }, NATIVE_CASE_MS);
   it.each(['pause', 'dispatch-drift'])('refuses actual %s while an additional held Native goal guard is awaiting', async mode => {
     await withClaim(async (input, goalId) => {
       const personaId = input.personaAttribution!.personaId;
@@ -714,7 +722,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
       expect(children).toHaveLength(0);
       expect(codexRegistrations).toHaveLength(0);
     }, 'no-handoff-refusal');
-  }, 30000);
+  }, NATIVE_CASE_MS);
 
   it('runs a genuine Codex Original through its owned public app-server and releases only after exit and pipe close', async () => {
     selectedModel = { ...modelFixture, provider: 'codex', adapter: 'codex-cli' } as Model;
@@ -771,7 +779,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
     } finally { canaries.forEach((name, index) => {
       if (previous[index] === undefined) delete process.env[name]; else process.env[name] = previous[index];
     }); }
-  }, 30000);
+  }, NATIVE_CASE_MS);
   it.each(['none', 'pending', 'terminal', 'missing-exit', 'usage', 'archive-success'] as const)(
     'retries a failed exited Persona root only with complete failure proof (case=%s)', async condition => {
       selectedModel = { ...modelFixture, provider: 'codex', adapter: 'codex-cli' } as Model;
@@ -836,7 +844,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
           activeDispatchers.delete(active);
         }
       }, 'no-handoff-refusal');
-    }, 60000);
+    }, 2 * NATIVE_CASE_MS);
 
   it.each(['before-prompt', 'after-prompt', 'foreign-thread', 'foreign-turn'])(
     'holds a real Codex Original for %s without accepting transcript, usage or release', async mode => {
@@ -874,7 +882,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
           }
         }, 'no-handoff-refusal');
       } finally { unsubscribe(); }
-    }, 30000);
+    }, NATIVE_CASE_MS);
   it.each([false, true])('confirms Codex handoff only after owned exit and pipe close (revoke=%s)', async revoked => {
     selectedModel = { ...modelFixture, provider: 'codex', adapter: 'codex-cli' };
     emitHandoff = true;
@@ -895,7 +903,10 @@ describe('Original host with real Persona lease and actual child / offline SDK e
       expect(codexRegistrations).toHaveLength(1);
       const witness = await codexExitWitnesses[0];
       expect(witness.pipeCloseObservedAtExit).toBe(false);
-      expect(await codexCloseDelays[0]).toBeGreaterThan(400);
+      // The keeper holds the Original's pipes after it exits. However late a busy
+      // PC reports the exit, the close must not be seen before the keeper let go.
+      const keeperExitedAt = Number(await fs.readFile(path.join(directory, 'codex-wire.jsonl.keeper-exit'), 'utf8'));
+      expect(await codexCloseTimes[0]).toBeGreaterThanOrEqual(keeperExitedAt);
       expect(witness.stateAtExit).not.toBe('released');
       const reservation = (await ledger()).reservations[0];
       expect(reservation.handoff).toMatchObject({ protocol: 'owned-codex-app-server-exit-close-v1',
@@ -911,7 +922,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
       expect(JSON.parse(await fs.readFile(path.join(directory, 'codex-wire.jsonl.mcp'), 'utf8')))
         .toMatchObject({ callId: 'codex-handoff-1', threadId: 'native_codex_thread' });
     }, revoked ? 'handoff-refusal' : 'handoff');
-  }, 30000);
+  }, NATIVE_CASE_MS);
   it.each([false, true])('owns a Codex descendant under the root budget and fences parent drift (drift=%s)', async drift => {
     phaseStart = performance.now();
     phase(`Codex descendant test started drift=${drift}`);
@@ -952,7 +963,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
         }
       }, drift ? 'child-refusal' : 'child');
     } finally { unsubscribe(); }
-  }, 30000);
+  }, NATIVE_CASE_MS);
   it('admits a real attached child from the pinned root plan under the root goal and releases only after owned exit and close', async () => {
     let rootConversation: string | undefined;
     let rootRun: string | undefined;
@@ -983,7 +994,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
       expect(child).toMatchObject({ parentConversationId: rootConversation, parentLogicalRunId: rootRun,
         rootConversationId: rootConversation, flowId: 'native_pinned_child', runDepth: 1 });
     }, 'child');
-  }, 30000);
+  }, NATIVE_CASE_MS);
   it('refuses missing, unlisted, and changed descendant plans before the actual child executes', async () => {
     phaseStart = performance.now();
     await withClaim(async input => {
@@ -1004,7 +1015,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
       expect(promptCount).toBe(1);
       expect((await ledger()).reservations[0].state).toBe('released');
     }, 'child');
-  }, 30000);
+  }, NATIVE_CASE_MS);
   it('holds an issued descendant when its saved lineage changes before the first prompt', async () => {
     beforePrompt = async () => {
       const reservation = (await ledger()).reservations[0];
@@ -1022,7 +1033,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
       expect(reservation.sdkUsage).toBeUndefined();
       expect(reservation.sdkOutcome).not.toBe('completed');
     }, 'child-refusal');
-  }, 30000);
+  }, NATIVE_CASE_MS);
   it('discards a descendant SDK result and transcript after its saved parent lineage changes', async () => {
     lateResultFirst = true;
     transcriptText = 'stale-descendant-private-output';
@@ -1045,7 +1056,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
         expect(JSON.stringify(observed)).not.toContain(transcriptText);
       }, 'child-refusal');
     } finally { unsubscribe(); }
-  }, 30000);
+  }, NATIVE_CASE_MS);
   it('refuses a ledger parent replaced after the last awaited temporary check and preserves the foreign directory', async () => {
     await withClaim(async input => {
       const { invoke, state } = await prepare(input);
@@ -1082,7 +1093,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
         }
       } finally { spy.mockRestore(); FlowExecutor.conversationStates.delete(state.conversationId!); }
     });
-  }, 30000);
+  }, NATIVE_CASE_MS);
   it('discards late SDK transcript and usage after a genuine Persona goal loses authority', async () => {
     transcriptText = 'late-private-persona-transcript';
     lateResultFirst = true;
@@ -1116,7 +1127,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
         'holds', `${holdId}.json`), 'utf8'))).toMatchObject({ invocationId: reservation.invocationId });
     }, 'handoff-refusal');
     } finally { unsubscribe(); }
-  }, 30000);
+  }, NATIVE_CASE_MS);
   it('runs the production Core dispatch through ProcessNode and V2 saved Original to actual child release', async () => {
     await withClaim(async () => {
       beforePrompt = async () => {
@@ -1138,7 +1149,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
         `${reservation.invocationId}.outcome.json`), 'utf8'))).toMatchObject({
         archiveVersion: 2, dispatchId: reservation.invocationId, outcome: 'completed' });
     }, 'no-handoff');
-  }, 30000);
+  }, NATIVE_CASE_MS);
 
   it('routes an ordinary Core handoff only after the original owned SDK child exits and its pipes close', async () => {
     emitHandoff = true;
@@ -1169,7 +1180,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
       expect(saved).toBeDefined();
       expect(JSON.stringify(saved!.messages)).not.toContain('late-sdk-mutation');
     }, 'handoff');
-  }, 30000);
+  }, NATIVE_CASE_MS);
 
   it('retains unresolved handoff and Original holds when the goal is revoked before process-close confirmation', async () => {
     emitHandoff = true;
@@ -1189,7 +1200,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
       expect(JSON.parse(await fs.readFile(path.join(getWorkspaceDataDir(), 'db', 'native-tool-journal',
         'holds', `${holdId}.json`), 'utf8'))).toMatchObject({ invocationId: reservation.invocationId });
     }, 'handoff-refusal');
-  }, 30000);
+  }, NATIVE_CASE_MS);
 
 
   it('does not recover private Source readers from serialized or caller-owned hosts', () => {
@@ -1254,7 +1265,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
           { ...expected, expectedWorkspace: 'foreign-workspace' })).rejects.toThrow('held');
       } finally { FlowExecutor.conversationStates.delete(prepared.state.conversationId!); }
     });
-  }, 60000);
+  }, 2 * NATIVE_CASE_MS);
 
   it('keeps a cancelled Codex Original held instead of inferring terminal from process teardown', async () => {
     selectCodex();
@@ -1273,7 +1284,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
         })).rejects.toThrow();
       } finally { FlowExecutor.conversationStates.delete(prepared.state.conversationId!); }
     });
-  }, 30000);
+  }, NATIVE_CASE_MS);
   it('durably binds acceptance and bounded turn reservation; waits for actual exit/close before release', async () => {
     await withClaim(async input => {
       const { host, invoke, state } = await prepare(input);
@@ -1298,7 +1309,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
         expect(queryMock).toHaveBeenCalledTimes(1);
       } finally { FlowExecutor.conversationStates.delete(state.conversationId!); }
     });
-  }, 30000);
+  }, NATIVE_CASE_MS);
 
   it('rejects caller lookalikes and parent/model drift without issuing an SDK child', async () => {
     expect(await createPersonaNativeOriginalHost({ authority: { signal: new AbortController().signal,
@@ -1317,7 +1328,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
         expect(queryMock).not.toHaveBeenCalled();
       } finally { FlowExecutor.conversationStates.delete(state.conversationId!); }
     });
-  }, 30000);
+  }, NATIVE_CASE_MS);
 
   it('retains durable reservation and denies prompt when goal authority is revoked during registration', async () => {
     await withClaim(async (input, goalId) => {
@@ -1334,7 +1345,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
         expect((await ledger()).reservations[0].state).not.toBe('released');
       } finally { FlowExecutor.conversationStates.delete(state.conversationId!); }
     });
-  }, 30000);
+  }, NATIVE_CASE_MS);
 
   it.each(['claude-cli', 'codex-cli'] as const)('rejects changed %s model budget before child launch', async adapter => {
     selectedModel = { ...modelFixture, adapter, ...(adapter === 'codex-cli' ? { provider: 'codex' } : {}) };
@@ -1348,7 +1359,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
         expect((await ledger()).reservations[0].state).toBe('accepted');
       } finally { FlowExecutor.conversationStates.delete(state.conversationId!); }
     });
-  }, 30000);
+  }, NATIVE_CASE_MS);
 
   it('denies first prompt after a real child exits during asynchronous registration', async () => {
     await withClaim(async input => {
@@ -1366,7 +1377,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
         expect((await ledger()).reservations[0].state).not.toBe('released');
       } finally { FlowExecutor.conversationStates.delete(state.conversationId!); }
     });
-  }, 30000);
+  }, NATIVE_CASE_MS);
 
   it('retains refused reservation across a new dispatcher / goal round instead of issuing a successor', async () => {
     await withClaim(async input => {
@@ -1395,7 +1406,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
         expect((await ledger()).reservations[0].state).toBe('accepted');
       } finally { await restarted.quiesce(personaId); }
     });
-  }, 30000);
+  }, NATIVE_CASE_MS);
 
   it('rejects a destination hardlink replacement during atomic reservation without changing the external sentinel', async () => {
     await withClaim(async input => {
@@ -1427,7 +1438,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
         expect((await fs.readdir(folder)).filter(file => file.endsWith('.tmp'))).toEqual([]);
       } finally { spy.mockRestore(); FlowExecutor.conversationStates.delete(state.conversationId!); }
     });
-  }, 30000);
+  }, NATIVE_CASE_MS);
 
   it('bounds persisted reservation history and holds an oversized ledger before another child launch', async () => {
     await withClaim(async input => {
@@ -1444,7 +1455,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
         expect(queryMock).toHaveBeenCalledTimes(1);
       } finally { FlowExecutor.conversationStates.delete(state.conversationId!); }
     });
-  }, 30000);
+  }, NATIVE_CASE_MS);
 
   it('rechecks actual ledger lock ownership after the last awaited temp check and removes only its own refused temp', async () => {
     await withClaim(async input => {
@@ -1469,7 +1480,7 @@ describe('Original host with real Persona lease and actual child / offline SDK e
         expect(await fs.readdir(folder)).toEqual([]);
       } finally { spy.mockRestore(); FlowExecutor.conversationStates.delete(state.conversationId!); }
     });
-  }, 30000);
+  }, NATIVE_CASE_MS);
 
   it('refuses late goal revocation and preserves a foreign replacement of the checked temporary path', async () => {
     await withClaim(async (input, goalId) => {
@@ -1497,5 +1508,5 @@ describe('Original host with real Persona lease and actual child / offline SDK e
         expect((await fs.readdir(folder)).filter(file => file.endsWith('.json'))).toEqual([]);
       } finally { spy.mockRestore(); FlowExecutor.conversationStates.delete(state.conversationId!); }
     });
-  }, 30000);
+  }, NATIVE_CASE_MS);
 });

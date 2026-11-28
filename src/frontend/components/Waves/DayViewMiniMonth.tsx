@@ -52,7 +52,8 @@ export default function DayViewMiniMonth({
   const { formatDate, t } = useI18n();
   const [shownMonth, setShownMonth] = useState(() => normalizeCalendarDay(selectedDate));
   const [focusedDate, setFocusedDate] = useState(() => normalizeCalendarDay(selectedDate));
-  const gridRef = useRef<HTMLDivElement>(null);
+  // Tracked from focus events: a removed day button takes focus with it before effects run.
+  const focusInGrid = useRef(false);
   const dayRefs = useRef(new Map<string, HTMLButtonElement>());
   const restoreFocus = useRef(false);
   // A parent can recreate Date objects on refresh without changing the selected day.
@@ -60,10 +61,14 @@ export default function DayViewMiniMonth({
 
   // Commit selection/focus together before a following native Tab can leave.
   // A deferred effect could otherwise pull focus back after the user moved on.
-  useLayoutEffect(() => {
-    restoreFocus.current = Boolean(gridRef.current?.contains(document.activeElement));
+  const [shownForDay, setShownForDay] = useState(selectedDay);
+  if (shownForDay !== selectedDay) {
+    setShownForDay(selectedDay);
     setShownMonth(new Date(selectedDay));
     setFocusedDate(new Date(selectedDay));
+  }
+  useLayoutEffect(() => {
+    restoreFocus.current = focusInGrid.current;
   }, [selectedDay]);
 
   useLayoutEffect(() => {
@@ -133,8 +138,13 @@ export default function DayViewMiniMonth({
         </Box>
 
         <Box
-          ref={gridRef}
           role="grid"
+          onFocus={() => { focusInGrid.current = true; }}
+          onBlur={(event) => {
+            if (event.target.isConnected && !event.currentTarget.contains(event.relatedTarget as Node | null)) {
+              focusInGrid.current = false;
+            }
+          }}
           aria-label={formatDate(shownMonth, { month: 'long', year: 'numeric' })}
           sx={{ display: 'grid', gap: 0.25 }}
         >

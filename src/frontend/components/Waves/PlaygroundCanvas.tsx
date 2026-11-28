@@ -27,6 +27,7 @@ import CheckCircleOutlineRoundedIcon from '@mui/icons-material/CheckCircleOutlin
 import HubRoundedIcon from '@mui/icons-material/HubRounded';
 import type { AutomationMapResponse } from '@/shared/types/waves/automationMap';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useDebouncedCallback } from '@/frontend/hooks/timing';
 import { nodeTypes as flowBuilderNodeTypes, edgeTypes as flowBuilderEdgeTypes } from '@/frontend/components/Flow/FlowManager/FlowBuilder/Canvas/Canvas';
 import { FlowNamesContext } from '@/frontend/components/Flow/FlowManager/FlowBuilder/CustomNodes/flowNamesContext';
 import {
@@ -149,18 +150,17 @@ function PlaygroundCanvasInner({
     return names.length > 0 ? names.join(', ') : t('waves.selectedWave');
   }, [activeWaveId, data.executions, data.waves, t]);
 
-  const fit = useCallback(() => {
-    window.setTimeout(() => {
-      if (largeMap) {
-        void instanceRef.current?.setViewport(
-          { x: 28, y: 52, zoom: mode === 'expert' ? 0.58 : 0.7 },
-          { duration: reducedMotion ? 0 : 260 },
-        );
-        return;
-      }
-      void instanceRef.current?.fitView({ padding: mode === 'expert' ? 0.08 : 0.13, duration: reducedMotion ? 0 : 320 });
-    }, 30);
-  }, [largeMap, mode, reducedMotion]);
+  // Frame the map once its first nodes are measured.
+  const fitAfterFirstLayout = useDebouncedCallback(() => {
+    if (largeMap) {
+      void instanceRef.current?.setViewport(
+        { x: 28, y: 52, zoom: mode === 'expert' ? 0.58 : 0.7 },
+        { duration: reducedMotion ? 0 : 260 },
+      );
+      return;
+    }
+    void instanceRef.current?.fitView({ padding: mode === 'expert' ? 0.08 : 0.13, duration: reducedMotion ? 0 : 320 });
+  }, 30);
 
   const miniMapColor = useCallback((node: Node) => {
     if (node.type === 'playgroundPackage') return alpha(theme.palette.primary.main, 0.1);
@@ -180,7 +180,7 @@ function PlaygroundCanvasInner({
         edgeTypes={playgroundEdgeTypes}
         onInit={(instance) => {
           instanceRef.current = instance;
-          fit();
+          fitAfterFirstLayout();
         }}
         onPaneClick={() => activeWaveId && onActiveWaveChange(null)}
         fitView={!largeMap}

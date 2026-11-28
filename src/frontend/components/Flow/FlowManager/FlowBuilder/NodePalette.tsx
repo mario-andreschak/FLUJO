@@ -256,6 +256,15 @@ export const NodePalette: React.FC<{
         .includes(normalizedQuery));
   }, [authoringMode, nodeTypes, query]);
   
+  // The drag picture must stay in the page while the browser draws it. It sits off-screen
+  // and is removed when the drag ends, the next drag starts, or the palette closes.
+  const dragPreviewRef = useRef<HTMLDivElement | null>(null);
+  const removeDragPreview = useCallback(() => {
+    dragPreviewRef.current?.remove();
+    dragPreviewRef.current = null;
+  }, []);
+  useEffect(() => removeDragPreview, [removeDragPreview]);
+
   const onDragStart = (event: React.DragEvent, nodeType: NodeType) => {
     log.debug(`${COMPONENT_NAME}.onDragStart: Entering method with nodeType=${nodeType}`);
     
@@ -264,6 +273,7 @@ export const NodePalette: React.FC<{
     event.dataTransfer.effectAllowed = 'move';
     
     // Add a drag image to make the drag operation more visible
+    removeDragPreview();
     const dragPreview = document.createElement('div');
     const friendlyNode = nodeTypes.find(node => node.type === nodeType);
     dragPreview.textContent = friendlyNode?.label ?? t('flows.palette.step');
@@ -272,8 +282,13 @@ export const NodePalette: React.FC<{
       background: 'white',
       border: '1px solid #ccc',
       borderRadius: '8px',
+      position: 'fixed',
+      top: '-1000px',
+      left: '-1000px',
+      pointerEvents: 'none',
     });
     document.body.appendChild(dragPreview);
+    dragPreviewRef.current = dragPreview;
     
     log.debug(`${COMPONENT_NAME}.onDragStart: Created drag preview element`);
     
@@ -285,17 +300,12 @@ export const NodePalette: React.FC<{
       log.error(`${COMPONENT_NAME}.onDragStart: Error setting drag image:`, err);
     }
     
-    // Clean up the temporary element after a short delay
-    setTimeout(() => {
-      document.body.removeChild(dragPreview);
-      log.debug(`${COMPONENT_NAME}.onDragStart: Removed drag preview element`);
-    }, 0);
-    
     log.debug(`${COMPONENT_NAME}.onDragStart: Drag operation initialized`);
   };
   
   // Add handler for drag end events
   const onDragEnd = (event: React.DragEvent, nodeType: NodeType) => {
+    removeDragPreview();
     log.debug(`${COMPONENT_NAME}.onDragEnd: Drag operation ended for nodeType=${nodeType}`);
   };
 

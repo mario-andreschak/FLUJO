@@ -7,6 +7,7 @@ import { LOCALE_STORAGE_KEY } from '@/frontend/i18n/locales';
 const listMock = jest.fn();
 const getMock = jest.fn();
 const rolesMock = jest.fn();
+const getCompositionMock = jest.fn();
 const replaceMock = jest.fn();
 const pushMock = jest.fn();
 const grantAppMock = jest.fn();
@@ -61,6 +62,7 @@ jest.mock('@/frontend/services/personas', () => ({
     list: (...args: unknown[]) => listMock(...args),
     get: (...args: unknown[]) => getMock(...args),
     roles: (...args: unknown[]) => rolesMock(...args),
+    getComposition: (...args: unknown[]) => getCompositionMock(...args),
     startConversation: jest.fn(),
     update: jest.fn(),
     activateMemory: jest.fn(),
@@ -287,6 +289,7 @@ beforeEach(() => {
   listMock.mockResolvedValue([persona]);
   getMock.mockResolvedValue(detail);
   rolesMock.mockResolvedValue({ roleDefinitions: [], roleVersions: [detail.roleVersion] });
+  getCompositionMock.mockRejectedValue(new Error('Composition is not part of these tests.'));
   grantAppMock.mockResolvedValue(detail.appGrants[0]);
   configureAppMock.mockResolvedValue({
     ...detail.appGrants[0],

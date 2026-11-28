@@ -30,7 +30,7 @@ const useServerConnection = (open: boolean, node: Flow['nodes'][number] | null, 
   const allServers = serverStatus.servers || [];
   const isLoadingServers = serverStatus.isLoading || false;
   
-  const [serverStatuses, setServerStatuses] = useState<Record<string, string>>({});
+
   const [serverToolsMap, setServerToolsMap] = useState<Record<string, Tool[]>>({});
   const [isLoadingTools, setIsLoadingTools] = useState<Record<string, boolean>>({});
   const [selectedToolServerNodeId, setSelectedToolServerNodeId] = useState<string | null>(null); // Renamed state
@@ -98,18 +98,15 @@ const useServerConnection = (open: boolean, node: Flow['nodes'][number] | null, 
     }
   }, [node, connectedNodeIds, allServers, flowNodes]);
 
-  // Update server statuses when connected nodes or server statuses change
-  useEffect(() => {
-    if (connectedMcpNodes && connectedMcpNodes.length > 0) {
-      const statuses: Record<string, string> = {};
-      connectedMcpNodes.forEach((mcpNode) => {
-        // Update status based on the latest from useServerStatus hook if available
-        const serverInfo = allServers.find(s => s.name === mcpNode.serverName);
-        statuses[mcpNode.serverName] = serverInfo?.status || mcpNode.status || 'unknown';
-      });
-      setServerStatuses(statuses);
-    }
-  }, [connectedMcpNodes, allServers]); // Depend on allServers to get latest status
+  // Server statuses follow the connected nodes and the latest server list.
+  const serverStatuses = useMemo(() => {
+    const statuses: Record<string, string> = {};
+    connectedMcpNodes.forEach((mcpNode) => {
+      const serverInfo = allServers.find(s => s.name === mcpNode.serverName);
+      statuses[mcpNode.serverName] = serverInfo?.status || mcpNode.status || 'unknown';
+    });
+    return statuses;
+  }, [connectedMcpNodes, allServers]);
 
   // Load tools for all unique connected server names when the modal is opened or nodes change
   useEffect(() => {
@@ -275,12 +272,9 @@ const useServerConnection = (open: boolean, node: Flow['nodes'][number] | null, 
     }));
     
     try {
-      // Restart the server
+      // Restarting re-enables the server, which returns once it is connected again.
       await mcpService.restartServer(serverName);
-      
-      // Wait a bit for the server to restart
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
+
       // Load tools for this server
       const result = await mcpService.listServerTools(serverName);
       

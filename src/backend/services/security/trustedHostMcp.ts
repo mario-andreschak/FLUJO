@@ -8,7 +8,7 @@ import { getDataDir } from '@/utils/paths';
 import { realpath } from '@/utils/realpath';
 import { TRANSIENT_FILE_ERROR_CODES, fileErrorCode, isTransientFileError, retryTransientFileOperation } from '@/utils/transientFileRetry';
 import { ownerPolicySchema } from './ownerCredentials';
-import { windowsPrivateAuthorityStamp, windowsPrivateAuthorityStampAsync } from './windowsPrivateAuthority';
+import { windowsPrivateAuthorityStampAsync } from './windowsPrivateAuthority';
 import { BundledConsentDiagnostic, type ConsentDiagnosticStage } from './bundledConsentDiagnostic';
 import { protectedPackageRunnerSchema, assertPackageRunnerDeclaration, assertPackageRunnerResolution } from './protectedPackageRunner';
 
@@ -120,56 +120,13 @@ function canonical(value: string): string {
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
-function assertLinkFree(filename: string): void {
-  let current = path.resolve(filename);
-  while (true) {
-    if (fs.lstatSync(current).isSymbolicLink()) throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
-    const parent = path.dirname(current);
-    if (parent === current) break;
-    current = parent;
-  }
-  if (canonical(fs.realpathSync(filename)) !== canonical(filename)) throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
-}
-
 function sameIdentity(before: BigIntStats, after: BigIntStats): boolean {
   return before.dev === after.dev && before.ino === after.ino && before.size === after.size
     && before.mtimeNs === after.mtimeNs && before.ctimeNs === after.ctimeNs
     && before.mode === after.mode && before.uid === after.uid && before.gid === after.gid && before.nlink === after.nlink;
 }
 
-function readStableFile(filename: string, maximum: number, consume: (chunk: Buffer) => void): BigIntStats {
-  const fd = fs.openSync(filename, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
-  try {
-    const opened = fs.fstatSync(fd, { bigint: true });
-    if (!opened.isFile() || opened.nlink !== BigInt(1) || opened.size > BigInt(maximum)) throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
-    assertLinkFree(filename);
-    if (!sameIdentity(opened, fs.lstatSync(filename, { bigint: true }))) throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
-    const buffer = Buffer.alloc(64 * 1024);
-    let length = 0;
-    while (true) {
-      const count = fs.readSync(fd, buffer, 0, buffer.length, null);
-      if (!count) break;
-      length += count;
-      if (length > maximum || BigInt(length) > opened.size) throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
-      consume(buffer.subarray(0, count));
-    }
-    assertLinkFree(filename);
-    if (BigInt(length) !== opened.size || !sameIdentity(opened, fs.fstatSync(fd, { bigint: true }))
-        || !sameIdentity(opened, fs.lstatSync(filename, { bigint: true }))) throw new TrustedHostMcpError('HOST_SOURCE_CHANGED');
-    return opened;
-  } finally { fs.closeSync(fd); }
-}
-
 /** Shared local execution authority reader; callers translate profile-specific errors. */
-export function readPrivateApproval(filename: string | undefined): unknown {
-  const before = process.platform === 'win32' && filename ? windowsPrivateAuthorityStamp(filename) : undefined;
-  const identity = filename ? fs.lstatSync(filename, { bigint: true }) : undefined;
-  const value = readPrivateApprovalContents(filename);
-  if (before !== undefined && windowsPrivateAuthorityStamp(filename!) !== before) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-  if (identity && filename) { assertLinkFree(filename); if (!sameIdentity(identity, fs.lstatSync(filename, { bigint: true }))) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED'); }
-  return value;
-}
-
 export async function readPrivateApprovalAsync(filename: string | undefined, signal?: AbortSignal): Promise<unknown> {
   return (await readPrivateApprovalWithRetry('[private-approval-reader]', [filename], signal))[0];
 }
@@ -360,28 +317,6 @@ async function readPrivateApprovalSetOnce(input: readonly (string | undefined)[]
 export async function readPrivateApprovalSetAsync(input: readonly string[], signal?: AbortSignal,
   roles?: readonly PrivateApprovalFileRole[]): Promise<unknown[]> {
   return readPrivateApprovalWithRetry('[private-approval-set-reader]', input, signal, roles);
-}
-
-function readPrivateApprovalContents(filename: string | undefined): unknown {
-  assertPrivateFilename(filename);
-  if (process.platform !== 'win32' && typeof process.getuid === 'function') {
-    const uid = BigInt(process.getuid());
-    let directory = path.dirname(path.resolve(filename));
-    while (true) {
-      const stat = fs.lstatSync(directory, { bigint: true });
-      if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.uid !== uid && stat.uid !== BigInt(0))
-          || ((stat.mode & BigInt(0o022)) !== BigInt(0) && (stat.mode & BigInt(0o1000)) === BigInt(0))) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-      const parent = path.dirname(directory);
-      if (parent === directory) break;
-      directory = parent;
-    }
-  }
-  const chunks: Buffer[] = [];
-  try {
-    assertPrivateOwner(readStableFile(filename, 64 * 1024, chunk => chunks.push(Buffer.from(chunk))));
-    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
-  }
-  finally { for (const chunk of chunks) chunk.fill(0); }
 }
 
 function assertPrivateFilename(filename: string | undefined): asserts filename is string {

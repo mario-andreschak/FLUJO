@@ -40,24 +40,22 @@ export default function PersonaAppToolsDialog({
   const [saving, setSaving] = useState(false);
   const [saveFailure, setSaveFailure] = useState<string | null>(null);
   const saveErrorRef = useRef<HTMLDivElement>(null);
-  const initializedGrantRef = useRef<string | null>(null);
+  const [initializedGrant, setInitializedGrant] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!open) {
-      initializedGrantRef.current = null;
-      setSaveFailure(null);
-      return;
-    }
-    if (!grant || toolsServerName !== grant.mcpServerName) return;
+  if (!open) {
+    if (initializedGrant !== null) setInitializedGrant(null);
+    if (saveFailure !== null) setSaveFailure(null);
+  } else if (grant && toolsServerName === grant.mcpServerName) {
     const grantRevision = `${grant.id}:${grant.updatedAt}`;
-    if (initializedGrantRef.current === grantRevision) return;
-    const liveToolNames = new Set(tools.map((tool) => tool.name));
-    setEnabledTools(grant.enabledTools === undefined
-      ? tools.map((tool) => tool.name)
-      : grant.enabledTools.filter((toolName) => liveToolNames.has(toolName)));
-    setToolParameterPresets(grant.toolParameterPresets ?? {});
-    initializedGrantRef.current = grantRevision;
-  }, [grant, open, tools, toolsServerName]);
+    if (initializedGrant !== grantRevision) {
+      const liveToolNames = new Set(tools.map((tool) => tool.name));
+      setEnabledTools(grant.enabledTools === undefined
+        ? tools.map((tool) => tool.name)
+        : grant.enabledTools.filter((toolName) => liveToolNames.has(toolName)));
+      setToolParameterPresets(grant.toolParameterPresets ?? {});
+      setInitializedGrant(grantRevision);
+    }
+  }
 
   const save = async () => {
     if (busy || saving) return;

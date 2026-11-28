@@ -385,7 +385,7 @@ describe('models that run their own tool loop', () => {
     await expect(decision).resolves.toBe(true);
   });
 
-  it('adds no gate when nothing asks for one', async () => {
+  const offGate = async (extra: Record<string, unknown>) => {
     const generate = spyOnGenerate();
     await ModelHandler.callModel({
       modelId: 'approval-model',
@@ -393,11 +393,40 @@ describe('models that run their own tool loop', () => {
       messages: [{ role: 'user', content: 'Please work.' }],
       nodeName: 'Step',
       nodeId: 'process',
-      conversationId: 'adapter-gate',
       toolNameMap: { [READ_TOOL]: { server: 'srv', tool: 'read_it' } },
+      ...extra,
     } as never);
-    const options = generate.mock.calls[0]?.[4] as { requestToolApproval?: unknown } | undefined;
-    expect(options?.requestToolApproval).toBeUndefined();
+    const options = generate.mock.calls[0]?.[4] as { requestToolApproval?: (call: { id: string; name: string; args: Record<string, unknown> }) => Promise<boolean> } | undefined;
+    return options?.requestToolApproval;
+  };
+
+  it('adds no gate when nothing asks for one and nobody can change that during the run', async () => {
+    expect(await offGate({})).toBeUndefined();
+    expect(await offGate({ conversationId: 'adapter-headless', unattended: true })).toBeUndefined();
+    expect(await offGate({ conversationId: 'adapter-policy', onApprovalRequired: 'pause' })).toBeUndefined();
+  });
+
+  it('follows a change of the setting saved while the agent works: the next call asks (#1284)', async () => {
+    const conversationId = 'adapter-follow';
+    const live = { conversationId, status: 'running', requireApproval: false, messages: [] };
+    FlowExecutor.conversationStates.set(conversationId, live as never);
+    try {
+      const gate = await offGate({ conversationId });
+      expect(gate).toBeDefined();
+      await expect(gate!({ id: 'before', name: READ_TOOL, args: {} })).resolves.toBe(true);
+      expect(listPendingToolCalls(conversationId)).toEqual([]);
+
+      live.requireApproval = true; // what saving the box during the run does
+      const decision = gate!({ id: 'after', name: READ_TOOL, args: {} });
+      expect(listPendingToolCalls(conversationId).map((call) => call.id)).toEqual(['after']);
+      resolvePendingApproval(conversationId, 'after', false);
+      await expect(decision).resolves.toBe(false);
+
+      live.requireApproval = false;
+      await expect(gate!({ id: 'off-again', name: READ_TOOL, args: {} })).resolves.toBe(true);
+    } finally {
+      FlowExecutor.conversationStates.delete(conversationId);
+    }
   });
 });
 

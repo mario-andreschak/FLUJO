@@ -36,6 +36,7 @@ import ServerCard from '@/frontend/components/mcp/MCPServerManager/ServerCard';
 import { useCardPicker } from '@/frontend/hooks/useCardPicker';
 import { CardGroup } from '@/utils/shared/cardGrouping';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useTimeout } from '@/frontend/hooks/timing';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 
 const log = createLogger('frontend/components/flow/FlowBuilder/Modals/ProcessNodePropertiesModal/ServerTools');
@@ -146,6 +147,23 @@ const ServerTools: React.FC<ServerToolsProps> = ({
   const selectedServerNodeId = selectedToolServerNodeId ?? connectedMcpNodes[0]?.nodeId ?? null;
   // State to track retrying servers (use serverName as key for API calls)
   const [retryingServers, setRetryingServers] = useState<Record<string, boolean>>({});
+  // Servers whose retry finished keep their spinner briefly, so even a fast retry is visible.
+  const [settledServers, setSettledServers] = useState<string[]>([]);
+  useTimeout(() => {
+    setRetryingServers(prev => ({
+      ...prev,
+      ...Object.fromEntries(settledServers.map(serverName => [serverName, false])),
+    }));
+    setSettledServers([]);
+  }, settledServers.length > 0 ? 500 : null, settledServers);
+
+  const startRetrying = (serverName: string) => {
+    setSettledServers(prev => prev.filter(settled => settled !== serverName));
+    setRetryingServers(prev => ({ ...prev, [serverName]: true }));
+  };
+  const finishRetrying = (serverName: string) => {
+    setSettledServers(prev => [...prev.filter(settled => settled !== serverName), serverName]);
+  };
   // Whether the connect-a-server picker dialog is open.
   const [connectPickerOpen, setConnectPickerOpen] = useState(false);
 
@@ -316,19 +334,13 @@ const ServerTools: React.FC<ServerToolsProps> = ({
     // Need serverName for the API call
     e.stopPropagation();
     log.debug(`Retry button clicked for server: ${serverName}`);
-
-    // Set retrying state using serverName as key
-    setRetryingServers(prev => ({ ...prev, [serverName]: true }));
-
+    startRetrying(serverName);
     try {
       if (handleRetryServer) {
         await handleRetryServer(serverName);
       }
     } finally {
-      // Reset retrying state after a short delay
-      setTimeout(() => {
-        setRetryingServers(prev => ({ ...prev, [serverName]: false }));
-      }, 500);
+      finishRetrying(serverName);
     }
   };
 
@@ -337,19 +349,13 @@ const ServerTools: React.FC<ServerToolsProps> = ({
     // Need serverName for the API call
     e.stopPropagation();
     log.debug(`Restart button clicked for server: ${serverName}`);
-
-    // Set retrying state using serverName as key
-    setRetryingServers(prev => ({ ...prev, [serverName]: true }));
-
+    startRetrying(serverName);
     try {
       if (handleRestartServer) {
         await handleRestartServer(serverName);
       }
     } finally {
-      // Reset retrying state after a short delay
-      setTimeout(() => {
-        setRetryingServers(prev => ({ ...prev, [serverName]: false }));
-      }, 500);
+      finishRetrying(serverName);
     }
   };
 

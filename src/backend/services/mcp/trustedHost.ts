@@ -67,7 +67,8 @@ export interface ManagedTrustedHost {
   readonly generation: string;
   /** Accepts the stored or the launch form; both are compared in launch form. */
   assertCurrent(config: MCPStdioConfig): Promise<void>;
-  retire(): void;
+  /** Refuses the generation at once; settles when its authority is durably retired. */
+  retire(): Promise<void>;
 }
 
 /** Fixed absolute launch parameters bypass legacy runner/wrapper transformations. */
@@ -137,7 +138,7 @@ async function currentConfig(serverName: string): Promise<MCPStdioConfig> {
 }
 
 /** Capture the launched identity, not whatever later happens to be approved. */
-export async function attachTrustedHost(transport: HostTransport, config: MCPStdioConfig, onRetire?: () => void, workload?: PendingBundledFlujoWorkload): Promise<void> {
+export async function attachTrustedHost(transport: HostTransport, config: MCPStdioConfig, onRetire?: () => Promise<void> | void, workload?: PendingBundledFlujoWorkload): Promise<void> {
   const captured = structuredClone(config);
   const initial = await trustedHostMcpApprovalAsync(captured);
   const fixtureToken = resolveGoalEnduranceFixtureToken(captured);
@@ -149,17 +150,19 @@ export async function attachTrustedHost(transport: HostTransport, config: MCPStd
   const attachedAt = performance.now();
   type LaunchPhase = 'attached' | 'pre-start' | 'workload-activation' | 'transport-start' | 'post-start' | 'ready';
   let launchPhase: LaunchPhase = 'attached';
-  const retireWithReason = (reason: 'explicit' | 'close' | 'onclose' | 'start-failed') => {
-    const errors: unknown[] = [];
-    try { revokePendingWorkload(workload); } catch (error) { errors.push(error); }
+  // The generation is refused before the first await; the durable retirement
+  // of its authority settles afterwards, in the order it was requested.
+  const retireWithReason = async (reason: 'explicit' | 'close' | 'onclose' | 'start-failed') => {
+    const steps: Promise<void>[] = [revokePendingWorkload(workload)];
     if (!retired) {
       retired = true; cancellation.abort();
       try {
         if (process.env.FLUJO_MCP_WORKLOAD_TRACE === '1') console.info('[trusted-host-retirement]', reason,
           launchPhase, Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, Math.floor(performance.now() - attachedAt))));
       } catch { /* Observation cannot replace retirement or cleanup. */ }
-      try { onRetire?.(); } catch (error) { errors.push(error); }
+      steps.push(new Promise<void>(resolve => { resolve(onRetire?.()); }));
     }
+    const errors = (await Promise.allSettled(steps)).flatMap(step => step.status === 'rejected' ? [step.reason] : []);
     if (errors.length) throw new AggregateError(errors, 'Trusted host retirement failed.');
   };
   const start = transport.start.bind(transport);
@@ -194,11 +197,11 @@ export async function attachTrustedHost(transport: HostTransport, config: MCPStd
     },
   });
   managedHosts.set(transport, managed);
+  // The SDK reports a closed transport synchronously. Retirement runs on; a
+  // failure stays recorded for the next launch, which waits for it and retries.
   const wrapClose = (callback: (() => void) | undefined) => () => {
-    const errors: unknown[] = [];
-    try { retireWithReason('onclose'); } catch (error) { errors.push(error); }
-    try { callback?.(); } catch (error) { errors.push(error); }
-    if (errors.length) throw new AggregateError(errors, 'Trusted host close callback failed.');
+    void retireWithReason('onclose').catch(() => undefined);
+    try { callback?.(); } catch (error) { throw new AggregateError([error], 'Trusted host close callback failed.'); }
   };
   let onclose = wrapClose(transport.onclose);
   Object.defineProperty(transport, 'onclose', {
@@ -208,7 +211,7 @@ export async function attachTrustedHost(transport: HostTransport, config: MCPStd
   });
   transport.close = async () => {
     const errors: unknown[] = [];
-    try { retireWithReason('close'); } catch (error) { errors.push(error); }
+    try { await retireWithReason('close'); } catch (error) { errors.push(error); }
     try { await close(); } catch (error) { errors.push(error); }
     if (errors.length) throw new AggregateError(errors, 'Trusted host close failed.');
   };
@@ -249,7 +252,7 @@ export async function attachTrustedHost(transport: HostTransport, config: MCPStd
       launchPhase = 'ready';
     } catch (error) {
       const cleanupErrors: unknown[] = [];
-      try { retireWithReason('start-failed'); } catch (cleanup) { cleanupErrors.push(cleanup); }
+      try { await retireWithReason('start-failed'); } catch (cleanup) { cleanupErrors.push(cleanup); }
       try { await close(); } catch (cleanup) { cleanupErrors.push(cleanup); }
       if (cleanupErrors.length) throw new AggregateError([error, ...cleanupErrors], 'Trusted host start and cleanup failed.', { cause: error });
       if (error instanceof TrustedHostMcpError) throw error;

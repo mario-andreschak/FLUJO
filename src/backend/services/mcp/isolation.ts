@@ -81,10 +81,16 @@ export interface ManagedMcpIsolation {
 
 declare global {
   var __flujo_mcp_isolated_generations: Map<string, ManagedMcpIsolation> | undefined;
+  var __flujo_mcp_isolation_launches: Set<string> | undefined;
 }
 
 function registry(): Map<string, ManagedMcpIsolation> {
   return global.__flujo_mcp_isolated_generations ??= new Map();
+}
+
+/** Generations being created: a second launch of the same server meets them as active. */
+function launching(): Set<string> {
+  return global.__flujo_mcp_isolation_launches ??= new Set();
 }
 
 export async function prepareMcpIsolation(config: MCPStdioConfig, environment: Record<string, string>): Promise<ManagedMcpIsolation> {
@@ -92,26 +98,45 @@ export async function prepareMcpIsolation(config: MCPStdioConfig, environment: R
   const policyDigest = await approvedIsolationDigest(config, workspace);
   const key = JSON.stringify([workspace, config.name]);
   const predecessor = registry().get(key);
-  if (predecessor && (!predecessor.cleanupPending || predecessor.close().outcome === 'unknown')) {
-    throw new McpIsolationError('ISOLATION_UNAVAILABLE');
-  }
-  const workspaceRoot = path.resolve(getWorkspaceDataDir());
-  const ownershipKey = createHash('sha256').update(JSON.stringify([
-    process.platform === 'win32' ? workspaceRoot.toLowerCase() : workspaceRoot, config.name,
-  ])).digest('hex');
-  const launch = createIsolatedMcpLaunch(config.isolation, policyDigest, workspaceRoot, environment, { key: ownershipKey });
-  let cleanupPending = false;
-  const managed: ManagedMcpIsolation = Object.freeze({ launch, policyDigest, workspace, serverName: config.name,
-    get cleanupPending() { return cleanupPending; },
-    close: () => {
-      cleanupPending = true;
-      const result = launch.close();
-      if (result.outcome !== 'unknown' && registry().get(key) === managed) registry().delete(key);
-      return result;
-    },
-  });
-  registry().set(key, managed);
-  return managed;
+  if (launching().has(key) || (predecessor && !predecessor.cleanupPending)) throw new McpIsolationError('ISOLATION_UNAVAILABLE');
+  launching().add(key);
+  try {
+    // A predecessor still being removed is waited for; one whose removal stays
+    // unobserved is tried again here, and the next launch tries once more.
+    if (predecessor && (await predecessor.close()).outcome === 'unknown') throw new McpIsolationError('ISOLATION_UNAVAILABLE');
+    const workspaceRoot = path.resolve(getWorkspaceDataDir());
+    const ownershipKey = createHash('sha256').update(JSON.stringify([
+      process.platform === 'win32' ? workspaceRoot.toLowerCase() : workspaceRoot, config.name,
+    ])).digest('hex');
+    const launch = await createIsolatedMcpLaunch(config.isolation, policyDigest, workspaceRoot, environment, { key: ownershipKey });
+    let cleanupPending = false;
+    const managed: ManagedMcpIsolation = Object.freeze({ launch, policyDigest, workspace, serverName: config.name,
+      get cleanupPending() { return cleanupPending; },
+      close: async () => {
+        cleanupPending = true;
+        const result = await launch.close();
+        if (result.outcome !== 'unknown' && registry().get(key) === managed) registry().delete(key);
+        return result;
+      },
+    });
+    registry().set(key, managed);
+    return managed;
+  } finally { launching().delete(key); }
+}
+
+/**
+ * Finish every container removal that started without a caller waiting for it
+ * (a server that stopped by itself), and try again any that stayed unobserved.
+ * The application's shutdown runs this before the process exits.
+ */
+export async function settleMcpIsolationCleanup(): Promise<void> {
+  await Promise.allSettled([...registry().values()].filter(managed => managed.cleanupPending).map(managed => managed.close()));
+}
+
+/** Starts the authority retirement and the container removal together; neither can skip the other. */
+async function retireIsolated(managed: ManagedMcpIsolation, onRetire?: () => Promise<void> | void): Promise<void> {
+  const [retirement] = await Promise.allSettled([new Promise<void>(resolve => { resolve(onRetire?.()); }), managed.close()]);
+  if (retirement.status === 'rejected') throw retirement.reason;
 }
 
 /** Override SDK defaults as well as explicit values; the CLI needs no account home/PATH. */
@@ -159,11 +184,16 @@ export function assertIsolatedMcpArguments(value: unknown): void {
   visit(value, 0);
 }
 
-export function attachMcpIsolation(transport: IsolationTransport, config: MCPStdioConfig, managed: ManagedMcpIsolation, onRetire?: () => void): void {
+export function attachMcpIsolation(transport: IsolationTransport, config: MCPStdioConfig, managed: ManagedMcpIsolation, onRetire?: () => Promise<void> | void): void {
   transport.__flujoMcpIsolation = managed;
   const start = transport.start.bind(transport);
   const close = transport.close.bind(transport);
-  const wrapClose = (callback: (() => void) | undefined) => () => { onRetire?.(); managed.close(); callback?.(); };
+  // The SDK reports a closed transport synchronously. Retirement runs on; a
+  // failure stays recorded for the next launch, which waits for it and retries.
+  const wrapClose = (callback: (() => void) | undefined) => () => {
+    void retireIsolated(managed, onRetire).catch(() => undefined);
+    callback?.();
+  };
   let onclose = wrapClose(transport.onclose);
   Object.defineProperty(transport, 'onclose', { configurable: true,
     get: () => onclose,
@@ -175,14 +205,15 @@ export function attachMcpIsolation(transport: IsolationTransport, config: MCPStd
         throw new McpIsolationError('ISOLATION_RECONSENT_REQUIRED');
       }
       await start();
-    } catch (error) { onRetire?.(); managed.close(); throw error; }
+    } catch (error) { await retireIsolated(managed, onRetire); throw error; }
   };
   transport.close = async () => {
     // Remove the server before closing the attach client. An attach client's
     // exit is not a container exit witness, and a hanging SDK close cannot skip it.
-    onRetire?.();
-    managed.close();
+    const retirement = retireIsolated(managed, onRetire);
+    await retirement.catch(() => undefined);
     await close();
+    await retirement;
   };
 }
 
@@ -271,7 +302,7 @@ export async function assertMcpIsolationDispatch(client: Client, serverName: str
       if (!current || current.disabled || current.transport !== 'stdio' || serverName !== host.serverName) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
       await host.assertCurrent(current);
     } catch (error) {
-      host.retire();
+      await host.retire();
       try { await client.close(); } catch { /* lifecycle receipts retain unknown cleanup */ }
       if (error instanceof TrustedHostMcpError) throw error;
       throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
@@ -318,7 +349,7 @@ export async function assertMcpIsolationDispatch(client: Client, serverName: str
       throw new McpIsolationError('ISOLATION_RECONSENT_REQUIRED');
     }
   } catch (error) {
-    managed.close();
+    await managed.close();
     if (error instanceof McpIsolationError) throw error;
     throw new McpIsolationError('ISOLATION_UNAVAILABLE');
   }

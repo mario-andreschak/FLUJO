@@ -46,6 +46,7 @@ import {
 import { MCPServerConfig, type MCPStdioConfig } from "@/shared/types/mcp";
 import { killProcessTreeAndWait } from "@/utils/process/killProcessTree";
 import { installTrustedHostProfile } from './fixtures/trustedHostProfile';
+import { PRIVATE_READ_TEST_MS } from '../helpers/privateReadTime';
 
 const killProcessTreeAndWaitMock = jest.mocked(killProcessTreeAndWait);
 let approved: ReturnType<typeof installTrustedHostProfile>;
@@ -367,7 +368,7 @@ describe("safelyCloseClient graceful shutdown", () => {
 
     expect(child.signalCode).toBeNull(); // not SIGTERM/SIGKILLed
     expect(child.exitCode).toBe(0); // exited on its own terms
-  }, 20000);
+  }, Math.max(20_000, PRIVATE_READ_TEST_MS));
 
   it("skips the wait entirely when the child has already exited", async () => {
     const events: string[] = [];

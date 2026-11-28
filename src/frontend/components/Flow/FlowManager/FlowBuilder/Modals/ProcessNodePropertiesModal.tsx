@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
     Dialog,
     DialogContent,
@@ -59,6 +59,7 @@ import { getNodeProperties } from './ProcessNodePropertiesModal/utils'; // Adjus
 import { createLogger } from '@/utils/logger';
 import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useDebouncedCallback, useTimeout } from '@/frontend/hooks/timing';
 import { normalizeExcludedSystemPromptSections, type FlujoSystemPromptSectionId } from '@/shared/utils/flujoSystemPrompt';
 
 const log = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal');
@@ -106,6 +107,17 @@ export function getInitialProcessSection(
     && promptTemplate.trim().length > 0
     ? 'task'
     : 'basic';
+}
+
+function initialProcessSection(
+  mode: 'create' | 'edit',
+  authoringMode: FlowAuthoringMode,
+  node: FlowNode | null,
+): SectionKey {
+  if (mode === 'create') return 'basic';
+  return authoringMode === 'guided'
+    ? getInitialProcessSection(authoringMode, node?.data.properties?.promptTemplate)
+    : 'task';
 }
 
 export const ProcessNodePropertiesModal = ({
@@ -196,12 +208,10 @@ export const ProcessNodePropertiesModal = ({
   // IntersectionObserver so it doesn't flicker the active tab through sections.
   const isProgrammaticScroll = useRef(false);
 
-  useEffect(() => {
-    if (authoringMode === 'guided' && (activeSection === 'io' || activeSection === 'advanced')) {
-      setActiveSection('basic');
-    }
-    if (authoringMode === 'guided' && activeTab !== 'server') setActiveTab('server');
-  }, [activeSection, activeTab, authoringMode]);
+  if (authoringMode === 'guided' && (activeSection === 'io' || activeSection === 'advanced')) {
+    setActiveSection('basic');
+  }
+  if (authoringMode === 'guided' && activeTab !== 'server') setActiveTab('server');
 
   useEffect(() => {
     taskToolsWidthRef.current = taskToolsWidth;
@@ -276,18 +286,18 @@ export const ProcessNodePropertiesModal = ({
 
   const [resourceSuggestions, setResourceSuggestions] = useState<PromptReferenceSuggestion[]>([]);
 
+  const resourceServerNames = useMemo(() => [...new Set(
+    connectedMcpNodes
+      .filter((connected) => connected.status === 'connected')
+      .map((connected) => connected.serverName),
+  )], [connectedMcpNodes]);
+  const resourceSuggestionsOff = !open || resourceServerNames.length === 0;
+  if (resourceSuggestionsOff && resourceSuggestions.length > 0) setResourceSuggestions([]);
+
   useEffect(() => {
+    if (resourceSuggestionsOff) return;
     let cancelled = false;
-    const serverNames = [...new Set(
-      connectedMcpNodes
-        .filter((connected) => connected.status === 'connected')
-        .map((connected) => connected.serverName),
-    )];
-    if (!open || serverNames.length === 0) {
-      setResourceSuggestions([]);
-      return () => { cancelled = true; };
-    }
-    void Promise.all(serverNames.map(async (serverName) => {
+    void Promise.all(resourceServerNames.map(async (serverName) => {
       try {
         const result = await mcpService.listServerResources(serverName);
         const contexts = connectedMcpNodes.filter((connected) => connected.serverName === serverName);
@@ -319,7 +329,7 @@ export const ProcessNodePropertiesModal = ({
       if (!cancelled) setResourceSuggestions(groups.flat());
     });
     return () => { cancelled = true; };
-  }, [open, connectedMcpNodes]);
+  }, [resourceSuggestionsOff, resourceServerNames, connectedMcpNodes]);
 
   const referenceSuggestions = React.useMemo<PromptReferenceSuggestion[]>(() => {
     const toolSuggestions = connectedMcpNodes.flatMap((connected) => {
@@ -384,77 +394,86 @@ export const ProcessNodePropertiesModal = ({
   }, [open, node, handoffTools]);
 
     // Load prompt template and model binding status when node changes
+  const seedDeps = [node, open, mode, authoringMode];
+  const [seededFor, setSeededFor] = useState<readonly unknown[] | null>(null);
+  if (!seededFor || seedDeps.some((dep, index) => dep !== seededFor[index])) {
+    setSeededFor(seedDeps);
+    if (open) {
+      if (node) {
+        const properties = node.data.properties as ProcessNodeProperties;
+        // Always load the prompt template from the node's properties
+        const savedPromptTemplate = properties.promptTemplate ?? '';
+        setPromptTemplate(savedPromptTemplate);
+
+        // Set model binding status
+        if (properties.boundModel) {
+          setIsModelBound(true);
+        } else {
+          setIsModelBound(false);
+        }
+
+        // Load toggle states from node properties if they exist
+        setExcludeModelPrompt(properties.excludeModelPrompt ?? false);
+        setExcludeStartNodePrompt(properties.excludeStartNodePrompt ?? false);
+        setExcludeSystemPrompt(properties.excludeSystemPrompt ?? false);
+        setExcludeSystemPromptSections(normalizeExcludedSystemPromptSections(properties.excludeSystemPromptSections));
+        setSystemPromptPolicy(properties.systemPromptPolicy === 'per-turn' ? 'per-turn' : 'stable');
+        setInputMode(properties.inputMode ?? 'full-history');
+        setIsolatedPrompt(properties.isolatedPrompt ?? '');
+        setAllowCallerPrompt(properties.allowCallerPrompt !== false);
+        setOutputMode(properties.outputMode ?? 'full-conversation');
+        setEnableTodoTool(properties.enableTodoTool ?? false);
+        setToolLoading(normalizeToolLoadingMode(properties.toolLoading));
+        setCodeMode(normalizeCodeModeSetting(properties.codeMode));
+        const toolResultLimitForm = toolResultLimitFormValues(properties.toolResultLimit);
+        setToolResultLimitChoice(toolResultLimitForm.choice);
+        setToolResultLimitKb(toolResultLimitForm.sizeKb);
+        setRequireApprovalForWrites(properties.requireApprovalForWrites === true);
+        setPersonaAbilities(normalizePersonaAbilities(properties.personaTools));
+
+        // Data-flow capture (issue #203). parseKvRef('') → { scope:'folder', key:'' }.
+        setCaptureVariable(properties.captureVariable ?? '');
+        setCaptureResource(properties.captureResource ?? '');
+        const kvParsed = parseKvRef(properties.captureKv ?? '');
+        setCaptureKvScope(kvParsed.scope);
+        setCaptureKvKey(kvParsed.key || '');
+
+      }
+
+      // Reset both navigation levels whenever the modal target or open state changes.
+      // Issue #320: editing an existing step opens directly on Task, creating a new
+      // one starts on Basic. Guided sessions keep the softer heuristic from the
+      // guided-authoring work: a guided edit only jumps to Task once the step has an
+      // authored task prompt, otherwise the author is sent to Basic first.
+      setActiveSection(initialProcessSection(mode, authoringMode, node));
+      setActiveTab('server');
+    }
+  }
+
+  // Scroll the opening section into view whenever the modal target or open state changes,
+  // once the dialog content is drawn. The section observer ignores that scroll.
+  const openingTarget = useMemo(() => ({ node, mode, authoringMode }), [node, mode, authoringMode]);
   useEffect(() => {
     if (!open) return;
-
-    if (node) {
-      const properties = node.data.properties as ProcessNodeProperties;
-      // Always load the prompt template from the node's properties
-      const savedPromptTemplate = properties.promptTemplate ?? '';
-      setPromptTemplate(savedPromptTemplate);
-
-      // Set model binding status
-      if (properties.boundModel) {
-        setIsModelBound(true);
-      } else {
-        setIsModelBound(false);
-      }
-
-      // Load toggle states from node properties if they exist
-      setExcludeModelPrompt(properties.excludeModelPrompt ?? false);
-      setExcludeStartNodePrompt(properties.excludeStartNodePrompt ?? false);
-      setExcludeSystemPrompt(properties.excludeSystemPrompt ?? false);
-      setExcludeSystemPromptSections(normalizeExcludedSystemPromptSections(properties.excludeSystemPromptSections));
-      setSystemPromptPolicy(properties.systemPromptPolicy === 'per-turn' ? 'per-turn' : 'stable');
-      setInputMode(properties.inputMode ?? 'full-history');
-      setIsolatedPrompt(properties.isolatedPrompt ?? '');
-      setAllowCallerPrompt(properties.allowCallerPrompt !== false);
-      setOutputMode(properties.outputMode ?? 'full-conversation');
-      setEnableTodoTool(properties.enableTodoTool ?? false);
-      setToolLoading(normalizeToolLoadingMode(properties.toolLoading));
-      setCodeMode(normalizeCodeModeSetting(properties.codeMode));
-      const toolResultLimitForm = toolResultLimitFormValues(properties.toolResultLimit);
-      setToolResultLimitChoice(toolResultLimitForm.choice);
-      setToolResultLimitKb(toolResultLimitForm.sizeKb);
-      setRequireApprovalForWrites(properties.requireApprovalForWrites === true);
-      setPersonaAbilities(normalizePersonaAbilities(properties.personaTools));
-
-      // Data-flow capture (issue #203). parseKvRef('') → { scope:'folder', key:'' }.
-      setCaptureVariable(properties.captureVariable ?? '');
-      setCaptureResource(properties.captureResource ?? '');
-      const kvParsed = parseKvRef(properties.captureKv ?? '');
-      setCaptureKvScope(kvParsed.scope);
-      setCaptureKvKey(kvParsed.key || '');
-
-    }
-
-    // Reset both navigation levels whenever the modal target or open state changes.
-    // Issue #320: editing an existing step opens directly on Task, creating a new
-    // one starts on Basic. Guided sessions keep the softer heuristic from the
-    // guided-authoring work: a guided edit only jumps to Task once the step has an
-    // authored task prompt, otherwise the author is sent to Basic first.
-    const initialSection: SectionKey = mode === 'create'
-      ? 'basic'
-      : authoringMode === 'guided'
-        ? getInitialProcessSection(authoringMode, node?.data.properties?.promptTemplate)
-        : 'task';
-    setActiveSection(initialSection);
-    setActiveTab('server');
     isProgrammaticScroll.current = true;
-    const frame = window.requestAnimationFrame(() => {
-      const target = sectionRefs[initialSection].current;
-      if (target && typeof target.scrollIntoView === 'function') {
-        target.scrollIntoView({ behavior: 'auto', block: 'start' });
-      } else if (scrollContainerRef.current) {
-        scrollContainerRef.current.scrollTop = target?.offsetTop ?? 0;
-      }
-      isProgrammaticScroll.current = false;
-    });
     return () => {
-      window.cancelAnimationFrame(frame);
       isProgrammaticScroll.current = false;
     };
-  }, [node, open, mode, authoringMode]);
+  }, [open, openingTarget]);
+  useTimeout(() => {
+    const target = sectionRefs[initialProcessSection(mode, authoringMode, node)].current;
+    if (target && typeof target.scrollIntoView === 'function') {
+      target.scrollIntoView({ behavior: 'auto', block: 'start' });
+    } else if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = target?.offsetTop ?? 0;
+    }
+    isProgrammaticScroll.current = false;
+  }, open ? 0 : null, openingTarget);
+
+  const releaseProgrammaticScroll = () => { isProgrammaticScroll.current = false; };
+  // A smooth scroll settles within this time; the observer follows the user again after it.
+  const releaseAfterSmoothScroll = useDebouncedCallback(releaseProgrammaticScroll, 700);
+  const releaseAfterJump = useDebouncedCallback(releaseProgrammaticScroll, 0);
 
   // Issue #300: keep the active tab in sync with the section scrolled into view.
   useEffect(() => {
@@ -485,8 +504,7 @@ export const ProcessNodePropertiesModal = ({
     } else if (scrollContainerRef.current) {
       scrollContainerRef.current.scrollTop = target?.offsetTop ?? 0;
     }
-    // Re-enable observer once the smooth scroll has settled.
-    window.setTimeout(() => { isProgrammaticScroll.current = false; }, 700);
+    releaseAfterSmoothScroll();
   };
 
   const handleTaskDividerPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -515,7 +533,7 @@ export const ProcessNodePropertiesModal = ({
     if (activeSection !== 'task') return;
     isProgrammaticScroll.current = true;
     taskRef.current?.scrollIntoView({ block: 'start' });
-    window.setTimeout(() => { isProgrammaticScroll.current = false; }, 0);
+    releaseAfterJump();
   };
 
   const promptBuilderRef = useRef<PromptBuilderRef>(null);

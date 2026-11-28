@@ -33,6 +33,9 @@ import { installBundledFixtureOwner } from './fixtures/bundledFixtureOwner';
 import { ensureShippedWorkspacePackages } from '@/backend/services/mcp/shippedWorkspacePackages';
 import { approveBundledHostConsent, previewBundledHostConsent } from '@/backend/services/security/bundledMcpConsent';
 import { saveConfig } from '@/backend/services/mcp/config';
+import { PRIVATE_READ_TEST_MS } from '../helpers/privateReadTime';
+
+jest.setTimeout(PRIVATE_READ_TEST_MS);
 
 const loadItemMock = loadItem as jest.Mock;
 const saveItemMock = saveItem as jest.Mock;
@@ -195,7 +198,8 @@ describe('normal stdio delivery', () => {
       };
       phase('private-profile-enter');
       profile = installTrustedHostProfile({ nodeSource: '// Owned setup profile; never executed.' });
-      owner = installBundledFixtureOwner();
+      // The approvals must outlast this slow setup and every test after it.
+      owner = installBundledFixtureOwner({ lifetimeMs: 60 * 60 * 1000 });
       phase('private-profile-ready');
       phase('workspace-enter');
       await ensureWorkspaceDirs();
@@ -221,7 +225,9 @@ describe('normal stdio delivery', () => {
         phase('grant-ready');
         approved.set(descriptor.defaultName, result.config);
       }
-    }, 120_000);
+      // Four real consents over the real packages: 55 s alone on a busy Windows PC
+      // and over 120 s beside another worker, because each fresh ACL check starts PowerShell.
+    }, process.platform === 'win32' ? 300_000 : 120_000);
     beforeEach(() => {
       storage.set(StorageKey.MCP_SERVERS, Object.fromEntries([...approved].map(([name, config]) => [name, persisted(config)])));
     });
