@@ -178,29 +178,43 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
   const programmaticScroll = useRef(false);
   const restrictionCardRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
-  // Reset the form from the execution being edited (or to defaults) on open.
+  // Reset the form from the execution being edited (or to defaults) on open,
+  // and show the pickers as loading until their lists arrive.
+  const [formFor, setFormFor] = useState<{ open: boolean; execution: PlannedExecution | null } | null>(null);
+  if (!formFor || formFor.open !== open || formFor.execution !== execution) {
+    const opening = open && !formFor?.open;
+    setFormFor({ open, execution });
+    if (open) {
+      setSaveError(null);
+      setName(execution?.name ?? '');
+      setTargetKind(execution?.personaId ? 'persona' : 'flow');
+      setFlowId(execution?.flowId ?? '');
+      setPersonaId(execution?.personaId ?? '');
+      setBehaviorSlotKey(execution?.behaviorSlotKey ?? '');
+      setPrompt(execution?.prompt ?? '');
+      setSaveConversations(execution?.saveConversations === true);
+      setOverlapStrategy(execution?.overlapStrategy ?? 'skip');
+      const restrictions = normalizeStartRestrictions(execution ?? {});
+      setStartRestriction(restrictions.startRestriction);
+      setSuperExclusive(restrictions.superExclusive);
+      setEmergency(restrictions.emergency);
+      setNonExclusiveBehavior(execution?.nonExclusiveBehavior ?? 'queue');
+      setTrigger(withoutLegacyAiGate(execution?.trigger ?? DEFAULT_SCHEDULE));
+      setAiGate(execution ? automationAiGate(execution) : null);
+      setDraftId(execution ? '' : crypto.randomUUID());
+      setPersonaComposition(null);
+      setPersonaCompositionError(false);
+      setActiveSection('when');
+    }
+    if (opening) {
+      setLoadingFlows(true);
+      setLoadingPersonas(true);
+      setPersonasError(false);
+    }
+  }
+
   useEffect(() => {
     if (!open) return;
-    setSaveError(null);
-    setName(execution?.name ?? '');
-    setTargetKind(execution?.personaId ? 'persona' : 'flow');
-    setFlowId(execution?.flowId ?? '');
-    setPersonaId(execution?.personaId ?? '');
-    setBehaviorSlotKey(execution?.behaviorSlotKey ?? '');
-    setPrompt(execution?.prompt ?? '');
-    setSaveConversations(execution?.saveConversations === true);
-    setOverlapStrategy(execution?.overlapStrategy ?? 'skip');
-    const restrictions = normalizeStartRestrictions(execution ?? {});
-    setStartRestriction(restrictions.startRestriction);
-    setSuperExclusive(restrictions.superExclusive);
-    setEmergency(restrictions.emergency);
-    setNonExclusiveBehavior(execution?.nonExclusiveBehavior ?? 'queue');
-    setTrigger(withoutLegacyAiGate(execution?.trigger ?? DEFAULT_SCHEDULE));
-    setAiGate(execution ? automationAiGate(execution) : null);
-    setDraftId(execution ? '' : crypto.randomUUID());
-    setPersonaComposition(null);
-    setPersonaCompositionError(false);
-    setActiveSection('when');
     if (scrollContainer) scrollContainer.scrollTop = 0;
   }, [open, execution]);
 
@@ -208,7 +222,6 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    setLoadingFlows(true);
     flowService.loadFlows()
       .then((loaded) => {
         if (!cancelled) setFlows(loaded || []);
@@ -228,8 +241,6 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    setLoadingPersonas(true);
-    setPersonasError(false);
     personasService.list()
       .then((loaded) => {
         if (!cancelled) setPersonas(loaded || []);
@@ -247,18 +258,19 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
     return () => { cancelled = true; };
   }, [open]);
 
-  useEffect(() => {
-    if (!open || targetKind !== 'persona' || !personaId) {
-      setPersonaComposition(null);
-      setPersonaCompositionError(false);
-      setLoadingPersonaComposition(false);
-      return;
-    }
-    let cancelled = false;
+  const compositionPersonaId = open && targetKind === 'persona' && personaId ? personaId : null;
+  const [compositionFor, setCompositionFor] = useState<string | null>(null);
+  if (compositionPersonaId !== compositionFor) {
+    setCompositionFor(compositionPersonaId);
     setPersonaComposition(null);
     setPersonaCompositionError(false);
-    setLoadingPersonaComposition(true);
-    personasService.getComposition(personaId)
+    setLoadingPersonaComposition(compositionPersonaId !== null);
+  }
+
+  useEffect(() => {
+    if (!compositionPersonaId) return;
+    let cancelled = false;
+    personasService.getComposition(compositionPersonaId)
       .then((loaded) => {
         if (!cancelled) setPersonaComposition(loaded);
       })
@@ -270,18 +282,17 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
         if (!cancelled) setLoadingPersonaComposition(false);
       });
     return () => { cancelled = true; };
-  }, [open, targetKind, personaId]);
+  }, [compositionPersonaId]);
 
   // flowId remains required persisted provenance, but Persona users choose a
   // person and a friendly skill. The matching Flow reference is derived here.
-  useEffect(() => {
-    if (targetKind !== 'persona' || !personaComposition) return;
+  if (targetKind === 'persona' && personaComposition) {
     const effectiveFlowRef = behaviorSlotKey
       ? personaComposition.behaviorCards.find((card) => card.slotKey === behaviorSlotKey)
           ?.effectiveFlowRef
       : personaComposition.core?.effectiveFlowRef ?? personaComposition.coreFlowRef;
-    setFlowId(effectiveFlowRef ?? '');
-  }, [targetKind, personaComposition, behaviorSlotKey]);
+    if (flowId !== (effectiveFlowRef ?? '')) setFlowId(effectiveFlowRef ?? '');
+  }
 
   const selectedMissing = targetKind === 'flow'
     && !!flowId

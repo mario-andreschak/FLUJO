@@ -140,11 +140,11 @@ export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
   const { t, formatDate } = useI18n();
   const router = useRouter();
   const [selected, setSelected] = useState<PersonaDetail | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(Boolean(initialPersonaId));
   const [error, setError] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [drafts, setDrafts] = useState<PersonaCreationDraft[]>([]);
-  const [draftsLoading, setDraftsLoading] = useState(false);
+  const [draftsLoading, setDraftsLoading] = useState(!initialPersonaId);
   const [draftsError, setDraftsError] = useState<string | null>(null);
   const [resumeDraft, setResumeDraft] = useState<PersonaCreationDraft | null>(null);
   const [busy, setBusy] = useState(false);
@@ -152,41 +152,59 @@ export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
   const [notice, setNotice] = useState<string | null>(null);
   const detailRequestSequence = useRef(0);
 
-  const load = useCallback(async () => {
+  const fetchSelected = useCallback(() => {
     const sequence = ++detailRequestSequence.current;
-    if (!initialPersonaId) {
-      setLoading(false);
-      setError(null);
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      const detail = await personasService.get(initialPersonaId);
-      if (sequence === detailRequestSequence.current) setSelected(detail);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t('personas.loadFailed'));
-    } finally {
-      setLoading(false);
-    }
+    if (!initialPersonaId) return Promise.resolve();
+    return personasService.get(initialPersonaId)
+      .then((detail) => {
+        if (sequence === detailRequestSequence.current) setSelected(detail);
+      })
+      .catch((cause) => {
+        setError(cause instanceof Error ? cause.message : t('personas.loadFailed'));
+      })
+      .finally(() => {
+        setLoading(false);
+      });
   }, [initialPersonaId, t]);
 
-  useEffect(() => { void load(); }, [load]);
+  const load = () => {
+    setLoading(Boolean(initialPersonaId));
+    setError(null);
+    return fetchSelected();
+  };
 
-  const loadDrafts = useCallback(async () => {
-    if (initialPersonaId) return;
+  const fetchDrafts = useCallback(() => {
+    if (initialPersonaId) return Promise.resolve();
+    return personasService.listDrafts()
+      .then((next) => {
+        setDrafts(next);
+      })
+      .catch((cause) => {
+        setDraftsError(cause instanceof Error ? cause.message : t('personas.create.draftsLoadFailed'));
+      })
+      .finally(() => {
+        setDraftsLoading(false);
+      });
+  }, [initialPersonaId, t]);
+
+  const loadDrafts = useCallback(() => {
+    if (initialPersonaId) return Promise.resolve();
     setDraftsLoading(true);
     setDraftsError(null);
-    try {
-      setDrafts(await personasService.listDrafts());
-    } catch (cause) {
-      setDraftsError(cause instanceof Error ? cause.message : t('personas.create.draftsLoadFailed'));
-    } finally {
-      setDraftsLoading(false);
-    }
-  }, [initialPersonaId, t]);
+    return fetchDrafts();
+  }, [fetchDrafts, initialPersonaId]);
 
-  useEffect(() => { void loadDrafts(); }, [loadDrafts]);
+  const [loadedFor, setLoadedFor] = useState(initialPersonaId);
+  if (loadedFor !== initialPersonaId) {
+    setLoadedFor(initialPersonaId);
+    setLoading(Boolean(initialPersonaId));
+    setError(null);
+    setDraftsLoading(!initialPersonaId);
+    setDraftsError(null);
+  }
+
+  useEffect(() => { void fetchSelected(); }, [fetchSelected]);
+  useEffect(() => { void fetchDrafts(); }, [fetchDrafts]);
 
   const discardDraft = useCallback(async (draft: PersonaCreationDraft) => {
     setBusy(true);
@@ -495,9 +513,13 @@ function NowArea({ detail, busy, mutate }: { detail: PersonaDetail; busy: boolea
   const [preview, setPreview] = useState<PersonaExecutionPreview | null>(null);
   const [previewError, setPreviewError] = useState(false);
 
+  const [previewFor, setPreviewFor] = useState({ id: detail.persona.id, updatedAt: detail.persona.updatedAt });
+  if (previewFor.id !== detail.persona.id || previewFor.updatedAt !== detail.persona.updatedAt) {
+    setPreviewFor({ id: detail.persona.id, updatedAt: detail.persona.updatedAt });
+    setPreviewError(false);
+  }
   useEffect(() => {
     let active = true;
-    setPreviewError(false);
     void personasService.executionPreview(detail.persona.id)
       .then((value) => { if (active) setPreview(value); })
       .catch(() => { if (active) setPreviewError(true); });
@@ -1136,11 +1158,9 @@ function AppsArea({ detail, busy, mutate, mutationError }: {
   const grantsByServer = new Map(detail.appGrants.map((grant) => [grant.mcpServerName, grant]));
   const availableServers = servers.filter((server) => !grantsByServer.has(server.name));
 
-  useEffect(() => {
-    if (selectedConfig && !availableServers.some((server) => server.name === selectedConfig)) {
-      setSelectedConfig('');
-    }
-  }, [availableServers, selectedConfig]);
+  if (selectedConfig && !availableServers.some((server) => server.name === selectedConfig)) {
+    setSelectedConfig('');
+  }
 
   const launch = async (grantId: string, uri: string) => {
     const launchKey = `${grantId}:${uri}`;

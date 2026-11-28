@@ -33,6 +33,41 @@ import {
 
 const PAGE_SIZE = 24;
 
+interface LoadOptions {
+  cursor?: string | null;
+  force?: boolean;
+  append?: boolean;
+  quiet?: boolean;
+  retainCount?: number;
+}
+
+async function loadSummaryItems({ cursor, force, retainCount, signal }: {
+  cursor: string | null;
+  force: boolean;
+  retainCount: number;
+  signal: AbortSignal;
+}) {
+  let page = await loadPersonaSummaryPage({
+    cursor,
+    pageSize: retainCount ? Math.min(100, Math.max(PAGE_SIZE, retainCount)) : PAGE_SIZE,
+    signal,
+    force,
+  });
+  // Refresh the loaded portion without collapsing pagination or removing
+  // later cards. Commit only once all requested summary pages are ready.
+  const items = [...page.items];
+  while (retainCount > items.length && page.hasMore && page.nextCursor && !signal.aborted) {
+    page = await loadPersonaSummaryPage({
+      cursor: page.nextCursor,
+      pageSize: Math.min(100, retainCount - items.length),
+      signal,
+      force,
+    });
+    items.push(...page.items);
+  }
+  return { page, items };
+}
+
 export default function PersonasGallery({
   busy,
   onCreate,
@@ -53,68 +88,45 @@ export default function PersonasGallery({
   const requestSequence = useRef(0);
   const activeRequest = useRef<AbortController | null>(null);
 
-  const load = useCallback(async ({
-    cursor = null,
-    force = false,
-    append = false,
-    quiet = false,
-    retainCount = 0,
-  }: {
-    cursor?: string | null;
-    force?: boolean;
-    append?: boolean;
-    quiet?: boolean;
-    retainCount?: number;
-  } = {}) => {
+  const fetchPage = useCallback(({ cursor = null, force = false, append = false, retainCount = 0 }: LoadOptions = {}) => {
     const sequence = ++requestSequence.current;
     activeRequest.current?.abort();
     const controller = new AbortController();
     activeRequest.current = controller;
-    if (append) setLoadingMore(true); else if (!quiet) setLoading(true);
-    setError(null);
-
-    try {
-      let page = await loadPersonaSummaryPage({
-        cursor,
-        pageSize: retainCount ? Math.min(100, Math.max(PAGE_SIZE, retainCount)) : PAGE_SIZE,
-        signal: controller.signal,
-        force,
-      });
-      // Refresh the loaded portion without collapsing pagination or removing
-      // later cards. Commit only once all requested summary pages are ready.
-      const refreshedItems = [...page.items];
-      while (retainCount > refreshedItems.length && page.hasMore && page.nextCursor && !controller.signal.aborted) {
-        page = await loadPersonaSummaryPage({
-          cursor: page.nextCursor,
-          pageSize: Math.min(100, retainCount - refreshedItems.length),
-          signal: controller.signal,
-          force,
+    const isCurrent = () => !controller.signal.aborted && sequence === requestSequence.current;
+    return loadSummaryItems({ cursor, force, retainCount, signal: controller.signal })
+      .then(({ page, items: refreshedItems }) => {
+        if (!isCurrent()) return;
+        setItems((current) => {
+          if (!append) return refreshedItems;
+          const merged = new Map(current.map((item) => [item.id, item]));
+          page.items.forEach((item) => merged.set(item.id, item));
+          return [...merged.values()];
         });
-        refreshedItems.push(...page.items);
-      }
-      if (controller.signal.aborted || sequence !== requestSequence.current) return;
-      setItems((current) => {
-        if (!append) return refreshedItems;
-        const merged = new Map(current.map((item) => [item.id, item]));
-        page.items.forEach((item) => merged.set(item.id, item));
-        return [...merged.values()];
+        setNextCursor(page.nextCursor);
+        setHasMore(page.hasMore);
+      })
+      .catch((cause) => {
+        if (!isCurrent()) return;
+        setError(cause instanceof Error ? cause.message : t('personas.loadFailed'));
+      })
+      .finally(() => {
+        if (sequence === requestSequence.current) {
+          activeRequest.current = null;
+          setLoading(false);
+          setLoadingMore(false);
+        }
       });
-      setNextCursor(page.nextCursor);
-      setHasMore(page.hasMore);
-    } catch (cause) {
-      if (controller.signal.aborted || sequence !== requestSequence.current) return;
-      setError(cause instanceof Error ? cause.message : t('personas.loadFailed'));
-    } finally {
-      if (sequence === requestSequence.current) {
-        activeRequest.current = null;
-        setLoading(false);
-        setLoadingMore(false);
-      }
-    }
   }, [t]);
 
+  const load = useCallback((options: LoadOptions = {}) => {
+    if (options.append) setLoadingMore(true); else if (!options.quiet) setLoading(true);
+    setError(null);
+    return fetchPage(options);
+  }, [fetchPage]);
+
   useEffect(() => {
-    void load();
+    void fetchPage();
     const unsubscribe = onWorkspaceChanged(() => {
       requestSequence.current += 1;
       activeRequest.current?.abort();
@@ -127,7 +139,7 @@ export default function PersonasGallery({
       requestSequence.current += 1;
       activeRequest.current?.abort();
     };
-  }, [load]);
+  }, [fetchPage]);
 
   useEffect(() => {
     const refreshVisible = () => {

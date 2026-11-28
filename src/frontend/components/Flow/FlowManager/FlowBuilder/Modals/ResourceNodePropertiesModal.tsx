@@ -101,7 +101,10 @@ export const ResourceNodePropertiesModal = ({ open, node, onClose, onSave, flowN
   // so re-editing an existing node keeps them visible.
   const [showAdvanced, setShowAdvanced] = useState(false);
 
-  useEffect(() => {
+  const seedDeps = [node, open];
+  const [seededFor, setSeededFor] = useState<readonly unknown[] | null>(null);
+  if (!seededFor || seedDeps.some((dep, index) => dep !== seededFor[index])) {
+    setSeededFor(seedDeps);
     if (node) {
       setNodeData({
         ...node.data,
@@ -113,7 +116,7 @@ export const ResourceNodePropertiesModal = ({ open, node, onClose, onSave, flowN
       const hasDescription = !!node.data.description && node.data.description.trim().length > 0;
       setShowAdvanced(hasCustomLabel || hasDescription);
     }
-  }, [node, open]);
+  }
 
   const scope: 'mcp' | 'run' = nodeData?.properties?.scope === 'mcp' ? 'mcp' : 'run';
   const boundServer: string = nodeData?.properties?.boundServer || '';
@@ -141,16 +144,22 @@ export const ResourceNodePropertiesModal = ({ open, node, onClose, onSave, flowN
   }, []);
 
   // Browse the selected server's published resources (static scope).
-  useEffect(() => {
-    if (!open || scope !== 'mcp' || !boundServer) {
-      setBrowsed([]);
-      setBrowseError(null);
-      return;
-    }
-    let cancelled = false;
-    setIsBrowsing(true);
+  const browseServer = open && scope === 'mcp' && boundServer ? boundServer : null;
+  const [browsingFor, setBrowsingFor] = useState<string | null>(null);
+  if (browseServer !== browsingFor) {
+    setBrowsingFor(browseServer);
     setBrowseError(null);
-    mcpService.listServerResources(boundServer)
+    if (browseServer) {
+      setIsBrowsing(true);
+    } else {
+      setBrowsed([]);
+      setIsBrowsing(false);
+    }
+  }
+  useEffect(() => {
+    if (!browseServer) return;
+    let cancelled = false;
+    mcpService.listServerResources(browseServer)
       .then((result) => {
         if (cancelled) return;
         if (result.error) {
@@ -176,13 +185,13 @@ export const ResourceNodePropertiesModal = ({ open, node, onClose, onSave, flowN
       })
       .catch((error) => {
         if (!cancelled) {
-          log.warn(`Failed to browse resources of ${boundServer}`, error);
+          log.warn(`Failed to browse resources of ${browseServer}`, error);
           setBrowseError(error instanceof Error ? error.message : String(error));
         }
       })
       .finally(() => { if (!cancelled) setIsBrowsing(false); });
     return () => { cancelled = true; };
-  }, [open, scope, boundServer, t]);
+  }, [browseServer, t]);
 
   const handleSave = () => {
     if (!node || !nodeData) return;

@@ -110,6 +110,14 @@ export const edgeTypes = {
   resourceEdge: ResourceEdge,
 };
 
+// Where a picked node is placed and what it connects to.
+interface NodePickerRequest {
+  screenPosition?: { x: number; y: number } | null;
+  sourceNodeId?: string;
+  sourceNodeType?: NodeType;
+  sourceHandleId?: string;
+}
+
 // NodeSelectionModal component
 const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
   open,
@@ -123,10 +131,11 @@ const NodeSelectionModal: React.FC<NodeSelectionModalProps> = ({
   const theme = useTheme();
   const { t } = useI18n();
   const [query, setQuery] = useState('');
-
-  useEffect(() => {
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
     if (open) setQuery('');
-  }, [open]);
+  }
 
   // Valid target node types come from the shared connection rules, so the
   // picker always agrees with validateConnection.
@@ -421,13 +430,9 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
   // xyflow snapshots the onConnectEnd callback at pointerdown, so state set
   // during the drag is invisible to the closure that runs at drop — it would
   // always see the *previous* drag's source.
-  const [nodeSelectionModal, setNodeSelectionModal] = useState<{
+  const [nodeSelectionModal, setNodeSelectionModal] = useState<NodePickerRequest & {
     open: boolean;
     position: { x: number; y: number } | null;
-    screenPosition?: { x: number; y: number } | null;
-    sourceNodeId?: string;
-    sourceNodeType?: NodeType;
-    sourceHandleId?: string;
   }>({ open: false, position: null });
 
   // Changes that add a node: deselect the current selection, then add the new
@@ -440,6 +445,105 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
       { type: 'add' as const, item: { ...newNode, selected: true } },
     ],
     [nodes]
+  );
+
+  // Inserts a node of the picked type and connects it to the request's source.
+  const insertConnectedNode = useCallback(
+    (request: NodePickerRequest, nodeType: NodeType, position: { x: number; y: number }) => {
+      log.debug(`insertConnectedNode: Selected node type ${nodeType} at position (${position.x}, ${position.y})`);
+
+      // Create through the parent-owned factory so every creation path shares
+      // constraints (notably the one-Trigger limit) and selection behavior.
+      if (nodeType === 'trigger' && nodes.some(node => node.type === 'trigger')) {
+        setNodeSelectionModal({ open: false, position: null });
+        return;
+      }
+
+      // Validate the proposed edge before committing the node. The picker is a
+      // one-click "insert and connect" action; if that insertion is no longer
+      // legal (for example because the source gained a successor), it must not
+      // leave a disconnected node behind.
+      const preparedNode = flowService.createNode(nodeType, position);
+      const { sourceNodeId, sourceHandleId } = request;
+      const sourceNode = sourceNodeId ? findNodeById(sourceNodeId, nodes) : undefined;
+      let pendingConnection: Connection | null = null;
+      if (sourceNode && sourceHandleId) {
+        pendingConnection = {
+          source: sourceNode.id,
+          sourceHandle: sourceHandleId,
+          target: preparedNode.id,
+          targetHandle: defaultTargetHandleFor(nodeType, sourceHandleId),
+        };
+        if (!validateConnection(pendingConnection, [...nodes, preparedNode], edges)) {
+          setNodeSelectionModal({ open: false, position: null });
+          return;
+        }
+      }
+
+      const newNode = onCreateNode
+        ? onCreateNode(nodeType, position, preparedNode)
+        : preparedNode;
+      if (!newNode) {
+        setNodeSelectionModal({ open: false, position: null });
+        return;
+      }
+      if (!onCreateNode) {
+        onNodesChange(buildAddNodeChanges(newNode));
+      }
+
+      if (pendingConnection) {
+        log.debug(`insertConnectedNode: Creating connection from ${pendingConnection.source} to ${pendingConnection.target}`);
+        const edge = createEdgeFromConnection(pendingConnection, [...nodes, newNode]);
+        const replaced = getReplacedEdgeIds(edge, edges);
+        onEdgesChange([
+          ...replaced.map(id => ({ type: 'remove' as const, id })),
+          { type: 'add' as const, item: edge },
+        ]);
+
+        log.debug(`insertConnectedNode: Edge created with id ${edge.id}`);
+      }
+
+      // Close the modal; this also discards the consumed connection source.
+      setNodeSelectionModal({ open: false, position: null });
+
+      const directConfigurationTarget = directConfigurationTargetFor(
+        request.sourceNodeType,
+        request.sourceHandleId,
+      );
+      if (directConfigurationTarget === nodeType) {
+        onConfigureNode?.(newNode);
+      } else {
+        // The persistent inspector follows ordinary additions; only singleton
+        // attachment targets open a blocking configuration picker.
+        onSelectNode?.(newNode);
+      }
+    },
+    [
+      nodes,
+      edges,
+      buildAddNodeChanges,
+      onNodesChange,
+      onEdgesChange,
+      onCreateNode,
+      onSelectNode,
+      onConfigureNode,
+    ]
+  );
+
+
+  // MCP and Resource connection handles have only one valid target, so they
+  // insert it at once instead of opening the picker. This covers both
+  // drag-to-pane and the floating quick-connect buttons.
+  const openNodePicker = useCallback(
+    (request: NodePickerRequest & { position: { x: number; y: number } }) => {
+      const target = directConfigurationTargetFor(request.sourceNodeType, request.sourceHandleId);
+      if (target) {
+        insertConnectedNode(request, target, request.position);
+        return;
+      }
+      setNodeSelectionModal({ open: true, ...request });
+    },
+    [insertConnectedNode]
   );
 
   // Add event listener for edit node from custom button
@@ -520,8 +624,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         position = { x: sourceNode.position.x - nextNodeWidth - gap, y: sourceNode.position.y };
       }
 
-      setNodeSelectionModal({
-        open: true,
+      openNodePicker({
         position,
         screenPosition: { x: detail.clientX, y: detail.clientY },
         sourceNodeId: sourceNode.id,
@@ -532,7 +635,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
 
     document.addEventListener(FLOW_QUICK_CONNECT_EVENT, handleQuickConnect);
     return () => document.removeEventListener(FLOW_QUICK_CONNECT_EVENT, handleQuickConnect);
-  }, [edges, nodes]);
+  }, [edges, nodes, openNodePicker]);
 
   // Enhanced onConnect handler with edge type determination and validation.
   // A new edge replaces any edge it logically duplicates (one MCP connection
@@ -866,8 +969,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
       log.debug(`onConnectEnd: Connection dropped on pane at position (${position.x}, ${position.y})`);
 
       // Show the node selection modal with the pending connection source
-      setNodeSelectionModal({
-        open: true,
+      openNodePicker({
         position,
         screenPosition: { x: point.clientX, y: point.clientY },
         sourceNodeId: fromNode.id,
@@ -875,104 +977,16 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         sourceHandleId: fromHandle.id,
       });
     },
-    [reactFlowInstance, edges]
+    [reactFlowInstance, edges, openNodePicker]
   );
 
   // Handle node type selection from modal
   const handleNodeTypeSelection = useCallback(
     (nodeType: NodeType, position: { x: number; y: number }) => {
-      log.debug(`handleNodeTypeSelection: Selected node type ${nodeType} at position (${position.x}, ${position.y})`);
-
-      // Create through the parent-owned factory so every creation path shares
-      // constraints (notably the one-Trigger limit) and selection behavior.
-      if (nodeType === 'trigger' && nodes.some(node => node.type === 'trigger')) {
-        setNodeSelectionModal({ open: false, position: null });
-        return;
-      }
-
-      // Validate the proposed edge before committing the node. The picker is a
-      // one-click "insert and connect" action; if that insertion is no longer
-      // legal (for example because the source gained a successor), it must not
-      // leave a disconnected node behind.
-      const preparedNode = flowService.createNode(nodeType, position);
-      const { sourceNodeId, sourceHandleId } = nodeSelectionModal;
-      const sourceNode = sourceNodeId ? findNodeById(sourceNodeId, nodes) : undefined;
-      let pendingConnection: Connection | null = null;
-      if (sourceNode && sourceHandleId) {
-        pendingConnection = {
-          source: sourceNode.id,
-          sourceHandle: sourceHandleId,
-          target: preparedNode.id,
-          targetHandle: defaultTargetHandleFor(nodeType, sourceHandleId),
-        };
-        if (!validateConnection(pendingConnection, [...nodes, preparedNode], edges)) {
-          setNodeSelectionModal({ open: false, position: null });
-          return;
-        }
-      }
-
-      const newNode = onCreateNode
-        ? onCreateNode(nodeType, position, preparedNode)
-        : preparedNode;
-      if (!newNode) {
-        setNodeSelectionModal({ open: false, position: null });
-        return;
-      }
-      if (!onCreateNode) {
-        onNodesChange(buildAddNodeChanges(newNode));
-      }
-
-      if (pendingConnection) {
-        log.debug(`handleNodeTypeSelection: Creating connection from ${pendingConnection.source} to ${pendingConnection.target}`);
-        const edge = createEdgeFromConnection(pendingConnection, [...nodes, newNode]);
-        const replaced = getReplacedEdgeIds(edge, edges);
-        onEdgesChange([
-          ...replaced.map(id => ({ type: 'remove' as const, id })),
-          { type: 'add' as const, item: edge },
-        ]);
-
-        log.debug(`handleNodeTypeSelection: Edge created with id ${edge.id}`);
-      }
-
-      // Close the modal; this also discards the consumed connection source.
-      setNodeSelectionModal({ open: false, position: null });
-
-      const directConfigurationTarget = directConfigurationTargetFor(
-        nodeSelectionModal.sourceNodeType,
-        nodeSelectionModal.sourceHandleId,
-      );
-      if (directConfigurationTarget === nodeType) {
-        onConfigureNode?.(newNode);
-      } else {
-        // The persistent inspector follows ordinary additions; only singleton
-        // attachment targets open a blocking configuration picker.
-        onSelectNode?.(newNode);
-      }
+      insertConnectedNode(nodeSelectionModal, nodeType, position);
     },
-    [
-      nodeSelectionModal,
-      nodes,
-      edges,
-      buildAddNodeChanges,
-      onNodesChange,
-      onEdgesChange,
-      onCreateNode,
-      onSelectNode,
-      onConfigureNode,
-    ]
+    [insertConnectedNode, nodeSelectionModal]
   );
-
-  // MCP and Resource connection handles have only one valid target. Consume
-  // that deterministic choice immediately, for both drag-to-pane and the
-  // floating quick-connect buttons.
-  useEffect(() => {
-    if (!nodeSelectionModal.open || !nodeSelectionModal.position) return;
-    const target = directConfigurationTargetFor(
-      nodeSelectionModal.sourceNodeType,
-      nodeSelectionModal.sourceHandleId,
-    );
-    if (target) handleNodeTypeSelection(target, nodeSelectionModal.position);
-  }, [handleNodeTypeSelection, nodeSelectionModal]);
 
   // Close the node selection modal, abandoning the pending connection.
   const handleCloseNodeSelectionModal = useCallback(() => {

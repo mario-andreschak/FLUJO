@@ -797,19 +797,23 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
   const { servers, isLoading: loadingServers, loadError } = useServerStatus();
   const serverPicker = useCardPicker<ServerState>('mcp', servers);
 
-  useEffect(() => {
-    if (!node) return;
-    const initialEntries = Array.isArray(node.data.properties?.entries)
-      ? node.data.properties.entries.map((entry: StaticEntry) => entry.kind === 'toolCall'
-        ? { executionMode: 'mock' as const, ...entry }
-        : entry.kind === 'humanGate' || entry.kind === 'modelDecision'
-          ? { ...entry }
-          : { ...entry, attachments: [...(entry.attachments ?? [])] })
-      : [];
-    setNodeData({ ...node.data, properties: { ...node.data.properties, entries: initialEntries } });
-    setExpandedEntries(new Set(initialEntries.map((_: StaticEntry, index: number) => index)));
-    setServerPickerEntry(null);
-  }, [node, open]);
+  const seedDeps = [node, open];
+  const [seededFor, setSeededFor] = useState<readonly unknown[] | null>(null);
+  if (!seededFor || seedDeps.some((dep, index) => dep !== seededFor[index])) {
+    setSeededFor(seedDeps);
+    if (node) {
+      const initialEntries = Array.isArray(node.data.properties?.entries)
+        ? node.data.properties.entries.map((entry: StaticEntry) => entry.kind === 'toolCall'
+          ? { executionMode: 'mock' as const, ...entry }
+          : entry.kind === 'humanGate' || entry.kind === 'modelDecision'
+            ? { ...entry }
+            : { ...entry, attachments: [...(entry.attachments ?? [])] })
+        : [];
+      setNodeData({ ...node.data, properties: { ...node.data.properties, entries: initialEntries } });
+      setExpandedEntries(new Set(initialEntries.map((_: StaticEntry, index: number) => index)));
+      setServerPickerEntry(null);
+    }
+  }
 
   const entries = (nodeData?.properties?.entries ?? EMPTY_STATIC_ENTRIES) as StaticEntry[];
   const realToolRefs = useMemo(() => entries
@@ -820,12 +824,12 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
     .map((entry) => ({ server: entry.serverName!.trim(), tool: entry.toolName.trim() }))
     .sort((a, b) => `${a.server}:${a.tool}`.localeCompare(`${b.server}:${b.tool}`)), [entries]);
 
+  const toolSuggestionsOff = !open || realToolRefs.length === 0;
+  if (toolSuggestionsOff && toolReferenceSuggestions.length > 0) setToolReferenceSuggestions([]);
+
   useEffect(() => {
+    if (toolSuggestionsOff) return;
     let cancelled = false;
-    if (!open || realToolRefs.length === 0) {
-      setToolReferenceSuggestions([]);
-      return () => { cancelled = true; };
-    }
     const toolsByServer = new Map<string, Set<string>>();
     for (const ref of realToolRefs) {
       const names = toolsByServer.get(ref.server) ?? new Set<string>();
@@ -849,7 +853,7 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
       if (!cancelled) setToolReferenceSuggestions(groups.flat());
     });
     return () => { cancelled = true; };
-  }, [open, realToolRefs]);
+  }, [toolSuggestionsOff, realToolRefs]);
 
   const setEntries = (next: StaticEntry[]) => setNodeData((previous) => previous
     ? { ...previous, properties: { ...previous.properties, entries: next } }

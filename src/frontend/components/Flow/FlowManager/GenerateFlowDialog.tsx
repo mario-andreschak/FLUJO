@@ -155,15 +155,18 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
     };
   }, [open, t]);
 
-  useEffect(() => {
-    if (!open) return;
-    setWireMessages([]);
-    setDraft(null);
-    setAllowInstall(false);
-    setMaxDepth(DEFAULT_SUBFLOW_DEPTH);
-    dispatchVisual({ type: 'reset' });
-    setError(null);
-  }, [open]);
+  const [wasOpen, setWasOpen] = useState(false);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) {
+      setWireMessages([]);
+      setDraft(null);
+      setAllowInstall(false);
+      setMaxDepth(DEFAULT_SUBFLOW_DEPTH);
+      dispatchVisual({ type: 'reset' });
+      setError(null);
+    }
+  }
 
   const visibleMessages = useMemo(() => displayMessages(wireMessages), [wireMessages]);
 

@@ -50,13 +50,20 @@ const FlowVersionHistoryDialog: React.FC<FlowVersionHistoryDialogProps> = ({
   const [previewFlow, setPreviewFlow] = useState<Flow | null>(null);
 
   // Load the version list whenever the dialog opens for a saved flow.
+  const listKey = open && flowId ? flowId : null;
+  const [listedFor, setListedFor] = useState<string | null>(null);
+  if (listKey !== listedFor) {
+    setListedFor(listKey);
+    if (listKey) {
+      setLoadingList(true);
+      setVersions([]);
+      setSelectedId(null);
+      setPreviewFlow(null);
+    }
+  }
   useEffect(() => {
     if (!open || !flowId) return;
     let cancelled = false;
-    setLoadingList(true);
-    setVersions([]);
-    setSelectedId(null);
-    setPreviewFlow(null);
     flowService
       .listFlowVersions(flowId)
       .then((list) => {

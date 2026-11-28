@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -48,7 +48,10 @@ export const SignalNodePropertiesModal = ({ open, node, onClose, onSave }: Signa
   } | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
-  useEffect(() => {
+  const seedDeps = [node, open];
+  const [seededFor, setSeededFor] = useState<readonly unknown[] | null>(null);
+  if (!seededFor || seedDeps.some((dep, index) => dep !== seededFor[index])) {
+    setSeededFor(seedDeps);
     if (node) {
       setNodeData({
         ...node.data,
@@ -58,7 +61,7 @@ export const SignalNodePropertiesModal = ({ open, node, onClose, onSave }: Signa
       // so legacy/AI-authored payloads stay visible when re-editing.
       setShowAdvanced(!!node.data.properties?.payloadTemplate);
     }
-  }, [node, open]);
+  }
 
   const setProperty = (key: string, value: unknown) => {
     setNodeData((prev) => (prev ? { ...prev, properties: { ...prev.properties, [key]: value } } : prev));

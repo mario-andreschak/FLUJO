@@ -594,11 +594,9 @@ export default function DayView({
     [internalDate, selectedDateMs],
   );
 
+  const clockNow = suppliedNow ?? liveNow;
   useEffect(() => {
-    if (suppliedNow !== undefined) {
-      setLiveNow(suppliedNow);
-      return;
-    }
+    if (suppliedNow !== undefined) return;
     const timer = setInterval(() => setLiveNow(Date.now()), 30_000);
     return () => clearInterval(timer);
   }, [suppliedNow]);
@@ -675,7 +673,7 @@ export default function DayView({
           size="small"
           variant="outlined"
           startIcon={<TodayRoundedIcon />}
-          onClick={() => setDate(new Date(liveNow))}
+          onClick={() => setDate(new Date(clockNow))}
         >
           {t('waves.day.today')}
         </Button>
@@ -752,7 +750,7 @@ export default function DayView({
             <Box sx={{ maxWidth: 320, mx: 'auto', pt: 1.25 }}>
               <DayViewMiniMonth
                 selectedDate={currentDate}
-                today={new Date(liveNow)}
+                today={new Date(clockNow)}
                 packages={schedule.packages}
                 hiddenPackages={hiddenPackages}
                 packageColor={packageColor}
@@ -784,7 +782,7 @@ export default function DayView({
         >
           <DayViewMiniMonth
             selectedDate={currentDate}
-            today={new Date(liveNow)}
+            today={new Date(clockNow)}
             packages={schedule.packages}
             hiddenPackages={hiddenPackages}
             packageColor={packageColor}
@@ -818,7 +816,7 @@ export default function DayView({
           ) : (
             <DesktopTimeline
               date={currentDate}
-              now={liveNow}
+              now={clockNow}
               items={visibleTimed}
               packageColor={packageColor}
               onActivate={activate}

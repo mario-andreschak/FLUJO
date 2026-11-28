@@ -91,7 +91,7 @@ const PlannedExecutionsManager = () => {
   const [paused, setPaused] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
+  const [refreshing, setRefreshing] = useState(true);
   const [changingPause, setChangingPause] = useState(false);
   const [pauseRetry, setPauseRetry] = useState<boolean | null>(null);
   const [deletePending, setDeletePending] = useState(false);
@@ -136,13 +136,10 @@ const PlannedExecutionsManager = () => {
   const [groupAnchorEl, setGroupAnchorEl] = useState<null | HTMLElement>(null);
   const collapsedKeys = useMemo(() => new Set(collapsedList), [collapsedList]);
 
-  const refresh = useCallback(async () => {
-    if (pausePendingRef.current || deletePendingRef.current) return;
+  const fetchEntries = useCallback(() => {
     const currentRequest = ++requestId.current;
     refreshingRef.current = true;
-    setRefreshing(true);
-    try {
-      const response = await plannedExecutionsService.list({ throwOnError: true });
+    return plannedExecutionsService.list({ throwOnError: true }).then((response) => {
       if (currentRequest !== requestId.current) return;
       setEntries(response.executions);
       setPaused(response.paused);
@@ -159,22 +156,28 @@ const PlannedExecutionsManager = () => {
         setDeleting(null);
         setDeleteError(false);
       }
-    } catch (error) {
+    }).catch((error) => {
       if (currentRequest !== requestId.current) return;
       log.warn('Failed to refresh schedules', error);
       setLoadError(true);
-    } finally {
+    }).finally(() => {
       if (currentRequest === requestId.current) {
         refreshingRef.current = false;
         setRefreshing(false);
       }
-    }
+    });
   }, []);
 
+  const refresh = useCallback(() => {
+    if (pausePendingRef.current || deletePendingRef.current) return Promise.resolve();
+    setRefreshing(true);
+    return fetchEntries();
+  }, [fetchEntries]);
+
   useEffect(() => {
-    void refresh();
+    void fetchEntries();
     return () => { requestId.current += 1; };
-  }, [refresh]);
+  }, [fetchEntries]);
 
   // Triggers fire in the background (schedules, external webhooks, watchers),
   // so poll for fresh statuses while the page is actually being looked at.

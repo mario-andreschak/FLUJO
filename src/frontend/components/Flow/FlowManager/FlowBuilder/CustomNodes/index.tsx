@@ -270,13 +270,17 @@ const CustomNode = ({ id, data, nodeType, selected }: CustomNodeProps & { select
 
   // Selection opens the inspector and pins the add-and-connect controls. This
   // keeps the common "select, then continue building" gesture to one click.
+  const [wasSelected, setWasSelected] = useState(selected);
+  if (selected !== wasSelected) {
+    setWasSelected(selected);
+    if (selected) setHoverReady(false);
+  }
   useEffect(() => {
     if (!selected) return;
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
     if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
     hoverTimerRef.current = null;
     hideTimerRef.current = null;
-    setHoverReady(false);
   }, [selected]);
 
   const quickConnectVisible = !!selected || hoverReady;

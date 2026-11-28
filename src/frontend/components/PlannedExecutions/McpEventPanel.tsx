@@ -70,15 +70,21 @@ const McpEventPanel = ({ config, onChange }: McpEventPanelProps) => {
     return () => { cancelled = true; };
   }, []);
 
-  useEffect(() => {
-    if (!config.serverName) {
+  const [eventsFor, setEventsFor] = useState<{ serverName: typeof config.serverName } | null>(null);
+  if (!eventsFor || eventsFor.serverName !== config.serverName) {
+    setEventsFor({ serverName: config.serverName });
+    if (config.serverName) {
+      setLoading(true);
+    } else {
       setEvents([]);
       setSupported(true);
       setChannel(true);
-      return;
     }
+  }
+
+  useEffect(() => {
+    if (!config.serverName) return;
     let cancelled = false;
-    setLoading(true);
     mcpService.listServerEvents(config.serverName)
       .then(result => {
         if (cancelled) return;

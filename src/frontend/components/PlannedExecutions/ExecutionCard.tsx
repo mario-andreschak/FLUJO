@@ -169,23 +169,32 @@ const ExecutionCard = ({
       })
     : '';
 
-  const loadRuns = useCallback(async () => {
-    setLoadingRuns(true);
-    const loaded = await plannedExecutionsService.loadRuns(execution.id);
+  const fetchRuns = useCallback(() => plannedExecutionsService.loadRuns(execution.id).then((loaded) => {
     // Newest first for display.
     setRuns([...loaded].reverse());
     // Start each (re)load at the first page; older runs are revealed on demand.
     setVisibleCount(RUNS_PAGE_SIZE);
     setLoadingRuns(false);
-  }, [execution.id]);
+  }), [execution.id]);
+
+  const loadRuns = () => {
+    setLoadingRuns(true);
+    return fetchRuns();
+  };
 
   // Reload on expand AND whenever the list poller reports a fresh last run,
   // so an expanded history keeps up with background fires (webhooks, schedules).
+  const runsDeps = [expanded, execution.id, lastRun?.runId];
+  const [runsLoadedFor, setRunsLoadedFor] = useState<readonly unknown[] | null>(null);
+  if (!runsLoadedFor || runsDeps.some((dep, index) => dep !== runsLoadedFor[index])) {
+    setRunsLoadedFor(runsDeps);
+    if (expanded) setLoadingRuns(true);
+  }
   useEffect(() => {
     if (expanded) {
-      void loadRuns();
+      void fetchRuns();
     }
-  }, [expanded, loadRuns, lastRun?.runId]);
+  }, [expanded, fetchRuns, lastRun?.runId]);
 
   const handleRunNow = async () => {
     setRunningNow(true);

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
     Dialog,
     DialogContent,
@@ -108,6 +108,17 @@ export function getInitialProcessSection(
     : 'basic';
 }
 
+function initialProcessSection(
+  mode: 'create' | 'edit',
+  authoringMode: FlowAuthoringMode,
+  node: FlowNode | null,
+): SectionKey {
+  if (mode === 'create') return 'basic';
+  return authoringMode === 'guided'
+    ? getInitialProcessSection(authoringMode, node?.data.properties?.promptTemplate)
+    : 'task';
+}
+
 export const ProcessNodePropertiesModal = ({
   open,
   node,
@@ -196,12 +207,10 @@ export const ProcessNodePropertiesModal = ({
   // IntersectionObserver so it doesn't flicker the active tab through sections.
   const isProgrammaticScroll = useRef(false);
 
-  useEffect(() => {
-    if (authoringMode === 'guided' && (activeSection === 'io' || activeSection === 'advanced')) {
-      setActiveSection('basic');
-    }
-    if (authoringMode === 'guided' && activeTab !== 'server') setActiveTab('server');
-  }, [activeSection, activeTab, authoringMode]);
+  if (authoringMode === 'guided' && (activeSection === 'io' || activeSection === 'advanced')) {
+    setActiveSection('basic');
+  }
+  if (authoringMode === 'guided' && activeTab !== 'server') setActiveTab('server');
 
   useEffect(() => {
     taskToolsWidthRef.current = taskToolsWidth;
@@ -276,18 +285,18 @@ export const ProcessNodePropertiesModal = ({
 
   const [resourceSuggestions, setResourceSuggestions] = useState<PromptReferenceSuggestion[]>([]);
 
+  const resourceServerNames = useMemo(() => [...new Set(
+    connectedMcpNodes
+      .filter((connected) => connected.status === 'connected')
+      .map((connected) => connected.serverName),
+  )], [connectedMcpNodes]);
+  const resourceSuggestionsOff = !open || resourceServerNames.length === 0;
+  if (resourceSuggestionsOff && resourceSuggestions.length > 0) setResourceSuggestions([]);
+
   useEffect(() => {
+    if (resourceSuggestionsOff) return;
     let cancelled = false;
-    const serverNames = [...new Set(
-      connectedMcpNodes
-        .filter((connected) => connected.status === 'connected')
-        .map((connected) => connected.serverName),
-    )];
-    if (!open || serverNames.length === 0) {
-      setResourceSuggestions([]);
-      return () => { cancelled = true; };
-    }
-    void Promise.all(serverNames.map(async (serverName) => {
+    void Promise.all(resourceServerNames.map(async (serverName) => {
       try {
         const result = await mcpService.listServerResources(serverName);
         const contexts = connectedMcpNodes.filter((connected) => connected.serverName === serverName);
@@ -319,7 +328,7 @@ export const ProcessNodePropertiesModal = ({
       if (!cancelled) setResourceSuggestions(groups.flat());
     });
     return () => { cancelled = true; };
-  }, [open, connectedMcpNodes]);
+  }, [resourceSuggestionsOff, resourceServerNames, connectedMcpNodes]);
 
   const referenceSuggestions = React.useMemo<PromptReferenceSuggestion[]>(() => {
     const toolSuggestions = connectedMcpNodes.flatMap((connected) => {
@@ -384,62 +393,66 @@ export const ProcessNodePropertiesModal = ({
   }, [open, node, handoffTools]);
 
     // Load prompt template and model binding status when node changes
-  useEffect(() => {
-    if (!open) return;
+  const seedDeps = [node, open, mode, authoringMode];
+  const [seededFor, setSeededFor] = useState<readonly unknown[] | null>(null);
+  if (!seededFor || seedDeps.some((dep, index) => dep !== seededFor[index])) {
+    setSeededFor(seedDeps);
+    if (open) {
+      if (node) {
+        const properties = node.data.properties as ProcessNodeProperties;
+        // Always load the prompt template from the node's properties
+        const savedPromptTemplate = properties.promptTemplate ?? '';
+        setPromptTemplate(savedPromptTemplate);
 
-    if (node) {
-      const properties = node.data.properties as ProcessNodeProperties;
-      // Always load the prompt template from the node's properties
-      const savedPromptTemplate = properties.promptTemplate ?? '';
-      setPromptTemplate(savedPromptTemplate);
+        // Set model binding status
+        if (properties.boundModel) {
+          setIsModelBound(true);
+        } else {
+          setIsModelBound(false);
+        }
 
-      // Set model binding status
-      if (properties.boundModel) {
-        setIsModelBound(true);
-      } else {
-        setIsModelBound(false);
+        // Load toggle states from node properties if they exist
+        setExcludeModelPrompt(properties.excludeModelPrompt ?? false);
+        setExcludeStartNodePrompt(properties.excludeStartNodePrompt ?? false);
+        setExcludeSystemPrompt(properties.excludeSystemPrompt ?? false);
+        setExcludeSystemPromptSections(normalizeExcludedSystemPromptSections(properties.excludeSystemPromptSections));
+        setSystemPromptPolicy(properties.systemPromptPolicy === 'per-turn' ? 'per-turn' : 'stable');
+        setInputMode(properties.inputMode ?? 'full-history');
+        setIsolatedPrompt(properties.isolatedPrompt ?? '');
+        setAllowCallerPrompt(properties.allowCallerPrompt !== false);
+        setOutputMode(properties.outputMode ?? 'full-conversation');
+        setEnableTodoTool(properties.enableTodoTool ?? false);
+        setToolLoading(normalizeToolLoadingMode(properties.toolLoading));
+        setCodeMode(normalizeCodeModeSetting(properties.codeMode));
+        const toolResultLimitForm = toolResultLimitFormValues(properties.toolResultLimit);
+        setToolResultLimitChoice(toolResultLimitForm.choice);
+        setToolResultLimitKb(toolResultLimitForm.sizeKb);
+        setRequireApprovalForWrites(properties.requireApprovalForWrites === true);
+        setPersonaAbilities(normalizePersonaAbilities(properties.personaTools));
+
+        // Data-flow capture (issue #203). parseKvRef('') → { scope:'folder', key:'' }.
+        setCaptureVariable(properties.captureVariable ?? '');
+        setCaptureResource(properties.captureResource ?? '');
+        const kvParsed = parseKvRef(properties.captureKv ?? '');
+        setCaptureKvScope(kvParsed.scope);
+        setCaptureKvKey(kvParsed.key || '');
+
       }
 
-      // Load toggle states from node properties if they exist
-      setExcludeModelPrompt(properties.excludeModelPrompt ?? false);
-      setExcludeStartNodePrompt(properties.excludeStartNodePrompt ?? false);
-      setExcludeSystemPrompt(properties.excludeSystemPrompt ?? false);
-      setExcludeSystemPromptSections(normalizeExcludedSystemPromptSections(properties.excludeSystemPromptSections));
-      setSystemPromptPolicy(properties.systemPromptPolicy === 'per-turn' ? 'per-turn' : 'stable');
-      setInputMode(properties.inputMode ?? 'full-history');
-      setIsolatedPrompt(properties.isolatedPrompt ?? '');
-      setAllowCallerPrompt(properties.allowCallerPrompt !== false);
-      setOutputMode(properties.outputMode ?? 'full-conversation');
-      setEnableTodoTool(properties.enableTodoTool ?? false);
-      setToolLoading(normalizeToolLoadingMode(properties.toolLoading));
-      setCodeMode(normalizeCodeModeSetting(properties.codeMode));
-      const toolResultLimitForm = toolResultLimitFormValues(properties.toolResultLimit);
-      setToolResultLimitChoice(toolResultLimitForm.choice);
-      setToolResultLimitKb(toolResultLimitForm.sizeKb);
-      setRequireApprovalForWrites(properties.requireApprovalForWrites === true);
-      setPersonaAbilities(normalizePersonaAbilities(properties.personaTools));
-
-      // Data-flow capture (issue #203). parseKvRef('') → { scope:'folder', key:'' }.
-      setCaptureVariable(properties.captureVariable ?? '');
-      setCaptureResource(properties.captureResource ?? '');
-      const kvParsed = parseKvRef(properties.captureKv ?? '');
-      setCaptureKvScope(kvParsed.scope);
-      setCaptureKvKey(kvParsed.key || '');
-
+      // Reset both navigation levels whenever the modal target or open state changes.
+      // Issue #320: editing an existing step opens directly on Task, creating a new
+      // one starts on Basic. Guided sessions keep the softer heuristic from the
+      // guided-authoring work: a guided edit only jumps to Task once the step has an
+      // authored task prompt, otherwise the author is sent to Basic first.
+      setActiveSection(initialProcessSection(mode, authoringMode, node));
+      setActiveTab('server');
     }
+  }
 
-    // Reset both navigation levels whenever the modal target or open state changes.
-    // Issue #320: editing an existing step opens directly on Task, creating a new
-    // one starts on Basic. Guided sessions keep the softer heuristic from the
-    // guided-authoring work: a guided edit only jumps to Task once the step has an
-    // authored task prompt, otherwise the author is sent to Basic first.
-    const initialSection: SectionKey = mode === 'create'
-      ? 'basic'
-      : authoringMode === 'guided'
-        ? getInitialProcessSection(authoringMode, node?.data.properties?.promptTemplate)
-        : 'task';
-    setActiveSection(initialSection);
-    setActiveTab('server');
+  // Scroll the opening section into view whenever the modal target or open state changes.
+  useEffect(() => {
+    if (!open) return;
+    const initialSection = initialProcessSection(mode, authoringMode, node);
     isProgrammaticScroll.current = true;
     const frame = window.requestAnimationFrame(() => {
       const target = sectionRefs[initialSection].current;

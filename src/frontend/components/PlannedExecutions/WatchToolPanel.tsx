@@ -89,13 +89,16 @@ const WatchToolPanel = ({ config, onChange }: WatchToolPanelProps) => {
   }, []);
 
   // Load the selected server's tools.
+  const [toolsFor, setToolsFor] = useState<{ serverName: typeof config.serverName } | null>(null);
+  if (!toolsFor || toolsFor.serverName !== config.serverName) {
+    setToolsFor({ serverName: config.serverName });
+    if (config.serverName) setLoadingTools(true);
+    else setTools([]);
+  }
+
   useEffect(() => {
-    if (!config.serverName) {
-      setTools([]);
-      return;
-    }
+    if (!config.serverName) return;
     let cancelled = false;
-    setLoadingTools(true);
     mcpService.listServerTools(config.serverName)
       .then(({ tools: loaded }: { tools: ToolEntry[] }) => {
         if (!cancelled) setTools(loaded || []);

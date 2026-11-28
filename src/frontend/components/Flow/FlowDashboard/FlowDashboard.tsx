@@ -125,7 +125,7 @@ const FlowDashboard = ({
   const [groupMode, setGroupMode] = useWorkspaceUiPreference<GroupMode>('flujo-ui:flows:group', DEFAULT_CARD_GROUP_MODE);
   const [groupAnchorEl, setGroupAnchorEl] = useState<null | HTMLElement>(null);
   const [modelSelectionMode, setModelSelectionMode] = useState(false);
-  const [selectedForModelChange, setSelectedForModelChange] = useState<Set<string>>(new Set());
+  const [pickedForModelChange, setPickedForModelChange] = useState<Set<string>>(new Set());
   const [quickChangeOpen, setQuickChangeOpen] = useState(false);
   // Keys of the sections the user has collapsed; everything defaults to expanded.
   // Persisted as a string[] and re-derived into a Set for O(1) lookups.
@@ -183,13 +183,11 @@ const FlowDashboard = ({
     };
   }, []);
 
-  useEffect(() => {
+  const selectedForModelChange = useMemo(() => {
     const availableIds = new Set(flows.map((flow) => flow.id));
-    setSelectedForModelChange((current) => {
-      const next = new Set(Array.from(current).filter((id) => availableIds.has(id)));
-      return next.size === current.size ? current : next;
-    });
-  }, [flows]);
+    const available = Array.from(pickedForModelChange).filter((id) => availableIds.has(id));
+    return available.length === pickedForModelChange.size ? pickedForModelChange : new Set(available);
+  }, [flows, pickedForModelChange]);
 
   // Where-used (#1278): which agents call each flow as a subflow.
   const subflowUsedBy = useMemo(() => subflowUsage(flows), [flows]);
@@ -249,7 +247,7 @@ const FlowDashboard = ({
   };
 
   const toggleModelSelection = (flowId: string) => {
-    setSelectedForModelChange((current) => {
+    setPickedForModelChange((current) => {
       const next = new Set(current);
       if (next.has(flowId)) next.delete(flowId);
       else next.add(flowId);
@@ -259,7 +257,7 @@ const FlowDashboard = ({
 
   const leaveModelSelectionMode = () => {
     setModelSelectionMode(false);
-    setSelectedForModelChange(new Set());
+    setPickedForModelChange(new Set());
     setQuickChangeOpen(false);
   };
   
@@ -405,13 +403,13 @@ const FlowDashboard = ({
                 <>
                   <Button
                     size="small"
-                    onClick={() => setSelectedForModelChange(new Set(filteredFlows.map((flow) => flow.id)))}
+                    onClick={() => setPickedForModelChange(new Set(filteredFlows.map((flow) => flow.id)))}
                   >
                     {t('flows.quickModels.selectVisible')}
                   </Button>
                   <Button
                     size="small"
-                    onClick={() => setSelectedForModelChange(new Set())}
+                    onClick={() => setPickedForModelChange(new Set())}
                     disabled={selectedForModelChange.size === 0}
                   >
                     {t('flows.quickModels.clear')}
@@ -707,7 +705,7 @@ const FlowDashboard = ({
             const result = await onReplaceModels(Array.from(selectedForModelChange), replacements);
             if (result.updatedFlowCount > 0 || result.failedFlowCount === 0) {
               setModelSelectionMode(false);
-              setSelectedForModelChange(new Set());
+              setPickedForModelChange(new Set());
             }
             return result;
           }}

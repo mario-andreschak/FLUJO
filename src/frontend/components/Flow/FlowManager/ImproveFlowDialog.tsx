@@ -69,9 +69,11 @@ const ImproveFlowDialog = ({ open, onClose, currentFlow, onImproved, initialDesc
 
   // Seed the description from `initialDescription` each time the dialog opens (used by
   // AI-supported repair to pre-fill the repair instruction; the user can still edit it).
-  useEffect(() => {
+  const [seededFor, setSeededFor] = useState<{ open: boolean; initialDescription?: string } | null>(null);
+  if (!seededFor || seededFor.open !== open || seededFor.initialDescription !== initialDescription) {
+    setSeededFor({ open, initialDescription });
     if (open) setDescription(initialDescription ?? '');
-  }, [open, initialDescription]);
+  }
 
   // Load the configured models when the dialog opens (frontend model list is masked).
   useEffect(() => {
