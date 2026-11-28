@@ -150,58 +150,54 @@ describe('callTool timeout handling', () => {
   });
 
   it('cancels an in-flight MCP Task with a fresh request when polling is aborted', async () => {
-    jest.useFakeTimers();
-    try {
-      const controller = new AbortController();
-      const callToolMock = jest.fn(async () => ({
-        task: {
-          taskId: 'task-running',
-          status: 'working',
-          pollInterval: 1_000,
-        },
-      }));
-      const requestMock = jest.fn(async (
-        request: { method: string },
-        _schema?: unknown,
-        _options?: unknown,
-      ) => {
-        if (request.method === 'tasks/get') {
-          controller.abort();
-          throw new Error('poll aborted');
-        }
-        return {};
-      });
-      const client = {
-        __flujoBeta: true,
-        callTool: callToolMock,
-        request: requestMock,
-      } as unknown as Client;
+    // A real clock: every task is saved to disk before its first status check
+    // (#1449 made that the default), and a fake clock cannot wait for file I/O.
+    const controller = new AbortController();
+    const callToolMock = jest.fn(async () => ({
+      task: {
+        taskId: 'task-running',
+        status: 'working',
+        pollInterval: 1_000,
+      },
+    }));
+    const requestMock = jest.fn(async (
+      request: { method: string },
+      _schema?: unknown,
+      _options?: unknown,
+    ) => {
+      if (request.method === 'tasks/get') {
+        controller.abort();
+        throw new Error('poll aborted');
+      }
+      return {};
+    });
+    const client = {
+      __flujoBeta: true,
+      callTool: callToolMock,
+      request: requestMock,
+    } as unknown as Client;
 
-      const pending = callTool(
-        client,
-        'srv',
-        'demo',
-        {},
-        undefined,
-        undefined,
-        controller.signal,
-      );
-      await jest.advanceTimersByTimeAsync(1_000);
-      const result = await pending;
+    const pending = callTool(
+      client,
+      'srv',
+      'demo',
+      {},
+      undefined,
+      undefined,
+      controller.signal,
+    );
+    const result = await pending;
 
-      expect(result.errorType).toBe('cancelled');
-      const cancelCall = requestMock.mock.calls.find(
-        ([request]) => request.method === 'tasks/cancel',
-      );
-      expect(cancelCall).toBeDefined();
-      expect(cancelCall?.[0]).toEqual({
-        method: 'tasks/cancel',
-        params: { taskId: 'task-running' },
-      });
-      expect(cancelCall?.[2]).toEqual({ timeout: 10_000 });
-      expect(cancelCall?.[2]).not.toHaveProperty('signal');
-    } finally {
-      jest.useRealTimers();
-    }
+    expect(result.errorType).toBe('cancelled');
+    const cancelCall = requestMock.mock.calls.find(
+      ([request]) => request.method === 'tasks/cancel',
+    );
+    expect(cancelCall).toBeDefined();
+    expect(cancelCall?.[0]).toEqual({
+      method: 'tasks/cancel',
+      params: { taskId: 'task-running' },
+    });
+    expect(cancelCall?.[2]).toEqual({ timeout: 10_000 });
+    expect(cancelCall?.[2]).not.toHaveProperty('signal');
   });
 });
