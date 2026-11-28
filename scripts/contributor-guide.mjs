@@ -261,7 +261,8 @@ export function summaryMarkdown(report) {
     '',
     report.result === 'passed' ? 'Every step of the guide worked.' : `Stopped: ${report.error}`,
     '',
-    `Commit ${report.commit}. Node.js ${report.versions.node}, npm ${report.versions.npm}, ${report.versions.git}.`,
+    `Commit ${report.commit}. Node.js ${report.versions.node}, npm ${report.versions.npm}, ${report.versions.git}.`
+      + (report.cloneMegabytes ? ` The clone with its installed packages took ${report.cloneMegabytes} MB.` : ''),
     '',
     '| Section | Command | Time | Result |',
     '| --- | --- | --- | --- |',
@@ -318,6 +319,10 @@ export async function walk({ source = ROOT, reportDir, echo = process.stdout } =
         entry.seconds = (Date.now() - started) / 1000;
       }
     }
+    const size = clone ? spawnSync('du', ['-sk', clone], { encoding: 'utf8' }) : undefined;
+    if (size?.status === 0) report.cloneMegabytes = Math.round(Number.parseInt(size.stdout, 10) / 1024);
+    const changed = clone ? git(['status', '--porcelain'], clone) : '';
+    if (changed) throw new Error(`Following the guide changed files the reader never touched, which would end up in their first pull request:\n${changed}`);
   } catch (error) {
     report.result = 'failed';
     report.error = error.message;

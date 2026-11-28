@@ -132,7 +132,7 @@ test('a server step waits for the guide\'s address to answer, presses Ctrl+C and
   const silent = { script: 'sleep 30', url: `http://127.0.0.1:${await freePort()}/` };
   await assert.rejects(runServerStep(silent, state, { logFile: path.join(dir, 'silent.log'), readyMs: 1_000, stopMs: 1_000 }), /did not answer/);
   const crashed = { script: 'node -e "process.exit(3)"', url: silent.url };
-  await assert.rejects(runServerStep(crashed, state, { logFile: path.join(dir, 'crashed.log'), readyMs: 20_000, stopMs: 1_000 }), /stopped before it answered \(exit 3\)/);
+  await assert.rejects(runServerStep(crashed, state, { logFile: path.join(dir, 'crashed.log'), readyMs: 20_000, stopMs: 1_000 }), /stopped before it answered at http:\/\/127\.0\.0\.1:\d+\/ \(exit 3\)/);
 });
 
 test('walk clones the commit under test into FLUJO/, follows a guide end to end and cleans up', posixOnly, async (t) => {
@@ -177,4 +177,11 @@ test('walk clones the commit under test into FLUJO/, follows a guide end to end 
   assert.equal(failed.result, 'failed');
   assert.match(failed.error, /"git clone https:\/\/github\.com\/YOUR-NAME\/FLUJO\.git" in "1\. Get your own copy" \(docs\/contributing\/README\.md:5\) failed \(exit 1\)/);
   assert.deepEqual(failed.steps.map((step) => step.result), ['failed']);
+
+  writeFileSync(path.join(source, GUIDE), readFileSync(path.join(source, GUIDE), 'utf8').replace('cd FLUJO\nfalse', 'cd FLUJO\necho stray > stray.txt'));
+  git('-c', 'user.name=FLUJO guide fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qam', 'guide that edits a file');
+  const dirty = await walk({ source, reportDir: reports, echo: null });
+  assert.equal(dirty.result, 'failed');
+  assert.match(dirty.error, /changed files the reader never touched[\s\S]*stray\.txt/);
+  assert.ok(dirty.steps.every((step) => step.result === 'passed'), 'every step ran; only the leftover change failed the walk');
 });
