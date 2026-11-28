@@ -15,7 +15,7 @@
     },
     {
       "file": "src/backend/execution/flow/handlers/ModelHandler.ts",
-      "maxLines": 1863,
+      "maxLines": 1793,
       "modules": [
         "src/backend/execution/flow/handlers/toolCallProcessing.ts",
         "src/backend/execution/flow/handlers/modelMedia.ts",
@@ -30,7 +30,8 @@
         "src/backend/execution/flow/handlers/modelSteering.ts",
         "src/backend/execution/flow/handlers/modelTurnResult.ts",
         "src/backend/execution/flow/handlers/providerWire.ts",
-        "src/backend/execution/flow/handlers/contextOverflowRetry.ts"
+        "src/backend/execution/flow/handlers/contextOverflowRetry.ts",
+        "src/backend/execution/flow/handlers/providerAttemptStatistics.ts"
       ]
     },
     {

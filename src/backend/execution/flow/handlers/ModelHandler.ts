@@ -92,17 +92,8 @@ import { upsertMessageById } from '@/backend/execution/flow/conversationMessages
 import { normaliseOllamaRoot, withOllamaLock, getLoadedModel, setLoadedModel } from '@/backend/services/ollama/modelRegistry';
 import { unloadModel } from '@/backend/services/ollama';
 import { v4 as uuidv4 } from 'uuid'; // Import uuid
-import {
-  classifyStatisticsError,
-  createStatisticsEvent,
-  credentialFingerprint,
-  recordStatisticsEvent,
-} from '@/backend/services/statistics';
-import {
-  newStatisticsInvocationId,
-  statisticsAttemptId,
-  statisticsCacheOutcomeFromUsage,
-} from '@/backend/services/statistics/metadata';
+import { classifyStatisticsError, credentialFingerprint } from '@/backend/services/statistics';
+import { newStatisticsInvocationId } from '@/backend/services/statistics/metadata';
 import { processToolCallsAdmitted, resolveToolUiLink } from './toolCallProcessing';
 import { isAutoUnloadOllamaEnabled, isExperimentalFlagEnabled } from './modelHandlerSettings';
 import { isStreamedAssistantProse, removeFailedStreamedAssistantProse } from './streamedAssistantMessages';
@@ -116,6 +107,7 @@ import { createModelSteering } from './modelSteering';
 import { materializeModelTurn } from './modelTurnResult';
 import { prepareProviderWire } from './providerWire';
 import { refitWireAfterContextOverflow } from './contextOverflowRetry';
+import { createProviderAttemptRecorder } from './providerAttemptStatistics';
 
 export { extractGeneratedImageParts } from './modelMedia';
 
@@ -815,7 +807,6 @@ export class ModelHandler {
         : null;
       let opaqueCredentialId = await credentialFingerprint(decryptedApiKey).catch(() => undefined);
       let routingModel = model;
-      let providerAttemptOrdinal = 0;
       // One LOGICAL provider call; every retry below reuses this invocation id
       // and gets its own attempt id, so retries never look like separate calls.
       const providerInvocationId = newStatisticsInvocationId();
@@ -839,74 +830,13 @@ export class ModelHandler {
         ? pagedCanonical ? [] : structuredClone(canonicalSource)
         : undefined;
       const archivedMessageBytes = new Map(archiveCanonicalMessages?.map(message => [message.id, estimateArchiveSnapshotBytes(message)]));
-      const usageFromProviderResult = (value: unknown) => {
-        if (!value || typeof value !== 'object') return undefined;
-        const raw = (value as { usage?: Record<string, unknown> }).usage;
-        if (!raw || typeof raw !== 'object') return undefined;
-        const inputTokens = raw.prompt_tokens ?? raw.input_tokens;
-        const outputTokens = raw.completion_tokens ?? raw.output_tokens;
-        const totalTokens = raw.total_tokens;
-        const promptDetails = raw.prompt_tokens_details as Record<string, unknown> | undefined;
-        const inputDetails = raw.input_tokens_details as Record<string, unknown> | undefined;
-        const cachedInputTokens = promptDetails?.cached_tokens ?? inputDetails?.cached_tokens;
-        const cacheWriteTokens = promptDetails?.cache_write_tokens ?? inputDetails?.cache_write_tokens;
-        const numeric = (candidate: unknown) => typeof candidate === 'number' && Number.isFinite(candidate)
-          ? candidate
-          : undefined;
-        const usage = {
-          inputTokens: numeric(inputTokens),
-          outputTokens: numeric(outputTokens),
-          totalTokens: numeric(totalTokens),
-          cachedInputTokens: numeric(cachedInputTokens),
-          cacheWriteTokens: numeric(cacheWriteTokens),
-          contextWindow: model.contextWindow,
-        };
-        return Object.values(usage).some(item => item !== undefined) ? usage : undefined;
-      };
-      const recordProviderAttempt = (observation: {
-        durationMs: number;
-        outcome: 'completed' | 'error' | 'cancelled';
-        result?: unknown;
-        error?: unknown;
-        usage?: ReturnType<typeof usageFromProviderResult>;
-      }) => {
-        if (!opts?.runId) return;
-        try {
-          const attemptOrdinal = ++providerAttemptOrdinal;
-          const attemptUsage = observation.usage ?? usageFromProviderResult(observation.result)
-            ?? (routingModel.contextWindow ? { contextWindow: routingModel.contextWindow } : undefined);
-          recordStatisticsEvent(createStatisticsEvent({
-            type: 'model.attempt',
-            runId: opts.runId,
-            node: opts.nodeId ? { id: opts.nodeId } : undefined,
-            model: { id: routingModel.id, name: routingModel.displayName || routingModel.name },
-            provider: {
-              id: routingModel.provider || routingModel.adapter || 'unknown',
-              name: routingModel.adapter || routingModel.provider,
-            },
-            credentialId: opaqueCredentialId,
-            attempt: attemptOrdinal,
-            invocationId: providerInvocationId,
-            attemptId: statisticsAttemptId(providerInvocationId, attemptOrdinal),
-            outcome: observation.outcome,
-            durationMs: observation.durationMs,
-            // Provider phase == the measured provider/network call for THIS
-            // attempt. Nothing is inferred when a boundary is unavailable.
-            phases: { provider: observation.durationMs },
-            errorClass: observation.outcome === 'error'
-              ? classifyStatisticsError(observation.error)
-              : undefined,
-            // Cache semantics are only claimed for a completed call: a failed or
-            // cancelled attempt reports no cache outcome at all.
-            cacheOutcome: observation.outcome === 'completed'
-              ? statisticsCacheOutcomeFromUsage(attemptUsage)
-              : undefined,
-            usage: attemptUsage,
-          }));
-        } catch {
-          // Metadata instrumentation is never allowed to affect a provider call.
-        }
-      };
+      const recordProviderAttempt = createProviderAttemptRecorder({
+        runId: opts?.runId,
+        nodeId: opts?.nodeId,
+        invocationId: providerInvocationId,
+        contextWindow: model.contextWindow,
+        routing: () => ({ model: routingModel, credentialId: opaqueCredentialId }),
+      });
 
       // One retryable attempt at the provider call. Extracted into a closure so
       // a context-length overflow (below) can be retried once with oversized
