@@ -1,35 +1,32 @@
 /**
  * Per-collection compaction adapters for Persona runtime records (issue #453).
  * Each adapter implements the RetentionPolicy interface for its record type,
- * plugging into the shared retention algorithm from retention.ts.
+ * plugging into the shared retention algorithm from retention.ts. The hourly
+ * sweep in personaRuntimeRetentionRollout.ts is the only caller that writes.
  */
 
-import type {
-  PersonaActivity,
-  PersonaLease,
-  PersonaMailboxItem,
+import type { ZodType } from 'zod';
+
+import {
+  PersonaActivitySchema,
+  PersonaMailboxItemSchema,
+  type PersonaActivity,
+  type PersonaMailboxItem,
 } from '@/shared/types/enduringAgent';
-import { compactBehaviorCallPin, saveCompactedBehaviorCallPin, type BehaviorCallPin } from './behaviorCallPins';
+import {
+  BehaviorCallPinSchema,
+  compactBehaviorCallPin,
+  saveCompactedBehaviorCallPin,
+  type BehaviorCallPin,
+} from './behaviorCallPins';
+import { canonicalJson } from './behaviorRevisions';
 import { personaMailboxAdmission, personaMailboxAdmissionDigest } from './mailboxAdmission';
 import type { PersonaRuntimeLock } from './runtimeLock';
 import type { PersonaFlowDispatchRecord } from './personaDispatcher';
-import {
-  listPersonaFlowDispatchRecordsForRetention,
-  savePersonaFlowDispatchForRetention,
-} from './personaFlowDispatchRetention';
-import {
-  assertPersonaRuntimeRetentionWriteGrant,
-  type PersonaRuntimeRetentionWriteGrant,
-} from './personaRuntimeRetentionControl';
-import { executeRetentionPlan, planRetention, type RetentionPolicy } from './retention';
-import {
-  listPersonaActivities,
-  listPersonaLeaseRecords,
-  listPersonaMailboxItems,
-  savePersonaActivity,
-  savePersonaMailboxItem,
-  savePersonaLease,
-} from './store';
+import { PersonaFlowDispatchRecordSchema } from './personaFlowDispatchSchema';
+import { savePersonaFlowDispatchForRetention } from './personaFlowDispatchRetention';
+import type { RetentionPolicy } from './retention';
+import { savePersonaActivity, savePersonaMailboxItem } from './store';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -54,10 +51,6 @@ export const PERSONA_RUNTIME_RETENTION_POLICY = {
     retentionMs: 30 * DAY_MS,
     detailedLimit: 200,
   },
-  leaseHistory: {
-    retentionMs: 90 * DAY_MS,
-    detailedLimit: 1_000,
-  },
   behaviorCallPin: {
     retentionMs: 30 * DAY_MS,
     detailedLimit: 200,
@@ -65,6 +58,18 @@ export const PERSONA_RUNTIME_RETENTION_POLICY = {
 } as const;
 
 export const PERSONA_RUNTIME_RETENTION_MAX_WRITES_PER_SWEEP = 100;
+
+/**
+ * A compaction is valid when the stored schema accepts the result and every
+ * identity field is unchanged.
+ */
+function validCompaction<T extends object>(
+  schema: ZodType<unknown>,
+  identity: readonly (keyof T)[],
+): (record: T, compacted: T) => boolean {
+  return (record, compacted) => schema.safeParse(compacted).success
+    && identity.every((field) => canonicalJson(record[field]) === canonicalJson(compacted[field]));
+}
 
 /** A child may finish before its parent; retain all detail until that Activity is terminal. */
 export function getBehaviorCallPinRetentionPolicy(
@@ -83,6 +88,10 @@ export function getBehaviorCallPinRetentionPolicy(
     detailedLimit: PERSONA_RUNTIME_RETENTION_POLICY.behaviorCallPin.detailedLimit,
     maxWritesPerSweep: PERSONA_RUNTIME_RETENTION_MAX_WRITES_PER_SWEEP,
     compact: compactBehaviorCallPin,
+    isValidCompaction: validCompaction<BehaviorCallPin>(BehaviorCallPinSchema, [
+      'id', 'workspaceId', 'personaId', 'activityId', 'behaviorRevisionId', 'contentHash',
+      'status', 'createdAt', 'completedAt',
+    ]),
     save: (pin) => saveCompactedBehaviorCallPin(pin, lock),
   };
 }
@@ -91,15 +100,17 @@ export function getBehaviorCallPinRetentionPolicy(
  * Compaction policy for mailbox items.
  * Terminal items older than 30 days or beyond the newest 500 detailed records
  * are compacted: summary and payloadRef are blanked, compactedAt marker set,
- * and admissionDigest (idempotency preservation) is computed.
+ * and admissionDigest (idempotency preservation) is computed. A coalesced item
+ * whose delivery is still pending is not terminal: it returns to the queue
+ * when its target Activity ends.
  */
 export function getMailboxItemRetentionPolicy(): RetentionPolicy<PersonaMailboxItem> {
   return {
     recordKind: 'PersonaMailboxItem',
     isEligible: (item) => {
-      const terminal = item.status === 'coalesced'
-        || item.status === 'completed'
-        || item.status === 'rejected';
+      const terminal = item.status === 'completed'
+        || item.status === 'rejected'
+        || (item.status === 'coalesced' && item.deliveryStatus !== 'pending');
       return terminal && item.compactedAt === undefined;
     },
     timestampOf: (item) => item.completedAt ?? item.updatedAt,
@@ -107,15 +118,17 @@ export function getMailboxItemRetentionPolicy(): RetentionPolicy<PersonaMailboxI
     retentionMs: PERSONA_RUNTIME_RETENTION_POLICY.mailboxItem.retentionMs,
     detailedLimit: PERSONA_RUNTIME_RETENTION_POLICY.mailboxItem.detailedLimit,
     maxWritesPerSweep: PERSONA_RUNTIME_RETENTION_MAX_WRITES_PER_SWEEP,
-    compact: (item, compactedAt) => (
-      {
-        ...item,
-        summary: undefined,
-        payloadRef: undefined,
-        admissionDigest: personaMailboxAdmissionDigest(personaMailboxAdmission(item)),
-        compactedAt,
-      } as unknown as PersonaMailboxItem
-    ),
+    compact: (item, compactedAt) => ({
+      ...item,
+      summary: undefined,
+      payloadRef: undefined,
+      admissionDigest: personaMailboxAdmissionDigest(personaMailboxAdmission(item)),
+      compactedAt,
+    }),
+    isValidCompaction: validCompaction<PersonaMailboxItem>(PersonaMailboxItemSchema, [
+      'id', 'personaId', 'idempotencyKey', 'sequence', 'kind', 'status', 'source',
+      'deliveryStatus', 'claimedActivityId', 'coalescedIntoId', 'createdAt', 'updatedAt', 'completedAt',
+    ]),
     save: savePersonaMailboxItem,
   };
 }
@@ -142,25 +155,28 @@ export function getActivityRetentionPolicy(): RetentionPolicy<PersonaActivity> {
     retentionMs: PERSONA_RUNTIME_RETENTION_POLICY.activity.retentionMs,
     detailedLimit: PERSONA_RUNTIME_RETENTION_POLICY.activity.detailedLimit,
     maxWritesPerSweep: PERSONA_RUNTIME_RETENTION_MAX_WRITES_PER_SWEEP,
-    compact: (activity, compactedAt) => (
-      {
-        ...activity,
-        instructionContext: undefined,
-        entryPointPayloadRef: undefined,
-        resourceRefs: undefined,
-        error: undefined,
-        outcomeRef: undefined,
-        compactedAt,
-      } as unknown as PersonaActivity
-    ),
+    compact: (activity, compactedAt) => ({
+      ...activity,
+      instructionContext: undefined,
+      entryPointPayloadRef: undefined,
+      resourceRefs: undefined,
+      error: undefined,
+      outcomeRef: undefined,
+      compactedAt,
+    }),
+    isValidCompaction: validCompaction<PersonaActivity>(PersonaActivitySchema, [
+      'id', 'personaId', 'kind', 'status', 'source', 'behaviorId', 'behaviorRevisionId',
+      'coreFlowId', 'coreFlowRevisionId', 'instructionContextDigest', 'leaseId', 'conversationId',
+      'outcome', 'createdAt', 'updatedAt', 'completedAt',
+    ]),
     save: savePersonaActivity,
   };
 }
 
 /**
  * Compaction policy for flow dispatches.
- * Terminal dispatches older than 30 days or beyond the newest 200 detailed
- * records are compacted:
+ * Terminal dispatches whose projections are settled, older than 30 days or
+ * beyond the newest 200 detailed records, are compacted:
  * bulky fields (flowInput, instructionContext, maintenancePlan, maintenanceResult, routingDecision)
  * are blanked, but identity/dedup/audit fields (id, idempotencyDigest, requestHash, state,
  * admission, activityId, memoryCandidateLimit, timestamps) are preserved for
@@ -173,131 +189,37 @@ export function getFlowDispatchRetentionPolicy(): RetentionPolicy<PersonaFlowDis
       const terminal = dispatch.state === 'completed'
         || dispatch.state === 'error'
         || dispatch.state === 'cancelled';
-      return terminal && dispatch.compactedAt === undefined;
+      return terminal
+        && dispatch.terminalProjectionsSettledAt !== undefined
+        && dispatch.compactedAt === undefined;
     },
     timestampOf: (dispatch) => dispatch.completedAt ?? dispatch.updatedAt,
     isCompacted: (dispatch) => dispatch.compactedAt !== undefined,
     retentionMs: PERSONA_RUNTIME_RETENTION_POLICY.flowDispatch.retentionMs,
     detailedLimit: PERSONA_RUNTIME_RETENTION_POLICY.flowDispatch.detailedLimit,
     maxWritesPerSweep: PERSONA_RUNTIME_RETENTION_MAX_WRITES_PER_SWEEP,
-    compact: (dispatch, compactedAt) => (
-      {
-        ...dispatch,
-        flowInput: undefined,
-        instructionContext: undefined,
-        maintenancePlan: undefined,
-        maintenanceResult: undefined,
-        routingDecision: undefined,
-        targetActivityId: undefined,
-        waitingReason: undefined,
-        lastError: undefined,
-        resumeRequestedAt: undefined,
-        resumeSettledAt: undefined,
-        resumeReason: undefined,
-        resumeFromWaitingReason: undefined,
-        resumePreparationRequired: undefined,
-        compactedAt,
-      } as unknown as PersonaFlowDispatchRecord
-    ),
+    compact: (dispatch, compactedAt) => ({
+      ...dispatch,
+      flowInput: undefined,
+      instructionContext: undefined,
+      maintenancePlan: undefined,
+      maintenanceResult: undefined,
+      routingDecision: undefined,
+      targetActivityId: undefined,
+      waitingReason: undefined,
+      lastError: undefined,
+      resumeRequestedAt: undefined,
+      resumeSettledAt: undefined,
+      resumeReason: undefined,
+      resumeFromWaitingReason: undefined,
+      resumePreparationRequired: undefined,
+      compactedAt,
+    }),
+    isValidCompaction: validCompaction<PersonaFlowDispatchRecord>(PersonaFlowDispatchRecordSchema, [
+      'id', 'workspaceId', 'personaId', 'idempotencyDigest', 'requestHash', 'state', 'admission',
+      'mailboxItemId', 'activityId', 'behaviorRevisionId', 'outcome', 'error', 'createdAt',
+      'updatedAt', 'completedAt', 'terminalProjectionsSettledAt',
+    ]),
     save: savePersonaFlowDispatchForRetention,
   };
 }
-
-/**
- * Legacy lease-history soft-compaction policy retained for direct compatibility.
- * Released records older than 90 days or beyond the newest 1000 are marked
- * compacted. This does not reduce record count and is not scheduled; irreversible
- * count pruning lives in leaseHistoryPruning.ts behind its own independent,
- * default-off feature flag (issue #478).
- */
-export function getLeaseHistoryRetentionPolicy(): RetentionPolicy<PersonaLease> {
-  return {
-    recordKind: 'PersonaLease',
-    isEligible: (lease) => {
-      return lease.status === 'released' && lease.compactedAt === undefined;
-    },
-    timestampOf: (lease) => lease.releasedAt ?? lease.expiresAt,
-    isCompacted: (lease) => lease.compactedAt !== undefined,
-    retentionMs: PERSONA_RUNTIME_RETENTION_POLICY.leaseHistory.retentionMs,
-    detailedLimit: PERSONA_RUNTIME_RETENTION_POLICY.leaseHistory.detailedLimit,
-    maxWritesPerSweep: PERSONA_RUNTIME_RETENTION_MAX_WRITES_PER_SWEEP,
-    compact: (lease, compactedAt) => (
-      {
-        ...lease,
-        compactedAt,
-      } as unknown as PersonaLease
-    ),
-    save: savePersonaLease,
-  };
-}
-
-export interface PersonaRuntimeCompactionResult {
-  compacted: number;
-  remaining: number;
-  /** Planned writes not made because the grant was withdrawn mid-run. */
-  unauthorized: number;
-}
-
-async function compactWithGrant<T extends { id: string }>(
-  grant: PersonaRuntimeRetentionWriteGrant,
-  records: readonly T[],
-  policy: RetentionPolicy<T>,
-  now: number,
-): Promise<PersonaRuntimeCompactionResult> {
-  const plan = planRetention(records, policy, now);
-  const result = await executeRetentionPlan(plan, policy, {
-    authorizeWrite: () => grant.authorize(),
-  });
-  return {
-    compacted: result.compacted,
-    remaining: result.remaining,
-    unauthorized: result.unauthorized,
-  };
-}
-
-/**
- * Compact mailbox items for the grant's Persona. The grant proves the runtime
- * lock is held and retention is active; it is re-checked before every write.
- */
-export async function compactPersonaMailboxItems(
-  grant: PersonaRuntimeRetentionWriteGrant,
-  now = Date.now(),
-): Promise<PersonaRuntimeCompactionResult> {
-  assertPersonaRuntimeRetentionWriteGrant(grant);
-  const items = await listPersonaMailboxItems(grant.personaId);
-  return compactWithGrant(grant, items, getMailboxItemRetentionPolicy(), now);
-}
-
-/** Compact Activities for the grant's Persona; see compactPersonaMailboxItems. */
-export async function compactPersonaActivities(
-  grant: PersonaRuntimeRetentionWriteGrant,
-  now = Date.now(),
-): Promise<PersonaRuntimeCompactionResult> {
-  assertPersonaRuntimeRetentionWriteGrant(grant);
-  const items = await listPersonaActivities(grant.personaId);
-  return compactWithGrant(grant, items, getActivityRetentionPolicy(), now);
-}
-
-/** Compact Flow dispatches for the grant's Persona; see compactPersonaMailboxItems. */
-export async function compactPersonaFlowDispatches(
-  grant: PersonaRuntimeRetentionWriteGrant,
-  now = Date.now(),
-): Promise<PersonaRuntimeCompactionResult> {
-  assertPersonaRuntimeRetentionWriteGrant(grant);
-  const items = await listPersonaFlowDispatchRecordsForRetention(grant.personaId);
-  return compactWithGrant(grant, items, getFlowDispatchRetentionPolicy(), now);
-}
-
-/**
- * Legacy compatibility adapter. This does not prune records and is not scheduled.
- */
-export async function compactPersonaLeaseHistory(
-  grant: PersonaRuntimeRetentionWriteGrant,
-  now = Date.now(),
-): Promise<PersonaRuntimeCompactionResult> {
-  assertPersonaRuntimeRetentionWriteGrant(grant);
-  const items = await listPersonaLeaseRecords(grant.personaId);
-  return compactWithGrant(grant, items, getLeaseHistoryRetentionPolicy(), now);
-}
-
-// Backward-compatible direct-module exports; the implementation lives in the dedicated service.

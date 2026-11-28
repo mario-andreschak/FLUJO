@@ -1,151 +1,107 @@
-# Persona runtime retention rollout
+# Persona history cleanup rollout
 
-Issue #481 controls how the soft cleanup described in
+Issue #481 decides how the soft cleanup described in
 [persona-runtime-retention.md](./persona-runtime-retention.md) reaches real
 installations. It does not touch lease-history deletion, which stays separately
 gated and off by default.
 
 ## Decision (November 2026)
 
-FLUJO now **measures by default and cleans up nothing**. Every hour it works out,
-for every Persona, which old records cleanup would shrink and by how much, and
-stores the numbers. Real cleanup (`active`) stays an explicit choice.
+Nobody switches cleanup on or off. Every workspace **measures first**, switches
+real cleanup on **by itself** once its own measurements pass fixed rules, and
+goes back to measuring **by itself** on any anomaly. There is no setting, no
+environment variable and no code flag for it (#1449: no new flags).
 
-Why measuring is on: it is proven to write no Persona record (a test compares
-every file's time stamp and content before and after a sweep), it never runs on
-the path that finishes an Activity, and it produces the evidence the stages
-below need.
+Why no off switch: every way cleanup can go wrong that a program can see is an
+anomaly that turns it off at once (below), and the things it cannot see do not
+need a switch because cleanup never deletes a record and never touches one that
+live work still uses. A switch would only be one more thing nobody sets.
 
-Why cleanup stays off by default:
+Why no separate backup copy: cleanup is soft. It keeps every record with its
+identity, state, times, keys and digests, and removes only bulky detail of old,
+finished work. A full copy of that detail would cost the space cleanup saves and
+would need its own encryption, deletion and privacy handling. Safety comes from
+checking every record right before it is rewritten, under the Persona lock.
 
-1. It has never run on real data. Until #481, a retried request whose mailbox
-   item had been cleaned up was refused as "reused with different work". This
-   is fixed and tested now, but it shows the active path had no real use.
-2. Mailbox cleanup keeps every record and can make small ones bigger: the kept
-   fingerprint is longer than a short summary. In the test fixture three
-   cleaned-up mailbox items would grow from 1,698 to 1,947 bytes. Real summaries
-   may be longer; the measurements will show it.
-3. Cleanup permanently removes detail that can still be shown in FLUJO
-   (summaries, error text, instructions) for work older than 30 days or beyond
-   the newest 200–500 records.
-4. In `active` mode the cleanup after each finished Activity re-reads all of
-   that Persona's records. The soak harness turns it off for this reason. It
-   needs measuring on large histories before it runs everywhere.
+## How a workspace moves between the two modes
 
-## Switches
+The state lives in the workspace item `persona_runtime_retention_state`. It
+survives restarts. The generic storage API cannot read or write it, so it cannot
+be used as a back-door switch.
 
-Retention has three modes: `disabled` (nothing), `shadow` (measure only) and
-`active` (clean up).
-
-| Switch | Where | Takes effect |
-|---|---|---|
-| Workspace setting `persona_runtime_retention_settings` | Generic storage API, see below | Within 5 seconds, no restart |
-| `FLUJO_PERSONA_RUNTIME_RETENTION_MODE` | Environment | On restart |
-| `FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION` | `src/config/features.ts` | On rebuild; `false` turns everything off |
-
-**Whoever turns it down wins.** The mode is the lower of the setting and the
-environment variable (`disabled` < `shadow` < `active`); the default `shadow`
-applies only when neither is set. A malformed environment variable or an
-unreadable setting means `disabled`. A setting whose content cannot be
-understood is rewritten as `disabled`, so it is valid again and is not re-read
-every few seconds.
-
-Turn cleanup on, off, or back to the default in the selected workspace:
-
-```powershell
-$body = @{ key = 'persona_runtime_retention_settings'; value = @{ mode = 'active' } } | ConvertTo-Json -Depth 3
-Invoke-RestMethod -Method Post -Uri http://localhost:4200/api/storage -ContentType 'application/json' -Body $body
+```
+            24 clean measuring runs in a row,
+            the first one at least 7 days old
+ measuring ───────────────────────────────────▶ cleaning up
+ (shadow)  ◀─────────────────────────────────── (active)
+            any anomaly: back at once, fresh streak
 ```
 
-Use `mode = 'disabled'` to stop retention, or delete the key to go back to the
-default:
+The hourly sweep (minute 47) is the only path that writes. Each run measures
+every Persona: which old records cleanup would rewrite and how many bytes it
+would save. A clean run in measuring mode extends the streak. After 24 clean
+runs in a row, with the first at least seven days old, the next run cleans up.
 
-```powershell
-Invoke-RestMethod -Method Delete -Uri 'http://localhost:4200/api/storage?key=persona_runtime_retention_settings'
-```
+**Anomalies** (each one sends the workspace back to measuring, starts a fresh
+streak, and logs one plain line):
 
-Deployment-only variables (unchanged): `FLUJO_PERSONA_RUNTIME_RETENTION_BASIS_POINTS`
-(`0..10000`, default `10000` = every Persona),
-`FLUJO_PERSONA_RUNTIME_RETENTION_COHORT_VERSION` and
-`FLUJO_PERSONA_RUNTIME_RETENTION_CRITICAL_PERSONA_IDS` (comma-separated Personas
-never included). Cohorts are SHA-256 buckets of cohort version, workspace and
-Persona id; a Persona is included when its bucket is below the basis points.
+| Anomaly | When |
+|---|---|
+| `referenced` | A record cleanup would rewrite is still used by unfinished work: a running Activity, an unsettled dispatch, a pending delivery, an open maintenance run. |
+| `invalid` | The cleaned-up form of a record would not pass its stored schema, or would change an identity field. |
+| `error` | A Persona could not be read, or a cleanup write failed. |
+| `volume` | A run would rewrite more than twice the most records any clean run since the last anomaly would have, plus 100. |
+
+An anomaly is stored the moment it is found. Every write re-reads the stored
+state first, so a running cleanup in any process stops before its next write.
+Nothing needs a restart: the next clean week switches cleanup on again.
+
+**Never rewritten**, whatever the mode: a record still in use, a record whose
+cleaned-up form is invalid, and a record that would not get smaller (a mailbox
+item with a short summary grows, because it gains a fingerprint). In-progress
+states are not candidates at all: a coalesced input whose delivery is pending
+(it returns to the queue when its target ends) and a dispatch whose projections
+are not settled yet.
 
 ## How it stays safe
 
-- Every write needs a grant from `acquirePersonaRuntimeRetentionWriteGrant`
-  (`personaRuntimeRetentionControl.ts`). It is issued only in `active` mode, for
-  a Persona inside the cohort, to a caller holding that Persona's runtime lock.
-  The compactors in `compactRuntime.ts` take the grant as a required argument
-  and refuse one that was not issued there.
-- Before every single write the grant re-checks the lock, the live mode and the
-  cohort. Turning retention off stops a running sweep before its next write.
-- The hourly sweep (minute 47) never raises the mode it started with, holds the
-  Persona lock while it reads and plans, and runs at most two Personas at once.
-- The cleanup after a finished Activity runs only in `active` mode.
-- Each record is written atomically. A crash leaves every record either old or
-  cleaned up, and the next sweep finishes the rest once; a half-written
-  temporary file is ignored.
+- Writes need a grant from `acquirePersonaRuntimeRetentionWriteGrant`
+  (`personaRuntimeRetentionControl.ts`), issued only while the workspace is
+  cleaning up and the caller holds the Persona's runtime lock.
+  `executeRetentionPlan` in `retention.ts` takes the grant and refuses one that
+  was not issued there. Before every write the grant re-checks the workspace,
+  the lock and the stored state.
+- The first failed write stops the rest of that Persona's run.
+- Each record is written atomically. A process killed in the middle of a
+  cleanup leaves every record either old or cleaned up, and the stored state
+  unchanged; the next run finishes the rest exactly once.
+- A briefly locked state file means measuring only for that run, without
+  recording anything. A damaged one is rewritten as a fresh measuring state.
 - A sweep still running after two hours is treated as stuck, and the next
-  trigger starts a fresh one instead of waiting for a restart.
+  trigger starts a fresh one.
+- Finishing an Activity no longer runs any cleanup. That path re-read all of a
+  Persona's records after every Activity; the hourly sweep does the same work
+  once an hour.
 
-## What is measured
+## What is recorded
 
-Each sweep that runs stores a summary in the workspace item
-`persona_runtime_retention_reports`: the newest 168 sweeps (one week) plus
-running totals. It holds counts, sizes and timings only, never Persona ids,
-payloads, keys, digests or error text. Read it with:
-
-```powershell
-Invoke-RestMethod 'http://localhost:4200/api/storage?key=persona_runtime_retention_reports'
-```
-
-Per sweep: mode and which switch decided it, cohort and basis points, start
-time and duration, Personas examined, selected, skipped and failed, the longest
-wait for and hold of a Persona lock, and per collection (mailbox items,
-Activities, Flow dispatches, specialist calls): records scanned, candidates,
-planned and done writes, failures, writes stopped by the switch, and bytes
-before and projected after. `active` sweeps also measure the stored size before
-and after. One summary line is also logged (`info`, or `warn` on failures).
-
-Per-Persona storage statistics (`GET /v1/personas/{id}/storage-stats`) report
-`retentionMode` and `retentionEnabled` (true only while cleanup is active for
-that Persona).
+The state holds the mode, the streak and its start, the volume baseline, when
+cleanup last switched on, how often it went back, the last anomaly (kind, time,
+mode) and a summary of the last run (time, mode, Personas, candidates, records
+cleaned up, anomalies). It holds numbers only: no Persona ids, text, keys or
+digests. Per-Persona storage statistics (`GET /v1/personas/{id}/storage-stats`)
+report `retentionMode` and `retentionEnabled` (true while cleaning up).
 
 ## Evidence
 
-| Gate | Status |
+| Rule | Test |
 |---|---|
-| Measuring writes no Persona record | Proven: `personaRuntimeRetentionSweep.test.ts` |
-| Off switch works without restart, mid-run | Proven: same file |
-| Crash in the middle of a cleanup run | Proven: records stay valid, next sweep finishes once, kept time stamps unchanged |
-| Retry after cleanup is still treated as the same request (AC2) | Fixed and proven; different work under the same key is still refused |
-| Audit identity survives cleanup (AC3) | Proven for mailbox items and Activities in the crash test, plus `compactRuntime.test.ts` |
-| Measuring never runs after a finished Activity | Proven: `personaDispatcher.test.ts` |
-| Real storage savings per collection | Missing: needs a week of `shadow` reports from real installs |
-| Lock hold and mailbox latency on large histories | Missing: reports now record lock wait and hold; mailbox scan latency still needs a baseline |
-| Active cleanup on real data, 1% then 50% | Missing: Mario's rollout checklist below |
-
-## Rollout on real installations
-
-1. **Measure (now the default).** Leave the default for at least seven days.
-   Check the reports: no failed Personas, the longest lock hold stays well under
-   one second, and the projected savings per collection. If mailbox items do
-   not shrink, mailbox cleanup should be dropped from the policy rather than
-   switched on.
-2. **Clean up a small cohort.** On one installation set
-   `FLUJO_PERSONA_RUNTIME_RETENTION_MODE=active` and
-   `FLUJO_PERSONA_RUNTIME_RETENTION_BASIS_POINTS=100` (or, on a single-user
-   install where 1% may select nobody, the setting `active` for one test
-   workspace). Watch for seven days: zero failed writes, retries still
-   coalesced, actual bytes after below before, nothing missing that a user
-   needs to see.
-3. **Half the Personas.** Basis points `5000`, same cohort version, fourteen
-   days, same checks plus no rise in Persona lock waits.
-4. **Default decision.** Changing the default mode to `active` is a reviewed
-   code change to `PERSONA_RUNTIME_RETENTION_DEFAULT_CONFIG`.
-
-**Rollback** at any stage: set the workspace setting to `disabled` (seconds, no
-restart) or the environment variable to `disabled` (restart). Writes stop before
-the next record. Cleanup is not undone: removed detail stays removed. Do not
-switch on lease-history pruning as part of this rollout.
+| Measuring writes no Persona record | `personaRuntimeRetentionSweep.test.ts` (file times and contents unchanged) |
+| Cleanup switches on after a clean measuring week, then cleans up | same file, and the rules in `personaRuntimeRetention.test.ts` |
+| Each anomaly sends it back, writes nothing, heals without a restart | same files, one case per anomaly |
+| A record in use is never rewritten | same files, and `findPersonaRuntimeRecordsInUse` cases |
+| An anomaly stored elsewhere stops a running cleanup before its next write | `personaRuntimeRetentionSweep.test.ts` |
+| A real process killed mid-cleanup: state kept, rest finished exactly once | `personaRuntimeRetentionProcess.test.ts` |
+| A restart keeps the streak and the mode | same file (three processes in a row) |
+| A retry after cleanup is still the same request | `personaRuntimeRetentionSweep.test.ts` |
+| Cleanup stays on through a long simulated run with no anomaly | the soak harness fails on any anomaly |

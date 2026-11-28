@@ -18,7 +18,6 @@ import type {
 } from '@/backend/services/enduringAgents/activityRuntime';
 import { ENDURING_AGENT_COLLECTIONS } from '@/backend/services/enduringAgents/collections';
 import { getFlowDispatchRetentionPolicy } from '@/backend/services/enduringAgents/compactRuntime';
-import type { PersonaStorageStats } from '@/backend/services/enduringAgents/runtimeStorageStats';
 import {
   getBehaviorMaintenanceRun,
   saveBehaviorMaintenanceRun,
@@ -537,24 +536,6 @@ function makeHarness(
   ));
   const readConversationLog = jest.fn(async () => undefined);
   const appendConversationMessage = jest.fn(async () => undefined);
-  const getPersonaStorageStats = jest.fn(async (id: string): Promise<PersonaStorageStats> => ({
-    personaId: id,
-    retentionEnabled: process.env.FLUJO_PERSONA_RUNTIME_RETENTION_MODE === 'active',
-    retentionMode: process.env.FLUJO_PERSONA_RUNTIME_RETENTION_MODE === 'active' ? 'active' : 'shadow',
-    collectedAt: Date.now(),
-    kinds: {
-      mailboxItems: { total: 0, byStatus: {}, compacted: 0, uncompacted: 0, approxBytes: 0 },
-      activities: { total: 0, byStatus: {}, compacted: 0, uncompacted: 0, approxBytes: 0 },
-      flowDispatches: { total: 0, byStatus: {}, compacted: 0, uncompacted: 0, approxBytes: 0 },
-      leaseHistory: { total: 0, byStatus: {}, compacted: 0, uncompacted: 0, approxBytes: 0 },
-      behaviorCallPins: { total: 0, byStatus: {}, compacted: 0, uncompacted: 0, approxBytes: 0 },
-    },
-    totals: { records: 0, compacted: 0, uncompacted: 0, approxBytes: 0 },
-  }));
-  const observePersonaRuntimeCompaction = jest.fn(async () => {});
-  const compactPersonaMailboxItems = jest.fn(async () => ({ compacted: 0, remaining: 0, unauthorized: 0 }));
-  const compactPersonaActivities = jest.fn(async () => ({ compacted: 0, remaining: 0, unauthorized: 0 }));
-  const compactPersonaFlowDispatches = jest.fn(async () => ({ compacted: 0, remaining: 0, unauthorized: 0 }));
   const runFlow = jest.fn(async (input: FlowRunInput) => successfulResult(input));
 
   const dependencies: PersonaFlowDispatcherDependencies = {
@@ -590,11 +571,6 @@ function makeHarness(
     projectPersonaCoreAppsIntoFlow,
     readConversationLog,
     appendConversationMessage,
-    getPersonaStorageStats,
-    observePersonaRuntimeCompaction,
-    compactPersonaMailboxItems,
-    compactPersonaActivities,
-    compactPersonaFlowDispatches,
     runFlow,
   };
   const dispatcher = new PersonaFlowDispatcher({
@@ -693,8 +669,6 @@ describe('Persona Flow dispatcher', () => {
 
   afterEach(() => {
     _setPersonaRuntimeLockProcessBirthProbeForTests(undefined);
-    FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION = true;
-    delete process.env.FLUJO_PERSONA_RUNTIME_RETENTION_MODE;
     FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = false;
     jest.restoreAllMocks();
   });
@@ -750,135 +724,6 @@ describe('Persona Flow dispatcher', () => {
     await expect(harness.dispatcher.submit(malformed, { startPump: false }))
       .rejects.toThrow('MCP Skill manifest digest');
     expect(await harness.dispatcher.list('persona_test')).toHaveLength(0);
-  });
-
-  it.each([
-    ['the code switch is off', 'code', () => { FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION = false; }],
-    ['retention only measures, the default', 'shadow', () => undefined],
-    ['the environment turns it off', 'env', () => { process.env.FLUJO_PERSONA_RUNTIME_RETENTION_MODE = 'disabled'; }],
-  ])('does not clean up after an Activity when %s', async (_label, id, arrange) => {
-    arrange();
-    const harness = makeHarness(workspace(`retention-off-${id}`));
-
-    const submission = await harness.dispatcher.submit(
-      dispatchInput('persona_test', 'retention-disabled'),
-      { waitForCompletion: true, timeoutMs: 2_000 },
-    );
-
-    expect(submission.dispatch.state).toBe('completed');
-    expect(harness.dependencies.getPersonaStorageStats).not.toHaveBeenCalled();
-    expect(harness.dependencies.observePersonaRuntimeCompaction).not.toHaveBeenCalled();
-    expect(harness.dependencies.compactPersonaMailboxItems).not.toHaveBeenCalled();
-    expect(harness.dependencies.compactPersonaActivities).not.toHaveBeenCalled();
-    expect(harness.dependencies.compactPersonaFlowDispatches).not.toHaveBeenCalled();
-  });
-
-  it('isolates retention failures and supplies every sweep the same Persona and cutoff', async () => {
-    process.env.FLUJO_PERSONA_RUNTIME_RETENTION_MODE = 'active';
-    const harness = makeHarness(workspace('retention-enabled'));
-    const baseline = await harness.dependencies.getPersonaStorageStats('persona_test');
-    (harness.dependencies.getPersonaStorageStats as jest.Mock)
-      .mockClear()
-      .mockResolvedValueOnce({
-        ...baseline,
-        collectedAt: 1,
-        totals: { records: 4, compacted: 0, uncompacted: 4, approxBytes: 4_000 },
-      })
-      .mockResolvedValueOnce({
-        ...baseline,
-        collectedAt: 2,
-        totals: { records: 4, compacted: 4, uncompacted: 0, approxBytes: 800 },
-      });
-    const failingCompactors = [
-      ['mailbox', harness.dependencies.compactPersonaMailboxItems],
-      ['activities', harness.dependencies.compactPersonaActivities],
-      ['dispatches', harness.dependencies.compactPersonaFlowDispatches],
-    ] as const;
-    for (const [label, compactor] of failingCompactors) {
-      (compactor as jest.Mock).mockRejectedValueOnce(new Error(`${label} retention failed`));
-    }
-
-    const submission = await harness.dispatcher.submit(
-      dispatchInput('persona_test', 'retention-enabled'),
-      { waitForCompletion: true, timeoutMs: 2_000 },
-    );
-    await harness.dispatcher.pump('persona_test');
-
-    expect(submission.dispatch.state).toBe('completed');
-    const retry = await harness.dispatcher.submit(
-      dispatchInput('persona_test', 'retention-enabled'),
-      { waitForCompletion: true, timeoutMs: 2_000 },
-    );
-    expect(retry.dispatch.state).toBe('completed');
-
-    const compactors = [
-      harness.dependencies.compactPersonaMailboxItems,
-      harness.dependencies.compactPersonaActivities,
-      harness.dependencies.compactPersonaFlowDispatches,
-    ] as jest.Mock[];
-    for (const compactor of compactors) {
-      expect(compactor).toHaveBeenCalledTimes(1);
-      expect(compactor.mock.calls[0][0]).toMatchObject({ personaId: 'persona_test' });
-    }
-    const cutoffs = compactors.map((compactor) => compactor.mock.calls[0][1]);
-    expect(new Set(cutoffs)).toHaveProperty('size', 1);
-    expect(harness.dependencies.getPersonaStorageStats).toHaveBeenCalledTimes(2);
-    expect(harness.dependencies.getPersonaStorageStats).toHaveBeenNthCalledWith(1, 'persona_test');
-    expect(harness.dependencies.getPersonaStorageStats).toHaveBeenNthCalledWith(2, 'persona_test');
-    expect(harness.dependencies.observePersonaRuntimeCompaction).toHaveBeenCalledWith({
-      before: expect.objectContaining({
-        collectedAt: 1,
-        totals: expect.objectContaining({ uncompacted: 4, approxBytes: 4_000 }),
-      }),
-      compactors: {},
-      failures: ['mailboxItems', 'activities', 'flowDispatches'],
-      after: expect.objectContaining({
-        collectedAt: 2,
-        totals: expect.objectContaining({ compacted: 4, approxBytes: 800 }),
-      }),
-    });
-  });
-
-  it('invokes runtime retention for errored and cancelled terminal Activities', async () => {
-    process.env.FLUJO_PERSONA_RUNTIME_RETENTION_MODE = 'active';
-
-    const errored = makeHarness(workspace('retention-error'));
-    (errored.dependencies.runFlow as jest.Mock).mockImplementation(async (input: FlowRunInput) => ({
-      ...successfulResult(input),
-      status: 'error',
-      error: { message: 'terminal error', statusCode: 500 },
-    }));
-    const errorSubmission = await errored.dispatcher.submit(
-      dispatchInput('persona_test', 'retention-error'),
-      { waitForCompletion: true, timeoutMs: 2_000 },
-    );
-    await errored.dispatcher.pump('persona_test');
-    expect(errorSubmission.dispatch.state).toBe('error');
-    expect(errored.dependencies.compactPersonaFlowDispatches).toHaveBeenCalledTimes(1);
-
-    const cancelled = makeHarness(workspace('retention-cancel'));
-    (cancelled.dependencies.runFlow as jest.Mock).mockImplementation(
-      async (input: FlowRunInput) => ({
-        ...successfulResult(input),
-        status: 'awaiting_tool_approval',
-      }),
-    );
-    const submitted = await cancelled.dispatcher.submit(
-      dispatchInput('persona_test', 'retention-cancel'),
-    );
-    await cancelled.dispatcher.pump('persona_test');
-    const waiting = (await cancelled.dispatcher.get(submitted.dispatch.id))!;
-    cancelled.claims.push(cancelled.routedClaims[0]);
-    const cancellation = await cancelled.dispatcher.cancel({
-      personaId: waiting.personaId,
-      activityId: waiting.activityId!,
-      behaviorRevisionId: waiting.behaviorRevisionId!,
-      conversationId: waiting.flowInput!.conversationId,
-      reason: 'verify terminal retention',
-    }, { waitForCompletion: true, timeoutMs: 2_000 });
-    await cancelled.dispatcher.pump('persona_test');
-    expect(cancellation.state).toBe('cancelled');
-    expect(cancelled.dependencies.compactPersonaFlowDispatches).toHaveBeenCalledTimes(1);
   });
 
   it('runs the Activity-pinned immutable snapshot and stamps only safe attribution', async () => {

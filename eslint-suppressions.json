@@ -123,11 +123,6 @@
       "count": 1
     }
   },
-  "src/backend/services/enduringAgents/compactRuntime.ts": {
-    "flujo/no-double-cast": {
-      "count": 4
-    }
-  },
   "src/backend/services/enduringAgents/indexing.ts": {
     "flujo/no-double-cast": {
       "count": 1

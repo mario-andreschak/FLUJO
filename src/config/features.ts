@@ -5,8 +5,6 @@
  * specific features of the application.
  */
 
-export type PersonaRuntimeRetentionMode = 'disabled' | 'shadow' | 'active';
-
 export interface PersonaRuntimeEventLogConfig {
   maxSegmentBytes: number;
   maxSegmentEvents: number;
@@ -71,121 +69,6 @@ export function readPersonaRuntimeEventLogConfig(
     return { ...PERSONA_RUNTIME_EVENT_LOG_DEFAULT_CONFIG };
   }
   return { maxSegmentBytes, maxSegmentEvents, retentionDays, maxClosedSegments };
-}
-
-export interface PersonaRuntimeRetentionConfig {
-  mode: PersonaRuntimeRetentionMode;
-  rolloutBasisPoints: number;
-  cohortVersion: string;
-  /** Deployment-managed explicit deny list. No behavioral field implies criticality. */
-  criticalPersonaIds: readonly string[];
-}
-
-/**
- * Out of the box FLUJO measures what runtime retention would remove for every
- * Persona and never removes anything (issue #481). Real cleanup (`active`) is
- * an explicit choice through the workspace setting or the environment.
- */
-export const PERSONA_RUNTIME_RETENTION_DEFAULT_CONFIG:
-  PersonaRuntimeRetentionConfig = Object.freeze({
-    mode: 'shadow',
-    rolloutBasisPoints: 10_000,
-    cohortVersion: 'persona-runtime-retention-v1',
-    criticalPersonaIds: Object.freeze([]),
-  });
-
-/** What any unreadable or malformed retention configuration resolves to. */
-export const PERSONA_RUNTIME_RETENTION_DISABLED_CONFIG:
-  PersonaRuntimeRetentionConfig = Object.freeze({
-    ...PERSONA_RUNTIME_RETENTION_DEFAULT_CONFIG,
-    mode: 'disabled',
-    rolloutBasisPoints: 0,
-  });
-
-const PERSONA_RUNTIME_RETENTION_MODES = new Set<PersonaRuntimeRetentionMode>([
-  'disabled',
-  'shadow',
-  'active',
-]);
-const PERSONA_RUNTIME_RETENTION_COHORT_VERSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
-const PERSONA_RUNTIME_RETENTION_PERSONA_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
-
-export function validatePersonaRuntimeRetentionConfig(
-  value: PersonaRuntimeRetentionConfig,
-): PersonaRuntimeRetentionConfig | null {
-  if (!PERSONA_RUNTIME_RETENTION_MODES.has(value.mode)) return null;
-  if (
-    !Number.isSafeInteger(value.rolloutBasisPoints)
-    || value.rolloutBasisPoints < 0
-    || value.rolloutBasisPoints > 10_000
-  ) {
-    return null;
-  }
-  if (!PERSONA_RUNTIME_RETENTION_COHORT_VERSION_PATTERN.test(value.cohortVersion)) {
-    return null;
-  }
-  const criticalPersonaIds = [...new Set(value.criticalPersonaIds)];
-  if (criticalPersonaIds.some(
-    (id) => !PERSONA_RUNTIME_RETENTION_PERSONA_ID_PATTERN.test(id),
-  )) {
-    return null;
-  }
-  return {
-    mode: value.mode,
-    rolloutBasisPoints: value.rolloutBasisPoints,
-    cohortVersion: value.cohortVersion,
-    criticalPersonaIds,
-  };
-}
-
-export interface PersonaRuntimeRetentionEnvironment {
-  config: PersonaRuntimeRetentionConfig;
-  /** The mode named by FLUJO_PERSONA_RUNTIME_RETENTION_MODE, or null when unset. */
-  mode: PersonaRuntimeRetentionMode | null;
-  /** False when any retention variable is malformed; `config` is then disabled. */
-  valid: boolean;
-}
-
-/**
- * Read the deployment rollout contract. Any malformed value fails closed to
- * disabled; values are never clamped or inferred from Persona behavior.
- */
-export function readPersonaRuntimeRetentionEnvironment(
-  env: Readonly<Record<string, string | undefined>> = process.env,
-): PersonaRuntimeRetentionEnvironment {
-  const modeText = env.FLUJO_PERSONA_RUNTIME_RETENTION_MODE;
-  const basisPointsText = env.FLUJO_PERSONA_RUNTIME_RETENTION_BASIS_POINTS
-    ?? String(PERSONA_RUNTIME_RETENTION_DEFAULT_CONFIG.rolloutBasisPoints);
-  const cohortVersion = env.FLUJO_PERSONA_RUNTIME_RETENTION_COHORT_VERSION
-    ?? PERSONA_RUNTIME_RETENTION_DEFAULT_CONFIG.cohortVersion;
-  const criticalText = env.FLUJO_PERSONA_RUNTIME_RETENTION_CRITICAL_PERSONA_IDS ?? '';
-  const invalid: PersonaRuntimeRetentionEnvironment = {
-    config: { ...PERSONA_RUNTIME_RETENTION_DISABLED_CONFIG },
-    mode: null,
-    valid: false,
-  };
-
-  if (!/^\d+$/.test(basisPointsText)) return invalid;
-  const candidate = validatePersonaRuntimeRetentionConfig({
-    mode: (modeText ?? PERSONA_RUNTIME_RETENTION_DEFAULT_CONFIG.mode) as PersonaRuntimeRetentionMode,
-    rolloutBasisPoints: Number(basisPointsText),
-    cohortVersion,
-    criticalPersonaIds: criticalText === ''
-      ? []
-      : criticalText.split(',').map((id) => id.trim()),
-  });
-  if (!candidate) return invalid;
-  return {
-    config: candidate,
-    mode: modeText === undefined ? null : candidate.mode,
-    valid: true,
-  };
-}
-
-export function readPersonaRuntimeRetentionConfig(
-  env: Readonly<Record<string, string | undefined>> = process.env,
-): PersonaRuntimeRetentionConfig {
-  return readPersonaRuntimeRetentionEnvironment(env).config;
 }
 
 export const FEATURES = {
@@ -258,17 +141,8 @@ export const FEATURES = {
   ENABLE_MEMORY_CONFLICT_SURFACING: true,
 
   /**
-   * Code-level ceiling for soft retention/compaction of Persona mailbox,
-   * activities, dispatches and specialist calls (issues #453, #481). While true,
-   * the mode comes from the workspace setting and
-   * FLUJO_PERSONA_RUNTIME_RETENTION_MODE, and defaults to measuring only
-   * (`shadow`). False turns every retention read and write off.
-   */
-  ENABLE_PERSONA_RUNTIME_RETENTION: true,
-
-  /**
    * Irreversibly delete verified dead Persona lease-history records (issue #478).
-   * Independent from soft runtime retention and deliberately OFF by default.
+   * Independent from Persona history cleanup (#481) and deliberately OFF by default.
    */
   ENABLE_PERSONA_LEASE_HISTORY_PRUNING: false,
 

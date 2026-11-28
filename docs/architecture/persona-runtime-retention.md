@@ -1,10 +1,10 @@
 # Persona runtime retention policy
 
-Status: **Accepted configuration; rollout remains gated**
+Status: **Accepted configuration; each workspace switches cleanup on by itself (#481)**
 
 Decision owner: issue [#479](https://github.com/mario-andreschak/FLUJO/issues/479)
 
-Related implementation: runtime compaction [#453](https://github.com/mario-andreschak/FLUJO/issues/453), completion-triggered scheduling [#477](https://github.com/mario-andreschak/FLUJO/issues/477), and guarded lease-history pruning [#478](https://github.com/mario-andreschak/FLUJO/issues/478).
+Related implementation: runtime compaction [#453](https://github.com/mario-andreschak/FLUJO/issues/453), guarded lease-history pruning [#478](https://github.com/mario-andreschak/FLUJO/issues/478), and the self-finishing rollout [#481](https://github.com/mario-andreschak/FLUJO/issues/481). Completion-triggered compaction from [#477](https://github.com/mario-andreschak/FLUJO/issues/477) was removed in #481: the hourly sweep is the only writer.
 
 ## Policy decision
 
@@ -12,47 +12,39 @@ The checked-in runtime policy is:
 
 | Record kind | Age cutoff | Newest detailed records | Eligible terminal state | Storage action |
 |---|---:|---:|---|---|
-| Mailbox item | 30 days | 500 | `coalesced`, `completed`, `rejected` | Clear summary and payload reference; retain identity, state, timestamps, idempotency key, and admission digest. |
+| Mailbox item | 30 days | 500 | `completed`, `rejected`, `coalesced` once delivered | Clear summary and payload reference; retain identity, state, timestamps, idempotency key, and admission digest. |
 | Activity | 30 days | 200 | `completed`, `cancelled`, `error` | Clear instruction context, entry payload, resource/error/outcome references; retain identity, state, lease/recovery, outcome, and audit fields. |
-| Flow dispatch | 30 days | 200 | `completed`, `cancelled`, `error` | Clear execution inputs and transient maintenance/routing/resume details; retain request/idempotency digests, admission/activity linkage, state, and timestamps. |
-| Lease history | 90 days | 1,000 | `released` for the legacy soft adapter | Mark compacted without rewriting authority evidence. Irreversible count pruning is a separate #478 path. |
+| Flow dispatch | 30 days | 200 | `completed`, `cancelled`, `error` with settled projections | Clear execution inputs and transient maintenance/routing/resume details; retain request/idempotency digests, admission/activity linkage, state, and timestamps. |
+| Specialist call | 30 days | 200 | its Activity is terminal | Clear the Flow snapshot, output and error; retain the receipt and a payload digest. |
 
 The policy values are checked-in constants in `compactRuntime.ts`. They are deliberately independent of behavior maintenance's separate 30-day/newest-100 policy. There are no environment overrides; changes require code review with storage, recovery, audit, and latency evidence.
 
 Age and rank are joined by OR: an eligible record is compacted when its timestamp is strictly older than the cutoff (`timestamp < now - retentionMs`) or its zero-based newest-first rank is at least the configured cap. A record exactly at the cutoff remains detailed. Equal timestamps are ordered by descending record ID, which makes repeated sweeps deterministic.
 
-Every completion-triggered soft-retention sweep is capped at 100 writes. Partial sweeps are safe to retry because compacted records are excluded from later writes.
+A record is rewritten only when nothing unfinished still uses it, its cleaned-up form passes the stored schema with every identity field unchanged, and it gets smaller. Each sweep writes at most 100 records per collection and Persona. Partial sweeps are safe to retry because compacted records are excluded from later writes.
 
 ## Execution and persistence
 
-Retention runs in one of three modes: `disabled`, `shadow` (measure only, the default since #481) or `active`. The mode, the switches and the rollout stages are described in [persona-runtime-retention-rollout.md](./persona-runtime-retention-rollout.md).
+Each workspace either measures (`shadow`) or cleans up (`active`). It starts by measuring and moves between the two by itself, as described in [persona-runtime-retention-rollout.md](./persona-runtime-retention-rollout.md).
 
-In `active` mode, mailbox, activity, and dispatch sweeps run after an Activity completion and in the hourly sweep, under the Persona runtime lock. Every write needs a grant from the rollout control, which re-checks the live mode before each record. The dispatch adapter uses the shared schema-validating persistence path, so compacted records reload through the same schema used by dispatch and reconciliation.
+While cleaning up, the hourly sweep rewrites mailbox items, Activities, dispatches and specialist calls under the Persona runtime lock. Every write needs a grant from the rollout control, which re-checks the stored mode before each record. The dispatch adapter uses the shared schema-validating persistence path, so compacted records reload through the same schema used by dispatch and reconciliation.
 
 A compacted mailbox item keeps `admissionDigest`, a SHA-256 digest of the admitted request (the fields an idempotency key promises not to change). A retry is compared with that digest, so it is still recognised as the same request after `summary` and `payloadRef` were removed, while different work under the same key is still refused.
 
-The completion path passes one timestamp to all three collection sweeps. Work is bounded per collection and happens after terminal Activity persistence; it is not performed synchronously by mailbox admission or delivery.
+One sweep passes one timestamp to every collection. Work is bounded per collection and never runs on mailbox admission, delivery or Activity completion.
 
-Failures are reported per collection and do not make a partially completed sweep unsafe to retry. Turning retention off stops a running sweep before its next write.
+A failed write stops that Persona's run and sends the workspace back to measuring. Partially completed sweeps are safe to retry.
 
 ## Lease-history boundary
 
-Lease storage has two intentionally separate mechanisms:
+Lease history is not part of soft cleanup: its small records gain nothing from it. `prunePersonaLeaseHistory` is the #478 deletion path. It is independently controlled by `ENABLE_PERSONA_LEASE_HISTORY_PRUNING`, which defaults off. It may delete count-excess `released` or `expired` acquisitions only after the current authority head, ownership, fencing-token history, and referenced terminal Activities are proven under the runtime lock. It retains the newest 1,000 terminal acquisitions by default and limits each sweep to 100 deletions.
 
-1. `getLeaseHistoryRetentionPolicy` is the legacy 90-day/1,000 soft policy. It only adds `compactedAt`, does not reduce record count, and is not scheduled by runtime completion.
-2. `prunePersonaLeaseHistory` is the #478 deletion path. It is independently controlled by `ENABLE_PERSONA_LEASE_HISTORY_PRUNING`, which also defaults off. It may delete count-excess `released` or `expired` acquisitions only after the current authority head, ownership, fencing-token history, and referenced terminal Activities are proven under the runtime lock. It retains the newest 1,000 terminal acquisitions by default and limits each sweep to 100 deletions.
-
-This separation prevents the reversible soft-retention gate from silently authorizing irreversible audit deletion. The 90-day soft window does not weaken #478's proof or expand its deletion candidates.
+This separation keeps soft cleanup from ever authorizing irreversible audit deletion.
 
 ## Rollout and rollback
 
-Cleanup (`active`) and lease pruning remain off by default; measuring (`shadow`) is on. Before enabling cleanup by default:
-
-- run the focused boundary, rank, schema, idempotency, crash-recovery, and reconciliation suites;
-- run the 10,000-Activity bounded-growth workload to sweep convergence;
-- record mailbox lane-1 baseline and contention latency, including p50 and at least p95;
-- define and approve the lane-1 SLA rather than deriving one from a single benchmark machine;
-- enable first in a non-critical environment and observe backlog, writes/deletes, failures, and lock duration;
-- canary a small Persona cohort if cohort gating is available.
-
-Rollback is gate disablement. Soft compaction and lease pruning are idempotent across partial sweeps; disabling a gate stops new sweeps but does not reconstruct already-cleared payloads or deleted lease records. Backups and audit policy remain the recovery boundary for irreversible deletion.
+There are no rollout stages to run by hand. Each workspace measures for at
+least a week, switches cleanup on when its own runs pass the rules, and switches
+back on any anomaly. Going back stops new writes at once; detail already removed
+stays removed. Lease pruning stays off by default and is not part of this
+rollout.

@@ -148,11 +148,6 @@ import {
   reconcileBehaviorMaintenanceRuns,
 } from './behaviorMaintenance';
 import { recordBehaviorOutcomeSampleSafely } from './behaviorOutcome';
-import {
-  compactPersonaActivities,
-  compactPersonaFlowDispatches,
-  compactPersonaMailboxItems,
-} from './compactRuntime';
 import { ENDURING_AGENT_COLLECTIONS } from './collections';
 import {
   createPersonaActivitySnapshot,
@@ -177,10 +172,6 @@ import {
 import {
   listPersonaFlowDispatchRecordsForReconciliation,
 } from './personaFlowDispatchRetention';
-import {
-  acquirePersonaRuntimeRetentionWriteGrant,
-  getPersonaRuntimeRetentionDecision,
-} from './personaRuntimeRetentionControl';
 import { getCoreMemory } from './memoryKernel';
 import {
   MemoryMaintenancePlanSchema,
@@ -195,10 +186,6 @@ import {
   type MemoryMaintenanceResult,
 } from './memoryMaintenance';
 import { getPersonaRuntimeClock, type PersonaRuntimeTimer } from './runtimeClock';
-import {
-  getPersonaStorageStats,
-  type PersonaRuntimeCompactionObservation,
-} from './runtimeStorageStats';
 import {
   withPersonaRuntimeLock,
   type PersonaRuntimeLock,
@@ -860,13 +847,6 @@ export interface PersonaFlowDispatcherDependencies {
   projectPersonaCoreAppsIntoFlow: typeof projectPersonaCoreAppsIntoFlow;
   readConversationLog: typeof readConversationLog;
   appendConversationMessage: typeof appendPersonaConversationMessage;
-  getPersonaStorageStats: typeof getPersonaStorageStats;
-  observePersonaRuntimeCompaction: (
-    observation: PersonaRuntimeCompactionObservation,
-  ) => Promise<void>;
-  compactPersonaMailboxItems: typeof compactPersonaMailboxItems;
-  compactPersonaActivities: typeof compactPersonaActivities;
-  compactPersonaFlowDispatches: typeof compactPersonaFlowDispatches;
   runFlow: (input: FlowRunInput) => Promise<FlowRunResult>;
 }
 
@@ -909,18 +889,6 @@ const DEFAULT_DEPENDENCIES: PersonaFlowDispatcherDependencies = {
   projectPersonaCoreAppsIntoFlow,
   readConversationLog,
   appendConversationMessage: appendPersonaConversationMessage,
-  getPersonaStorageStats,
-  observePersonaRuntimeCompaction: async (observation) => {
-    log.info(`Persona runtime retention observation: ${JSON.stringify({
-      compactors: observation.compactors,
-      failures: observation.failures,
-      before: observation.before?.totals,
-      after: observation.after?.totals,
-    })}`);
-  },
-  compactPersonaMailboxItems,
-  compactPersonaActivities,
-  compactPersonaFlowDispatches,
   runFlow,
 };
 
@@ -2129,82 +2097,6 @@ export class PersonaFlowDispatcher {
     }
   }
 
-  private async compactRuntimeAfterTerminal(
-    activity: PersonaActivity,
-    dispatch: PersonaFlowDispatchRecord,
-  ): Promise<PersonaRuntimeCompactionObservation | undefined> {
-    if (!FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION) return undefined;
-
-    const personaId = activity.personaId;
-    if (dispatch.personaId !== personaId) {
-      log.warn(
-        `Skipped Persona runtime retention for Activity ${activity.id}: `
-        + `dispatch ${dispatch.id} belongs to a different Persona.`,
-      );
-      return undefined;
-    }
-    // Measuring (`shadow`) belongs to the hourly sweep; only `active` cleanup
-    // runs here, for Personas inside the rollout cohort.
-    try {
-      const decision = await this.inWorkspace(
-        () => getPersonaRuntimeRetentionDecision(personaId),
-      );
-      if (decision.mode !== 'active') return undefined;
-    } catch (error) {
-      log.warn(`Skipped Persona runtime retention for Activity ${activity.id}:`, error);
-      return undefined;
-    }
-    const now = runtimeClock.now();
-    const context = `Persona ${personaId}, Activity ${activity.id}, dispatch ${dispatch.id}`;
-    const observation: PersonaRuntimeCompactionObservation = {
-      compactors: {},
-      failures: [],
-    };
-
-    try {
-      observation.before = await this.inWorkspace(
-        () => this.dependencies.getPersonaStorageStats(personaId),
-      );
-    } catch (error) {
-      log.warn(`Failed to collect pre-retention storage stats for ${context}:`, error);
-    }
-
-    const collections = [
-      ['mailboxItems', this.dependencies.compactPersonaMailboxItems],
-      ['activities', this.dependencies.compactPersonaActivities],
-      ['flowDispatches', this.dependencies.compactPersonaFlowDispatches],
-    ] as const;
-    for (const [kind, compact] of collections) {
-      try {
-        const result = await this.inWorkspace(
-          () => withPersonaRuntimeLock(personaId, async (lock) => {
-            const grant = await acquirePersonaRuntimeRetentionWriteGrant(personaId, lock);
-            return grant ? compact(grant, now) : null;
-          }),
-        );
-        if (!result) break;
-        observation.compactors[kind] = result;
-      } catch (error) {
-        observation.failures.push(kind);
-        log.warn(`Failed to compact ${kind} for ${context}:`, error);
-      }
-    }
-
-    // Lease history is intentionally excluded: its small records gain nothing
-    // from soft compaction. Irreversible count pruning runs separately behind
-    // ENABLE_PERSONA_LEASE_HISTORY_PRUNING (issue #478).
-
-    try {
-      observation.after = await this.inWorkspace(
-        () => this.dependencies.getPersonaStorageStats(personaId),
-      );
-    } catch (error) {
-      log.warn(`Failed to collect post-retention storage stats for ${context}:`, error);
-    }
-
-    return observation;
-  }
-
   private async commitTerminal(
     record: PersonaFlowDispatchRecord,
     fence: PersonaLeaseFence,
@@ -2331,22 +2223,6 @@ export class PersonaFlowDispatcher {
         completion.activity,
         assignmentSynchronized,
       );
-      // Retention is awaited for deterministic cutoff behavior, but every
-      // collection has its own post-authoritative lock and failure boundary.
-      const retentionObservation = await this.compactRuntimeAfterTerminal(
-        completion.activity,
-        terminal,
-      );
-      if (retentionObservation) {
-        try {
-          await this.inWorkspace(() => (
-            this.dependencies.observePersonaRuntimeCompaction(retentionObservation)
-          ));
-        } catch (error) {
-          log.warn(`Failed to observe Persona runtime retention for ${fence.activityId}:`, error);
-        }
-      }
-
       let maintenanceRun: BehaviorMaintenanceRun | null = null;
       try {
         // The rollout gate defaults off, making this a no-write call. When

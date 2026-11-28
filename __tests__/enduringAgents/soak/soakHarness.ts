@@ -51,16 +51,9 @@ import {
 } from '@/backend/services/enduringAgents/store';
 import { behaviorOutcomeMetricId } from '@/backend/services/enduringAgents/behaviorOutcome';
 import { resolvePersonaCoreRevision } from '@/backend/services/enduringAgents/personaCoreResolver';
-import {
-  compactPersonaActivities,
-  compactPersonaFlowDispatches,
-  compactPersonaMailboxItems,
-  getBehaviorCallPinRetentionPolicy,
-} from '@/backend/services/enduringAgents/compactRuntime';
-import { createBehaviorCallPin, completeBehaviorCallPin, listBehaviorCallPins } from '@/backend/services/enduringAgents/behaviorCallPins';
-import { acquirePersonaRuntimeRetentionWriteGrant } from '@/backend/services/enduringAgents/personaRuntimeRetentionControl';
-import { applyRetention } from '@/backend/services/enduringAgents/retention';
-import { withPersonaRuntimeLock } from '@/backend/services/enduringAgents/runtimeLock';
+import { createBehaviorCallPin, completeBehaviorCallPin } from '@/backend/services/enduringAgents/behaviorCallPins';
+import { readPersonaRuntimeRetentionState } from '@/backend/services/enduringAgents/personaRuntimeRetentionControl';
+import { runPersonaRuntimeRetentionSweep } from '@/backend/services/enduringAgents/personaRuntimeRetentionRollout';
 import { FEATURES } from '@/config/features';
 import {
   ENDURING_AGENT_SCHEMA_VERSION,
@@ -83,6 +76,7 @@ import {
   type PersonaProcessClient,
 } from '../personaProcessBoundaryHarness';
 import { createPersonaFromRole } from '../fixtures/personaFactory';
+import { storeRetentionState } from '../fixtures/retentionState';
 import {
   PERSONA_SOAK_EVIDENCE_SCHEMA_VERSION,
   SOAK_ACCEPTANCE_NUMERIC_CONTRACTS,
@@ -154,7 +148,6 @@ export interface PersonaSoakSummary {
 }
 
 interface MutableFeatureSnapshot {
-  runtimeRetention: boolean;
   leasePruning: boolean;
   maintenanceAdmission: boolean;
   maintenanceDiagnosis: boolean;
@@ -252,7 +245,6 @@ function debugActivity(message: string): void {
 
 function featureSnapshot(): MutableFeatureSnapshot {
   return {
-    runtimeRetention: FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION,
     leasePruning: FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING,
     maintenanceAdmission: FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION,
     maintenanceDiagnosis: FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS,
@@ -262,7 +254,6 @@ function featureSnapshot(): MutableFeatureSnapshot {
 }
 
 function restoreFeatures(snapshot: MutableFeatureSnapshot): void {
-  FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION = snapshot.runtimeRetention;
   FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING = snapshot.leasePruning;
   FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = snapshot.maintenanceAdmission;
   FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = snapshot.maintenanceDiagnosis;
@@ -709,33 +700,21 @@ async function completeWorkloadBatch(
   }));
 }
 
-const SOAK_RUNTIME_RETENTION_CONFIG = {
-  mode: 'active',
-  rolloutBasisPoints: 10_000,
-  cohortVersion: 'persona-soak',
-  criticalPersonaIds: [],
-} as const;
-
+/**
+ * One cleanup sweep per simulated day, as a workspace whose measuring week has
+ * passed. Any anomaly fails the soak instead of quietly measuring only.
+ */
 async function compactRuntime(personaId: string, now: number) {
-  const previousRetention = FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION;
-  FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION = true;
-  try {
-    await withPersonaRuntimeLock(personaId, async (lock) => {
-      const grant = await acquirePersonaRuntimeRetentionWriteGrant(personaId, lock, {
-        config: SOAK_RUNTIME_RETENTION_CONFIG,
-      });
-      if (!grant) throw new Error('The soak harness could not obtain a runtime retention grant.');
-      await compactPersonaMailboxItems(grant, now);
-      await compactPersonaActivities(grant, now);
-      await compactPersonaFlowDispatches(grant, now);
-      await applyRetention(
-        await listBehaviorCallPins(personaId),
-        getBehaviorCallPinRetentionPolicy(await listPersonaActivities(personaId), lock),
-        now,
-      );
-    });
-  } finally {
-    FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION = previousRetention;
+  if ((await readPersonaRuntimeRetentionState()).state.mode !== 'active') {
+    await storeRetentionState({ mode: 'active' });
+  }
+  const cleanup = await runPersonaRuntimeRetentionSweep({ now });
+  if (cleanup.anomalies.length > 0 || cleanup.personasFailed > 0 || cleanup.mode !== 'active') {
+    throw new Error(`Persona history cleanup did not clean up during the soak: ${JSON.stringify({
+      mode: cleanup.mode,
+      anomalies: cleanup.anomalies,
+      personasFailed: cleanup.personasFailed,
+    })}`);
   }
 
   const before = await listPersonaLeaseRecords(personaId);
@@ -1412,10 +1391,7 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
       });
     }
     summary = await runWithWorkspace(workspaceId, async () => {
-      // The harness executes one explicit, evidence-captured sweep per simulated
-      // day. Per-terminal retention would rescan the same growing collections
-      // after every Activity and turn the acceptance harness quadratic again.
-      FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION = false;
+      // The harness executes one explicit, evidence-captured sweep per simulated day.
       FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING = false;
       FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = false;
       FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = false;

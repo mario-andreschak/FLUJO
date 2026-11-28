@@ -1,6 +1,5 @@
 import type { FlowExecutionAuthority } from '@/backend/execution/flow/types';
 import { archiveModelDispatch, readModelTurnSnapshot, updateModelDispatchOutcome } from '@/backend/execution/flow/modelTurnArchive';
-import { FEATURES } from '@/config/features';
 import {
   claimNextPersonaActivity, commitPersonaActivityMutation, commitWithPersonaActivityLease,
   completePersonaActivity, enqueuePersonaMailboxItem,
@@ -12,8 +11,9 @@ import {
 } from '@/backend/services/enduringAgents/behaviorCallPins';
 import { getBehaviorCallPinRetentionPolicy } from '@/backend/services/enduringAgents/compactRuntime';
 import { deletePersona, previewPersonaDeletion } from '@/backend/services/enduringAgents/personaDeletion';
+import { acquirePersonaRuntimeRetentionWriteGrant } from '@/backend/services/enduringAgents/personaRuntimeRetentionControl';
 import { runPersonaRuntimeRetentionSweep } from '@/backend/services/enduringAgents/personaRuntimeRetentionRollout';
-import { applyRetention, planRetention } from '@/backend/services/enduringAgents/retention';
+import { executeRetentionPlan, planRetention } from '@/backend/services/enduringAgents/retention';
 import { withPersonaRuntimeLock } from '@/backend/services/enduringAgents/runtimeLock';
 import { getPersonaStorageStats } from '@/backend/services/enduringAgents/runtimeStorageStats';
 import { listBehaviorRevisions, listPersonaActivities } from '@/backend/services/enduringAgents/store';
@@ -21,6 +21,7 @@ import * as personaStore from '@/backend/services/enduringAgents/store';
 import { saveCollectionItem } from '@/utils/storage/backend';
 import { getCurrentWorkspace, runWithWorkspace } from '@/utils/workspace';
 import { createPersonaFromRole } from './fixtures/personaFactory';
+import { storeRetentionState } from './fixtures/retentionState';
 
 jest.mock('@/backend/services/enduringAgents/store', () => {
   const actual = jest.requireActual<typeof import('@/backend/services/enduringAgents/store')>('@/backend/services/enduringAgents/store');
@@ -183,9 +184,12 @@ describe('specialist call persistence and privacy', () => {
         .rejects.toThrow('still required');
     });
     await completePersonaActivity({ ...fence, status: 'completed' });
+    await storeRetentionState({ mode: 'active' });
     await withPersonaRuntimeLock(persona.id, async (lock) => {
       const policy = getBehaviorCallPinRetentionPolicy(await listPersonaActivities(persona.id), lock);
-      expect(await applyRetention([completed], policy, later)).toEqual({ compacted: 1, remaining: 0 });
+      const grant = await acquirePersonaRuntimeRetentionWriteGrant(persona.id, lock);
+      expect(await executeRetentionPlan(planRetention([completed], policy, later), policy, { grant }))
+        .toMatchObject({ compacted: 1, remaining: 0 });
       await expect(saveCompactedBehaviorCallPin({ ...compactBehaviorCallPin(completed, later), status: 'error' }, lock))
         .rejects.toThrow('immutable receipt');
     });
@@ -234,26 +238,20 @@ describe('specialist call persistence and privacy', () => {
     });
   }));
 
-  it('includes specialist calls in shadow and active sweeps, with the deployment disable respected', async () => fresh(async () => {
+  it('includes specialist calls when measuring and when cleaning up', async () => fresh(async () => {
     const { pin, fence } = await setup();
     await completePersonaActivity({ ...fence, status: 'completed' });
     const now = Date.now() + 31 * 24 * 60 * 60 * 1_000;
-    const prior = FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION;
-    const config = { mode: 'active' as const, rolloutBasisPoints: 10_000, cohortVersion: 'test', criticalPersonaIds: [] };
-    try {
-      FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION = false;
-      expect((await runPersonaRuntimeRetentionSweep({ now, config })).personasExamined).toBe(0);
-      FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION = true;
-      const shadow = await runPersonaRuntimeRetentionSweep({ now, config: { ...config, mode: 'shadow' } });
-      expect(shadow.personasFailed).toBe(0);
-      expect(shadow.collections.behaviorCallPins).toMatchObject({ selected: 1, compacted: 0 });
-      expect((await getBehaviorCallPin(pin.id))?.flowSnapshot).toBeDefined();
-      const active = await runPersonaRuntimeRetentionSweep({ now, config });
-      expect(active.personasFailed).toBe(0);
-      expect(active.collections.behaviorCallPins).toMatchObject({ selected: 1, compacted: 1 });
-      expect((await getBehaviorCallPin(pin.id))?.flowSnapshot).toBeUndefined();
-    } finally {
-      FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION = prior;
-    }
+
+    const shadow = await runPersonaRuntimeRetentionSweep({ now });
+    expect(shadow).toMatchObject({ mode: 'shadow', personasFailed: 0, anomalies: [] });
+    expect(shadow.collections.behaviorCallPins).toMatchObject({ selected: 1, compacted: 0 });
+    expect((await getBehaviorCallPin(pin.id))?.flowSnapshot).toBeDefined();
+
+    await storeRetentionState({ mode: 'active' });
+    const active = await runPersonaRuntimeRetentionSweep({ now });
+    expect(active).toMatchObject({ mode: 'active', personasFailed: 0, anomalies: [] });
+    expect(active.collections.behaviorCallPins).toMatchObject({ selected: 1, compacted: 1 });
+    expect((await getBehaviorCallPin(pin.id))?.flowSnapshot).toBeUndefined();
   }));
 });

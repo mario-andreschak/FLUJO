@@ -1,9 +1,15 @@
 /**
  * Shared planning and execution primitives for Persona runtime retention.
  *
- * Planning is pure so shadow and active rollout modes observe the exact same
- * deterministic candidate set. Persistence is a separate, re-authorized step.
+ * Planning is pure so measuring (`shadow`) and cleanup (`active`) see the exact
+ * same deterministic candidate set. Writing is a separate step that needs a
+ * grant from the rollout control and re-checks it before every record.
  */
+
+import {
+  assertPersonaRuntimeRetentionWriteGrant,
+  type PersonaRuntimeRetentionWriteGrant,
+} from './personaRuntimeRetentionControl';
 
 export interface RetentionPolicy<T> {
   /** Human/log label, e.g. 'PersonaMailboxItem'. */
@@ -20,6 +26,8 @@ export interface RetentionPolicy<T> {
   detailedLimit: number;
   /** Produce the compacted form; MUST preserve id and audit identity. */
   compact: (record: T, compactedAt: number) => T;
+  /** True when the compacted form is schema-valid and kept the record's identity. */
+  isValidCompaction: (record: T, compacted: T) => boolean;
   /** Persist one schema-valid compacted record. */
   save: (record: T) => Promise<unknown>;
   /** Cap writes per collection and Persona sweep. */
@@ -37,14 +45,28 @@ export interface RetentionCandidate<T> {
   bytesAfter: number;
 }
 
+export interface RetentionPlanOptions<T> {
+  /** Records unfinished work still points at. They are never rewritten. */
+  isInUse?: (record: T) => boolean;
+}
+
 export interface RetentionPlan<T> {
   recordKind: string;
   scanned: number;
   eligible: number;
+  /** Records cleanup would rewrite, before the per-sweep write cap. */
   candidateCount: number;
+  /** The capped write set, newest first. */
   candidates: RetentionCandidate<T>[];
+  /** Old enough to clean up, but still in use by unfinished work. */
+  inUse: number;
+  /** Old enough, but the cleaned-up form would not be valid. */
+  invalid: number;
+  /** Old enough, but cleaning up would not make the record smaller. */
+  notSmaller: number;
   alreadyCompacted: number;
-  skipped: number;
+  /** Candidates left for a later sweep by the write cap. */
+  overCap: number;
   remaining: number;
   bytesBefore: number;
   projectedBytesAfter: number;
@@ -53,32 +75,16 @@ export interface RetentionPlan<T> {
 export interface RetentionExecutionResult {
   selected: number;
   compacted: number;
-  alreadyCompacted: number;
-  skipped: number;
   failed: number;
-  unauthorized: number;
+  /** Planned writes not made because the grant was withdrawn or a write failed. */
+  stopped: number;
   remaining: number;
-  bytesBefore: number;
-  projectedBytesAfter: number;
 }
 
 export interface RetentionExecutionOptions<T> {
-  shadow?: boolean;
-  /**
-   * Called immediately before every save. Returning false stops all remaining
-   * writes, which makes an in-flight rollout disable deterministic.
-   */
-  authorizeWrite?: (
-    record: T,
-    candidate: RetentionCandidate<T>,
-  ) => boolean | Promise<boolean>;
+  /** Null measures only: nothing is written. */
+  grant: PersonaRuntimeRetentionWriteGrant | null;
   onWriteFailure?: (record: T, error: unknown) => void;
-  continueOnFailure?: boolean;
-}
-
-export interface RetentionResult {
-  compacted: number;
-  remaining: number;
 }
 
 function serializedBytes(value: unknown): number {
@@ -87,11 +93,14 @@ function serializedBytes(value: unknown): number {
 
 /**
  * Build the deterministic age/rank plan without performing persistence.
+ * A record is rewritten only when nothing still uses it, its cleaned-up form
+ * is valid, and it gets smaller.
  */
 export function planRetention<T extends { id: string }>(
   records: readonly T[],
   policy: RetentionPolicy<T>,
-  now: number = Date.now(),
+  now: number,
+  options: RetentionPlanOptions<T> = {},
 ): RetentionPlan<T> {
   const alreadyCompacted = records.filter((record) => policy.isCompacted(record)).length;
   const eligible = records.filter((record) => policy.isEligible(record));
@@ -101,39 +110,42 @@ export function planRetention<T extends { id: string }>(
   });
   const uncompacted = sorted.filter((record) => !policy.isCompacted(record));
   const cutoff = now - policy.retentionMs;
-  const allCandidates: RetentionCandidate<T>[] = [];
+  const writeSet: RetentionCandidate<T>[] = [];
+  let inUse = 0;
+  let invalid = 0;
+  let notSmaller = 0;
 
   for (const [rank, record] of uncompacted.entries()) {
     const expired = policy.timestampOf(record) < cutoff;
     const beyondDetailedLimit = rank >= policy.detailedLimit;
     if (!expired && !beyondDetailedLimit) continue;
-
-    const reason: RetentionReason = expired && beyondDetailedLimit
-      ? 'age-and-rank'
-      : expired
-        ? 'age'
-        : 'rank';
-    const projected = policy.compact(
-      record,
-      Math.max(now, policy.timestampOf(record)),
-    );
-    allCandidates.push({
+    if (options.isInUse?.(record)) {
+      inUse += 1;
+      continue;
+    }
+    const projected = policy.compact(record, Math.max(now, policy.timestampOf(record)));
+    if (!policy.isValidCompaction(record, projected)) {
+      invalid += 1;
+      continue;
+    }
+    const bytesBefore = serializedBytes(record);
+    const bytesAfter = serializedBytes(projected);
+    if (bytesAfter >= bytesBefore) {
+      notSmaller += 1;
+      continue;
+    }
+    writeSet.push({
       record,
       projected,
       rank,
-      reason,
-      bytesBefore: serializedBytes(record),
-      bytesAfter: serializedBytes(projected),
+      reason: expired && beyondDetailedLimit ? 'age-and-rank' : expired ? 'age' : 'rank',
+      bytesBefore,
+      bytesAfter,
     });
   }
 
-  const maxWrites = policy.maxWritesPerSweep ?? Number.POSITIVE_INFINITY;
-  const candidates = allCandidates.slice(0, maxWrites);
-  const skipped = allCandidates.length - candidates.length;
-  const bytesBefore = records.reduce(
-    (total, record) => total + serializedBytes(record),
-    0,
-  );
+  const candidates = writeSet.slice(0, policy.maxWritesPerSweep ?? Number.POSITIVE_INFINITY);
+  const bytesBefore = records.reduce((total, record) => total + serializedBytes(record), 0);
   const projectedReduction = candidates.reduce(
     (total, candidate) => total + candidate.bytesBefore - candidate.bytesAfter,
     0,
@@ -143,75 +155,54 @@ export function planRetention<T extends { id: string }>(
     recordKind: policy.recordKind,
     scanned: records.length,
     eligible: eligible.length,
-    candidateCount: allCandidates.length,
+    candidateCount: writeSet.length,
     candidates,
+    inUse,
+    invalid,
+    notSmaller,
     alreadyCompacted,
-    skipped,
+    overCap: writeSet.length - candidates.length,
     remaining: uncompacted.length,
     bytesBefore,
-    projectedBytesAfter: Math.max(0, bytesBefore - projectedReduction),
+    projectedBytesAfter: bytesBefore - projectedReduction,
   };
 }
 
 /**
- * Execute a previously created plan. Shadow execution never calls save.
+ * Execute a plan. Without a grant nothing is written. With one, the grant is
+ * re-checked before every write, and the first failed write stops the rest.
  */
 export async function executeRetentionPlan<T extends { id: string }>(
   plan: RetentionPlan<T>,
   policy: RetentionPolicy<T>,
-  options: RetentionExecutionOptions<T> = {},
+  options: RetentionExecutionOptions<T>,
 ): Promise<RetentionExecutionResult> {
   const result: RetentionExecutionResult = {
     selected: plan.candidates.length,
     compacted: 0,
-    alreadyCompacted: plan.alreadyCompacted,
-    skipped: plan.skipped,
     failed: 0,
-    unauthorized: 0,
+    stopped: 0,
     remaining: plan.remaining,
-    bytesBefore: plan.bytesBefore,
-    projectedBytesAfter: plan.projectedBytesAfter,
   };
-
-  if (options.shadow) return result;
+  const { grant } = options;
+  if (!grant) return result;
+  assertPersonaRuntimeRetentionWriteGrant(grant);
 
   for (const [index, candidate] of plan.candidates.entries()) {
-    if (
-      options.authorizeWrite
-      && !await options.authorizeWrite(candidate.projected, candidate)
-    ) {
-      result.unauthorized = plan.candidates.length - index;
+    if (!await grant.authorize()) {
+      result.stopped = plan.candidates.length - index;
       break;
     }
-
     try {
       await policy.save(candidate.projected);
       result.compacted += 1;
       result.remaining -= 1;
     } catch (error) {
       result.failed += 1;
+      result.stopped = plan.candidates.length - index - 1;
       options.onWriteFailure?.(candidate.record, error);
-      if (!options.continueOnFailure) throw error;
+      break;
     }
   }
-
   return result;
-}
-
-/**
- * Plan and write in one step for a single policy, without consulting the
- * rollout switches. Runtime paths use the grant-checked compactors in
- * compactRuntime.ts or the rollout sweep instead.
- */
-export async function applyRetention<T extends { id: string }>(
-  records: readonly T[],
-  policy: RetentionPolicy<T>,
-  now: number = Date.now(),
-): Promise<RetentionResult> {
-  const plan = planRetention(records, policy, now);
-  const result = await executeRetentionPlan(plan, policy);
-  return {
-    compacted: result.compacted,
-    remaining: result.remaining,
-  };
 }

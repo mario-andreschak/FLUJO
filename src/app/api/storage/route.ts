@@ -19,6 +19,7 @@ const RESERVED_INTERNAL_KEYS = new Set<StorageKey>([
   StorageKey.HUMAN_TASKS,
   StorageKey.PACKAGE_INSTALLS,
   StorageKey.CHAT_HISTORY,
+  StorageKey.PERSONA_RUNTIME_RETENTION_STATE,
 ]);
 
 function isGenericStorageKey(key: string | null | undefined): key is StorageKey {
