@@ -26,6 +26,10 @@ import {
   SSEClientTransport,
 } from "@modelcontextprotocol/sdk/client/sse.js";
 import { MCPSSEConfig } from "@/shared/types/mcp/mcp";
+import {
+  markClient, markTransport, isBetaClient, clientCapabilityKey, transportKind, transportStdioKey, transportHttpKey,
+  type TransportWithConfigKey,
+} from './sdkMarks';
 import fs from "fs/promises";
 import * as path from "path";
 import * as os from "os";
@@ -96,15 +100,7 @@ import {
   resolveGoalEnduranceFixtureToken,
 } from './goalEnduranceFixtureEnvironment';
 
-// We stash a capabilities key on the client so shouldRecreateClient can detect a change to
-// a client-declared MCP capability that is negotiated at connect time (the SDK doesn't
-// expose a client's own declared capabilities publicly). This includes the per-server
-// MCP Apps opt-in: turning it on/off must renegotiate the UI extension. Roots deliberately do NOT
-// participate: the roots capability is always declared and roots content is resolved
-// fresh per roots/list request (changes are announced via notifications/roots/
-// list_changed) — so no roots change may ever force a client rebuild (issue 46).
-interface ClientWithCapKey {
-  __flujoCapKey?: string;
+interface ClientWithProtectedFingerprint {
   __flujoProtectedConfigFingerprint?: string;
 }
 
@@ -122,10 +118,20 @@ export function protectedConfigFingerprint(config: MCPServerConfig): string {
 }
 
 export function clientProtectedConfigFingerprint(client: Client): string | undefined {
-  return (client as ClientWithCapKey).__flujoProtectedConfigFingerprint;
+  return (client as ClientWithProtectedFingerprint).__flujoProtectedConfigFingerprint;
 }
 
-/** Key of config that drives connect-time client capabilities. */
+/**
+ * Key of config that drives connect-time client capabilities. It is recorded on
+ * the client (markClient) so shouldRecreateClient can detect a change to a
+ * client-declared capability negotiated at connect time (the SDK does not expose
+ * a client's own declared capabilities). This includes the per-server MCP Apps
+ * opt-in: turning it on/off must renegotiate the UI extension. Roots deliberately
+ * do NOT participate: the roots capability is always declared and roots content is
+ * resolved fresh per roots/list request (changes are announced via
+ * notifications/roots/list_changed), so no roots change may ever force a client
+ * rebuild (issue 46).
+ */
 export function capabilityKey(config: MCPServerConfig): string {
   return [
     samplingConfigKey(config),
@@ -133,26 +139,6 @@ export function capabilityKey(config: MCPServerConfig): string {
     mcpAppsEnabled(config) ? "mcp-apps:on" : "mcp-apps:off",
     mcpSkillsEnabled(config) ? "mcp-skills:on" : "mcp-skills:off",
   ].join("|");
-}
-
-// We stash the RAW config key on the transport at creation time so
-// shouldRecreateClient can compare config-to-config (see stdioConfigKey /
-// httpConfigKey below). __flujoStdioKey covers stdio; __flujoHttpKey covers the
-// streamable/SSE (HTTP) auth material that the URL check alone cannot see.
-// __flujoKind identifies the transport type without instanceof so the check also
-// works for v2-beta transports (different classes, see betaClient.ts).
-export interface TransportWithConfigKey {
-  __flujoStdioKey?: string;
-  __flujoHttpKey?: string;
-  __flujoKind?: "stdio" | "streamable" | "sse" | "websocket";
-  /** Capability lease for one managed MCP Apps stdio process generation. */
-  __flujoRuntimeBrokerLeaseId?: string;
-  /** Opaque pending capability for this bundled FLUJO process generation. */
-  __flujoBundledWorkload?: PendingBundledFlujoWorkload;
-  /** Retires only the authority captured by this transport constructor. */
-  __flujoRetireRuntimeAuthority?: () => Promise<void>;
-  /** Inner SDK transport when FLUJO applies a protocol decorator. */
-  __flujoInnerTransport?: unknown;
 }
 
 /** Process-wide authority uncertainty survives another service/module instance. */
@@ -293,12 +279,6 @@ export function getUnderlyingTransport(transport: unknown): unknown {
   return current;
 }
 
-// Marker stashed on clients built by the v2-beta path (betaClient.ts), so
-// shouldRecreateClient never reuses a v1 client as a beta client or vice versa.
-export interface ClientWithBetaMarker {
-  __flujoBeta?: boolean;
-}
-
 const log = createLogger("backend/services/mcp/connection");
 
 /**
@@ -338,12 +318,11 @@ export async function resolveConfigHeaders(
   if (config.transport !== "streamable" && config.transport !== "sse") {
     return resolvedConfig;
   }
-  const c = config as unknown as { headers?: Record<string, MCPHeaderValue> };
-  if (!c.headers || typeof c.headers !== "object") {
+  if (!config.headers || typeof config.headers !== "object") {
     return resolvedConfig;
   }
   const resolved = new Map<string, string>();
-  for (const [key, raw] of Object.entries(c.headers)) {
+  for (const [key, raw] of Object.entries(config.headers)) {
     if (!isMcpHeaderName(key)) continue;
     const value = ownMcpStringValue(raw);
     if (!value) continue;
@@ -498,34 +477,22 @@ export function localLaunchFingerprint(config: MCPStdioConfig, isolateRuntimeHom
  * transport is keyed with these fields at creation time and compared raw-to-raw here.
  */
 export function httpConfigKey(config: MCPServerConfig): string {
-  // MCPStreamableConfig & MCPSSEConfig intersects to `never` (their `transport` literals
-  // conflict), so read the shared HTTP fields off an explicit optional shape instead.
-  const c = config as unknown as {
-    serverUrl?: string;
-    headers?: Record<string, string>;
-    requestInit?: unknown;
-    eventSourceInit?: unknown;
-    reconnectionOptions?: unknown;
-    sessionId?: string;
-    oauthClientId?: string;
-    oauthIssuer?: string;
-    oauthClientInformation?: unknown;
-    oauthClientSecret?: string;
-    oauthTokens?: unknown;
-  };
+  // A saved record may carry any of these fields whatever its transport, and the
+  // key must change with every one of them, so each is read as stored data.
+  const stored = (name: string): unknown => Reflect.get(config, name);
   return JSON.stringify({
     transport: config.transport,
-    url: c.serverUrl ?? "",
-    headers: c.headers ?? {},
-    requestInit: c.requestInit ?? {},
-    eventSourceInit: c.eventSourceInit ?? {},
-    reconnectionOptions: c.reconnectionOptions ?? {},
-    sessionId: c.sessionId ?? "",
-    oauthClientId: c.oauthClientId ?? "",
-    oauthIssuer: c.oauthIssuer ?? "",
-    oauthClientInformation: c.oauthClientInformation ?? {},
-    oauthClientSecret: c.oauthClientSecret ?? "",
-    oauthTokens: c.oauthTokens ?? {},
+    url: stored("serverUrl") ?? "",
+    headers: stored("headers") ?? {},
+    requestInit: stored("requestInit") ?? {},
+    eventSourceInit: stored("eventSourceInit") ?? {},
+    reconnectionOptions: stored("reconnectionOptions") ?? {},
+    sessionId: stored("sessionId") ?? "",
+    oauthClientId: stored("oauthClientId") ?? "",
+    oauthIssuer: stored("oauthIssuer") ?? "",
+    oauthClientInformation: stored("oauthClientInformation") ?? {},
+    oauthClientSecret: stored("oauthClientSecret") ?? "",
+    oauthTokens: stored("oauthTokens") ?? {},
   });
 }
 
@@ -538,7 +505,7 @@ export function createNewClient(config: MCPServerConfig): Client {
     assertExecutionServerConfig(config);
     // The configured private integration accepts only synchronous tool calls.
     const client = new CompleteToolDiscoveryClient({ name: `flujo-${config.name}-client`, version: '3.48.10' }, { capabilities: {} });
-    (client as unknown as ClientWithCapKey).__flujoCapKey = capabilityKey(config);
+    markClient(client, { __flujoCapKey: capabilityKey(config) });
     Object.defineProperty(client, '__flujoProtectedConfigFingerprint', {
       value: protectedConfigFingerprint(config), enumerable: false,
     });
@@ -602,7 +569,7 @@ export function createNewClient(config: MCPServerConfig): Client {
   if (elicitation) {
     registerElicitationHandler(client, config);
   }
-  (client as unknown as ClientWithCapKey).__flujoCapKey = capabilityKey(config);
+  markClient(client, { __flujoCapKey: capabilityKey(config) });
 
   return client;
 }
@@ -719,10 +686,9 @@ export async function createTransport(
       new URL(config.serverUrl),
       transportoptions,
     );
-    // Key the transport with the RAW auth/session material so shouldRecreateClient can
-    // detect a PAT / Bearer token / header change even when the URL is unchanged.
-    (transport as unknown as TransportWithConfigKey).__flujoHttpKey =
-      httpConfigKey(config);
+    // Key the transport with the RAW URL and auth/session material so shouldRecreateClient
+    // detects a changed address, PAT, Bearer token or header.
+    markTransport(transport, { __flujoHttpKey: httpConfigKey(config) });
     return transport;
   } else if (config.transport === "sse") {
     log.info(
@@ -772,10 +738,9 @@ export async function createTransport(
       new URL(config.serverUrl),
       transportoptions,
     );
-    // Key the transport with the RAW auth/session material so shouldRecreateClient can
-    // detect a PAT / Bearer token / header change even when the URL is unchanged.
-    (transport as unknown as TransportWithConfigKey).__flujoHttpKey =
-      httpConfigKey(config);
+    // Key the transport with the RAW URL and auth/session material so shouldRecreateClient
+    // detects a changed address, PAT, Bearer token or header.
+    markTransport(transport, { __flujoHttpKey: httpConfigKey(config) });
     return transport;
   } else if (config.transport === "websocket") {
     log.info(
@@ -1251,18 +1216,14 @@ export async function createStdioTransport(
     if (cleanupErrors.length) throw new McpRuntimeAuthorityRetirementError([error, ...cleanupErrors], 'MCP transport creation and authority retirement failed.', { cause: error });
     throw error;
   }
-  if (runtimeBroker) {
-    (transport as unknown as TransportWithConfigKey).__flujoRuntimeBrokerLeaseId =
-      runtimeBroker.leaseId;
-  }
-
-  (transport as unknown as TransportWithConfigKey).__flujoBundledWorkload = workload;
-  (transport as unknown as TransportWithConfigKey).__flujoRetireRuntimeAuthority = retireRuntimeAuthority;
-
-  // Key the transport with the RAW config so shouldRecreateClient can tell whether a
-  // later config is byte-identical, independent of the command/args rewrites above.
-  (transport as unknown as TransportWithConfigKey).__flujoStdioKey =
-    stdioConfigKey(config, options?.isolateRuntimeHome === true);
+  if (runtimeBroker) markTransport(transport, { __flujoRuntimeBrokerLeaseId: runtimeBroker.leaseId });
+  markTransport(transport, {
+    __flujoBundledWorkload: workload,
+    __flujoRetireRuntimeAuthority: retireRuntimeAuthority,
+    // Key the transport with the RAW config so shouldRecreateClient can tell whether a
+    // later config is byte-identical, independent of the command/args rewrites above.
+    __flujoStdioKey: stdioConfigKey(config, options?.isolateRuntimeHome === true),
+  });
 
   // Check if stderr is available
   if (transport.stderr) {
@@ -1305,8 +1266,7 @@ export function shouldRecreateClient(
   // Experimental v2-beta protocol toggle (betaClient.ts). Websocket configs always
   // stay on the v1 SDK (the v2 SDK has no websocket transport), so for them the
   // toggle is not a config change.
-  const clientIsBeta =
-    (client as unknown as ClientWithBetaMarker).__flujoBeta === true;
+  const clientIsBeta = isBetaClient(client);
   const wantBeta = useBetaProtocol && config.transport !== "websocket";
   if (clientIsBeta !== wantBeta) {
     return {
@@ -1320,10 +1280,8 @@ export function shouldRecreateClient(
   // A v2-beta client's transports are different classes, so the v1 instanceof checks
   // below cannot see them. Its transports carry the same raw config keys plus an
   // explicit kind marker (stashed in betaClient.ts), so compare those instead.
-  const betaTransport = clientIsBeta
-    ? client.transport as unknown as TransportWithConfigKey | undefined
-    : undefined;
-  if (clientIsBeta && betaTransport?.__flujoKind !== config.transport) {
+  const betaTransport = clientIsBeta ? client.transport : undefined;
+  if (clientIsBeta && transportKind(betaTransport) !== config.transport) {
     return {
       needsNewClient: true,
       reason: `Transport type changed to ${config.transport}`,
@@ -1335,8 +1293,7 @@ export function shouldRecreateClient(
   // request handlers close over. Roots are exempt by design (issue 46): the capability
   // is always declared and content changes are served live by the roots/list handler +
   // announced via notifications/roots/list_changed — never a rebuild.
-  const currentCapKey =
-    (client as unknown as ClientWithCapKey).__flujoCapKey ?? "";
+  const currentCapKey = clientCapabilityKey(client) ?? "";
   if (currentCapKey !== capabilityKey(config)) {
     return {
       needsNewClient: true,
@@ -1347,7 +1304,7 @@ export function shouldRecreateClient(
   if (betaTransport) {
     if (config.transport === "stdio") {
       if (
-        betaTransport.__flujoStdioKey !==
+        transportStdioKey(betaTransport) !==
         stdioConfigKey(config, options?.isolateRuntimeHome === true)
       ) {
         return {
@@ -1355,7 +1312,7 @@ export function shouldRecreateClient(
           reason: "Connection parameters changed",
         };
       }
-    } else if (betaTransport.__flujoHttpKey !== httpConfigKey(config)) {
+    } else if (transportHttpKey(betaTransport) !== httpConfigKey(config)) {
       return {
         needsNewClient: true,
         reason: `${config.transport} auth/connection parameters changed`,
@@ -1387,24 +1344,11 @@ export function shouldRecreateClient(
       };
     }
 
-    // Check if the server URL has changed
-    const transport = client.transport as StreamableHTTPClientTransport;
-    const currentUrl = (
-      transport as unknown as { _url?: URL }
-    )._url?.toString();
-    if (
-      currentUrl !== undefined &&
-      currentUrl !== new URL(config.serverUrl).toString()
-    ) {
-      return { needsNewClient: true, reason: "Streamable server URL changed" };
-    }
-
-    // The URL alone cannot reveal a changed PAT / Bearer token or custom header (same URL,
-    // new auth). Compare the RAW auth/session key stashed at creation so a token update
-    // rebuilds the client instead of silently reusing the stale-token connection — the
-    // direct cause of the planned execution's `unauthorized` after a PAT update.
-    const existingHttpKey = (transport as unknown as TransportWithConfigKey)
-      .__flujoHttpKey;
+    // Compare the RAW URL and auth/session key recorded at creation. The URL alone
+    // cannot reveal a changed PAT / Bearer token or custom header, and a token update
+    // must rebuild the client instead of silently reusing the stale-token connection
+    // (the direct cause of the planned execution's `unauthorized` after a PAT update).
+    const existingHttpKey = transportHttpKey(client.transport);
     if (!existingHttpKey) {
       return {
         needsNewClient: true,
@@ -1414,7 +1358,7 @@ export function shouldRecreateClient(
     if (existingHttpKey !== httpConfigKey(config)) {
       return {
         needsNewClient: true,
-        reason: "Streamable auth/connection parameters changed",
+        reason: "Streamable server URL, auth or connection parameters changed",
       };
     }
   } else if (config.transport === "sse") {
@@ -1426,23 +1370,9 @@ export function shouldRecreateClient(
       };
     }
 
-    // Check if the server URL has changed
-    const sseConfig = config as MCPSSEConfig;
-    const transport = client.transport as SSEClientTransport;
-    const currentUrl = (
-      transport as unknown as { _url?: URL }
-    )._url?.toString();
-    if (
-      currentUrl !== undefined &&
-      currentUrl !== new URL(sseConfig.serverUrl).toString()
-    ) {
-      return { needsNewClient: true, reason: "SSE server URL changed" };
-    }
-
-    // Same as streamable: detect a changed PAT / Bearer token or custom header behind an
-    // unchanged URL by comparing the RAW auth/session key stashed at creation time.
-    const existingHttpKey = (transport as unknown as TransportWithConfigKey)
-      .__flujoHttpKey;
+    // Same as streamable: the RAW key recorded at creation covers the URL, a PAT /
+    // Bearer token and custom headers.
+    const existingHttpKey = transportHttpKey(client.transport);
     if (!existingHttpKey) {
       return {
         needsNewClient: true,
@@ -1452,7 +1382,7 @@ export function shouldRecreateClient(
     if (existingHttpKey !== httpConfigKey(config)) {
       return {
         needsNewClient: true,
-        reason: "SSE auth/connection parameters changed",
+        reason: "SSE server URL, auth or connection parameters changed",
       };
     }
   } else {
@@ -1477,8 +1407,7 @@ export function shouldRecreateClient(
     // REWRITTEN command/args (.bat -> cmd.exe, bare node -> absolute path), so for e.g.
     // command "node" they never matched the raw config and every reconnect attempt
     // needlessly killed and respawned a healthy server (the restart death-spiral).
-    const existingKey = (client.transport as unknown as TransportWithConfigKey)
-      .__flujoStdioKey;
+    const existingKey = transportStdioKey(client.transport);
     if (!existingKey) {
       // Transport predates the config-key mechanism (only possible for a client adopted
       // across a dev hot-reload via the global recovery map) — we cannot prove the
