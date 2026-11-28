@@ -54,10 +54,24 @@ import {
   resizeFloatingRect,
   useFixedOriginOffset,
   usePointerDrag,
+  type FloatingRect,
   type ResizeDirection,
 } from './floatingPanel';
+import { useKeyedState } from './hooks/useKeyedState';
 
 const log = createLogger('frontend/components/Chat/McpAppFrame');
+
+/** The fullscreen app window before it is moved: centered, most of the viewport. */
+function centeredFloatingRect(viewportWidth: number, viewportHeight: number): FloatingRect {
+  const width = Math.min(Math.max(520, Math.round(viewportWidth * 0.86)), viewportWidth - 24);
+  const height = Math.min(Math.max(360, Math.round(viewportHeight * 0.84)), viewportHeight - 24);
+  return {
+    x: Math.round((viewportWidth - width) / 2),
+    y: Math.round((viewportHeight - height) / 2),
+    width,
+    height,
+  };
+}
 
 /** Must match backend/mcpApps/sandboxServer.ts. */
 const SANDBOX_PROXY_READY = 'ui/notifications/sandbox-proxy-ready';
@@ -881,11 +895,14 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [consentStatus, setConsentStatus] = useState<'loading' | 'internal' | 'granted' | 'prompt' | 'denied'>(
+  // Each app, conversation and policy answer asks for consent from scratch.
+  const consentKey = JSON.stringify([consentPolicyReady, consentRequired, conversationId ?? null, serverName, uri]);
+  const [consentStatus, setConsentStatus] = useKeyedState<'loading' | 'internal' | 'granted' | 'prompt' | 'denied'>(
+    consentKey,
     consentPolicyReady && !consentRequired ? 'granted' : 'loading',
   );
   const [consentSaving, setConsentSaving] = useState(false);
-  const [consentError, setConsentError] = useState<string | null>(null);
+  const [consentError, setConsentError] = useKeyedState<string | null>(consentKey, null);
   const reloadAllowedRef = useRef(false);
   reloadAllowedRef.current = consentPolicyReady
     && (consentStatus === 'internal' || consentStatus === 'granted')
@@ -895,17 +912,8 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   const errorRef = useRef<string | null>(null);
   useEffect(() => { errorRef.current = error; }, [error]);
   useEffect(() => {
-    if (!consentPolicyReady) {
-      setConsentStatus('loading');
-      return undefined;
-    }
-    if (!consentRequired) {
-      setConsentStatus('granted');
-      setConsentError(null);
-      return undefined;
-    }
+    if (!consentPolicyReady || !consentRequired) return undefined;
     let active = true;
-    setConsentStatus('loading');
     const params = new URLSearchParams({ serverName, uri });
     if (conversationId) params.set('conversationId', conversationId);
     void fetch(`/api/mcp/app-consent?${params}`)
@@ -917,7 +925,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       })
       .catch(() => { if (active) setConsentStatus('denied'); });
     return () => { active = false; };
-  }, [consentPolicyReady, consentRequired, conversationId, serverName, uri]);
+  }, [consentKey]);
   const decideConsent = useCallback(async (decision: 'allow-once' | 'allow-always' | 'deny-always') => {
     setConsentSaving(true);
     setConsentError(null);
@@ -950,13 +958,18 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
     }
   }, [serverName, t, uri]);
   const [displayMode, setDisplayMode] = useState<McpUiDisplayMode>(docked ? 'pip' : 'inline');
-  const [floatingRect, setFloatingRect] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  // Where the person moved or resized the fullscreen window; until then it is centered.
+  const [placedFloatingRect, setFloatingRect] = useState<FloatingRect | null>(null);
   const [appDisplayModes, setAppDisplayModes] = useState<McpUiDisplayMode[]>([]);
   // Apps that paint their own window chrome opt out of FLUJO's decorative frame.
   const [chromeless, setChromeless] = useState(false);
   const previousDefaultExpandedRef = useRef(defaultExpanded);
   const { activeCursor, startPointerDrag } = usePointerDrag();
   const effectiveDisplayMode = hostDisplayMode ?? displayMode;
+  const floatingRect = placedFloatingRect
+    ?? (!docked && effectiveDisplayMode === 'fullscreen' && typeof window !== 'undefined'
+      ? centeredFloatingRect(window.innerWidth, window.innerHeight)
+      : null);
   const hostDisplayModes = useMemo<McpUiDisplayMode[]>(
     () => docked
       ? ['pip', 'fullscreen']
@@ -997,21 +1010,6 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
     isError: toolIsError,
     updateId: toolUpdateId,
   });
-
-  useEffect(() => {
-    if (docked || effectiveDisplayMode !== 'fullscreen' || typeof window === 'undefined') return;
-    setFloatingRect((current) => {
-      if (current) return current;
-      const width = Math.min(Math.max(520, Math.round(window.innerWidth * 0.86)), window.innerWidth - 24);
-      const height = Math.min(Math.max(360, Math.round(window.innerHeight * 0.84)), window.innerHeight - 24);
-      return {
-        x: Math.round((window.innerWidth - width) / 2),
-        y: Math.round((window.innerHeight - height) / 2),
-        width,
-        height,
-      };
-    });
-  }, [docked, effectiveDisplayMode]);
 
   useEffect(() => {
     if (docked || effectiveDisplayMode !== 'fullscreen' || typeof window === 'undefined') return undefined;

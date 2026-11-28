@@ -59,6 +59,24 @@ afterEach(() => {
 });
 
 describe('large tool-result paging', () => {
+  it('pages large plain text in place and goes back to page 1 for a new result', () => {
+    Reflect.deleteProperty(globalThis, 'Worker');
+    const pageChars = 64 * 1024;
+    const text = (marker: string) => `${marker}-FIRST${'a'.repeat(pageChars)}${marker}-SECOND`;
+    const { rerender } = render(<ToolCallTimeline pairs={[resultPair(text('one'))]} messageId="assistant-plain" />);
+    expandResult();
+
+    expect(screen.getByText('Page 1 / 2')).toBeInTheDocument();
+    expect(screen.queryByText(/Preparing paged result/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    expect(screen.getByText('Page 2 / 2')).toBeInTheDocument();
+    expect(screen.getByText(/one-SECOND/)).toBeInTheDocument();
+
+    rerender(<ToolCallTimeline pairs={[resultPair(text('two'))]} messageId="assistant-plain" />);
+    expect(screen.getByText('Page 1 / 2')).toBeInTheDocument();
+    expect(screen.getByText(/^two-FIRST/)).toBeInTheDocument();
+  });
+
   it('uses byte ranges and renders only the selected remote payload page', async () => {
     Object.defineProperty(globalThis, 'TextDecoder', {
       configurable: true,

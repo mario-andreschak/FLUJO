@@ -98,4 +98,33 @@ describe('RevertPreviewDialog', () => {
       'files-only',
     ));
   });
+
+  it('keeps the result while closing and starts from a fresh preview when opened again', async () => {
+    const props = { conversationId: 'conversation-1', messageId: 'm1', onClose: () => undefined };
+    const { rerender } = render(<RevertPreviewDialog open {...props} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm restore' }));
+    expect(await screen.findByText('Restore complete.')).toBeInTheDocument();
+
+    rerender(<RevertPreviewDialog open={false} {...props} />);
+    expect(screen.getByText('Restore complete.')).toBeInTheDocument();
+
+    let resolvePreview: (value: unknown) => void = () => undefined;
+    previewRevert.mockReturnValueOnce(new Promise((resolve) => { resolvePreview = resolve; }));
+    rerender(<RevertPreviewDialog open {...props} />);
+    expect(screen.queryByText('Restore complete.')).not.toBeInTheDocument();
+    expect(screen.getByRole('progressbar')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Confirm restore' })).toBeDisabled();
+
+    resolvePreview({
+      messageId: 'm1',
+      previewId: 'preview-2',
+      files: [],
+      diff: '',
+      truncated: false,
+      fileRestoreAvailable: false,
+      chatMessageCount: 1,
+    });
+    expect(await screen.findByRole('radio', { name: 'Restore Only Chat + Keep Files How They Are' })).toBeChecked();
+    expect(previewRevert).toHaveBeenCalledTimes(2);
+  });
 });

@@ -436,9 +436,6 @@
   "src/frontend/components/Chat/ChatHistory.tsx": {
     "flujo/no-raw-timers": {
       "count": 2
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 2
     }
   },
   "src/frontend/components/Chat/ChatInput.tsx": {
@@ -447,9 +444,6 @@
     },
     "react-hooks/refs": {
       "count": 5
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 3
     }
   },
   "src/frontend/components/Chat/ChatMessages.tsx": {
@@ -458,32 +452,16 @@
     },
     "react-hooks/error-boundaries": {
       "count": 2
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 6
-    }
-  },
-  "src/frontend/components/Chat/ChatTargetSelector.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 3
     }
   },
   "src/frontend/components/Chat/DebuggerCanvas.tsx": {
     "flujo/no-raw-timers": {
       "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 4
     }
   },
   "src/frontend/components/Chat/DebuggerConversation.tsx": {
     "flujo/no-double-cast": {
       "count": 1
-    }
-  },
-  "src/frontend/components/Chat/DevCanvasDock.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 2
     }
   },
   "src/frontend/components/Chat/ExecutedFlowPanel.tsx": {
@@ -502,41 +480,15 @@
     },
     "react-hooks/refs": {
       "count": 4
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 2
     }
   },
   "src/frontend/components/Chat/ModelTurnInspector.tsx": {
     "flujo/no-double-cast": {
       "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 2
-    }
-  },
-  "src/frontend/components/Chat/ModelTurnJsonPreview.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/Chat/QuickChatDialog.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 2
-    }
-  },
-  "src/frontend/components/Chat/RevertPreviewDialog.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
     }
   },
   "src/frontend/components/Chat/chatApiContent.ts": {
     "flujo/no-double-cast": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/Chat/floatingPanel.tsx": {
-    "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
@@ -557,9 +509,6 @@
     },
     "react-hooks/refs": {
       "count": 5
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 14
     }
   },
   "src/frontend/components/Chat/mcpAppClient.ts": {

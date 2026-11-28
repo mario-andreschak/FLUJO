@@ -163,7 +163,20 @@ jest.mock('@/frontend/components/Chat/McpAppFrame', () => ({
   jsonUtf8ByteLength: () => 0,
 }));
 
-jest.mock('@/frontend/components/Chat/ChatHistory', () => ({ __esModule: true, default: () => null }));
+// Hidden from the accessibility tree so role queries elsewhere are unaffected.
+jest.mock('@/frontend/components/Chat/ChatHistory', () => ({
+  __esModule: true,
+  default: ({ conversations, onSelectConversation }: {
+    conversations?: Array<{ id: string }>;
+    onSelectConversation?: (id: string) => void;
+  }) => (
+    <div hidden>
+      {conversations?.map((conversation) => (
+        <button key={conversation.id} type="button" data-testid={`open-${conversation.id}`} onClick={() => onSelectConversation?.(conversation.id)} />
+      ))}
+    </div>
+  ),
+}));
 jest.mock('@/frontend/components/Chat/ChatMessages', () => ({
   __esModule: true,
   default: ({ messages, pendingQuestion, pendingElicitation, pendingToolCalls, onApproveToolCall, onAnswerQuestion, onDeclineQuestion, onSubmitElicitation, onCancelElicitation }: {
@@ -722,6 +735,30 @@ describe('Talk conversation Agent switch terminology', () => {
     const view = render(<Chat />);
     try {
       expect(await screen.findByTestId('approval-card')).toHaveTextContent('send_email');
+    } finally { view.unmount(); }
+  });
+
+  it('drops the approval card and shows the saved approval setting when switching conversations (#1284)', async () => {
+    const waiting = {
+      ...detailedConversation, status: 'awaiting_tool_approval', requireApproval: false,
+      pendingToolCalls: [{ id: 'call-1', type: 'function', function: { name: 'send_email', arguments: '{}' } }],
+    };
+    const other = {
+      ...detailedConversation, id: 'conversation-other', title: 'Other chat', status: 'completed', requireApproval: true,
+    };
+    mockListConversations.mockResolvedValue([waiting, { ...conversationSummary, id: 'conversation-other', title: 'Other chat' }]);
+    mockGetConversation.mockImplementation(async (id: string) => (id === 'conversation-other' ? other : waiting));
+
+    const view = render(<Chat />);
+    try {
+      expect(await screen.findByTestId('approval-card')).toHaveTextContent('send_email');
+      expect(approvalBox()).not.toBeChecked();
+
+      fireEvent.click(await screen.findByTestId('open-conversation-other'));
+      expect(screen.queryByTestId('approval-card')).not.toBeInTheDocument();
+      await waitFor(() => expect(mockGetConversation).toHaveBeenCalledWith('conversation-other', expect.anything()));
+      await waitFor(() => expect(approvalBox()).toBeChecked());
+      expect(screen.queryByTestId('approval-card')).not.toBeInTheDocument();
     } finally { view.unmount(); }
   });
 

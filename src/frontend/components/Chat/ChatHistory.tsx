@@ -86,6 +86,7 @@ import { chatService } from '@/frontend/services/chat';
 import StickySearchBar from '@/frontend/components/shared/StickySearchBar';
 import ProjectsPanel from '@/frontend/components/Projects/ProjectsPanel';
 import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
+import { useKeyedState } from './hooks/useKeyedState';
 
 interface ChatHistoryProps {
   conversations: ConversationListItem[]; // Use ConversationListItem[]
@@ -250,10 +251,6 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
     PREF.searchDim,
     'title',
   );
-  const [searchPage, setSearchPage] = React.useState<ConversationSearchPage | null>(null);
-  const [isSearching, setIsSearching] = React.useState(false);
-  const [isLoadingMoreSearch, setIsLoadingMoreSearch] = React.useState(false);
-  const [searchErrorKey, setSearchErrorKey] = React.useState<string | null>(null);
   const searchAbortRef = React.useRef<AbortController | null>(null);
   const [groupMode, setGroupMode] = useWorkspaceUiPreference<GroupMode>(PREF.group, 'none');
   const [pinnedConversationIds, setPinnedConversationIds] = useWorkspaceUiPreference<string[]>(
@@ -277,6 +274,11 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   );
   const trimmedSearch = search.trim();
   const searchKey = `${searchDimension}\u0000${originFilter}\u0000${trimmedSearch}`;
+  // A new query starts over: no page, no error, searching until the first page lands.
+  const [searchPage, setSearchPage] = useKeyedState<ConversationSearchPage | null>(searchKey, null);
+  const [isSearching, setIsSearching] = useKeyedState(searchKey, trimmedSearch.length > 0);
+  const [isLoadingMoreSearch, setIsLoadingMoreSearch] = useKeyedState(searchKey, false);
+  const [searchErrorKey, setSearchErrorKey] = useKeyedState<string | null>(searchKey, null);
   const currentSearchPage = trimmedSearch.length > 0 && searchPage?.key === searchKey
     ? searchPage
     : null;
@@ -316,20 +318,12 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
     if (q.length === 0) {
       searchAbortRef.current?.abort();
       searchAbortRef.current = null;
-      setSearchPage(null);
-      setSearchErrorKey(null);
-      setIsSearching(false);
-      setIsLoadingMoreSearch(false);
       return;
     }
     const key = `${searchDimension}\u0000${originFilter}\u0000${q}`;
     const controller = new AbortController();
     searchAbortRef.current?.abort();
     searchAbortRef.current = controller;
-    setSearchPage(null);
-    setSearchErrorKey(null);
-    setIsSearching(true);
-    setIsLoadingMoreSearch(false);
     const timer = setTimeout(() => {
       chatService.listConversationPage({
         limit: SEARCH_PAGE_SIZE,
@@ -679,9 +673,10 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
       return; // re-runs once the group has committed open
     }
 
-    // 2. Tree modes (chain, and the per-wave trees): expand every collapsed
+    // 2. Tree modes (chain, and the per-wave trees): find every collapsed
     //    ancestor on the rendered path. `ConversationTree` unmounts collapsed
     //    children, so an ancestor left closed keeps the row out of the DOM.
+    const collapsedAncestors: string[] = [];
     const tree = pinnedIds.has(id)
       ? pinnedChainIndex
       : groupMode === 'chain' ? chainIndex
@@ -694,7 +689,6 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
       for (const [parentId, children] of childrenByParent) {
         for (const child of children) parentOf.set(child.id, parentId);
       }
-      const collapsedAncestors: string[] = [];
       const seen = new Set<string>([id]);
       let cursor = parentOf.get(id);
       while (cursor && !seen.has(cursor)) {
@@ -702,19 +696,21 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
         if (expandedChains[cursor] === false) collapsedAncestors.push(cursor);
         cursor = parentOf.get(cursor);
       }
+    }
+
+    // 3. On the next frame, open those ancestors (this effect runs again once
+    //    they have committed open), or scroll the mounted row once.
+    //    `block: 'nearest'` keeps an already visible row exactly where it is
+    //    instead of re-centering the list.
+    const frame = window.requestAnimationFrame(() => {
       if (collapsedAncestors.length > 0) {
         setExpandedChains((prev) => {
           const next = { ...prev };
           for (const ancestor of collapsedAncestors) next[ancestor] = true;
           return next;
         });
-        return; // re-runs once the ancestors have committed open
+        return;
       }
-    }
-
-    // 3. Scroll the mounted row once. `block: 'nearest'` keeps an already
-    //    visible row exactly where it is instead of re-centering the list.
-    const frame = window.requestAnimationFrame(() => {
       const row = listRef.current
         ? Array.from(listRef.current.querySelectorAll<HTMLElement>('[data-conversation-id]'))
             .find((element) => element.getAttribute('data-conversation-id') === id)

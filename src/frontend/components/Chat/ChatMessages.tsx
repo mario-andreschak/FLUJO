@@ -59,6 +59,7 @@ import { magicLinkUrl } from '@/frontend/utils/magicLink';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import { copyText } from '@/frontend/components/shared/CopyLinkButton';
 import RevertPreviewDialog from './RevertPreviewDialog';
+import { useKeyedState } from './hooks/useKeyedState';
 import type { QueuedMessage } from './chatQueue'; // #221: inline pending bubbles
 import OpenAI from 'openai'; // Import OpenAI types for tool calls
 import { displayToolName } from '@/utils/shared/common'; // Friendly tool-name decode
@@ -456,8 +457,7 @@ const ResultPager: React.FC<{
 
 const PagedInlineText: React.FC<{ content: string }> = ({ content }) => {
   const pageCount = Math.max(1, Math.ceil(content.length / TOOL_RESULT_TEXT_PAGE_CHARS));
-  const [page, setPage] = useState(0);
-  useEffect(() => setPage(0), [content]);
+  const [page, setPage] = useKeyedState(content, 0);
   const safePage = Math.min(page, pageCount - 1);
   const visible = content.slice(
     safePage * TOOL_RESULT_TEXT_PAGE_CHARS,
@@ -479,20 +479,14 @@ interface WorkerResultMeta {
 const ProgressiveStructuredResult: React.FC<{ content: string }> = ({ content }) => {
   const workerRef = useRef<Worker | null>(null);
   const requestIdRef = useRef('');
-  const [meta, setMeta] = useState<WorkerResultMeta | null>(null);
-  const [items, setItems] = useState<string[]>([]);
-  const [page, setPage] = useState(0);
-  const [notJson, setNotJson] = useState(false);
+  const [meta, setMeta] = useKeyedState<WorkerResultMeta | null>(content, null);
+  const [items, setItems] = useKeyedState<string[]>(content, []);
+  const [page, setPage] = useKeyedState(content, 0);
+  const [workerFailed, setWorkerFailed] = useKeyedState(content, false);
+  const notJson = workerFailed || typeof Worker === 'undefined';
 
   useEffect(() => {
-    setMeta(null);
-    setItems([]);
-    setPage(0);
-    setNotJson(false);
-    if (typeof Worker === 'undefined') {
-      setNotJson(true);
-      return;
-    }
+    if (typeof Worker === 'undefined') return;
     const worker = new Worker('/workers/tool-result-worker.js', {
       name: 'flujo-tool-result-viewer',
     });
@@ -511,10 +505,10 @@ const ProgressiveStructuredResult: React.FC<{ content: string }> = ({ content })
       } else if (event.data.type === 'page' && Array.isArray(event.data.items)) {
         setItems(event.data.items);
       } else if (event.data.type === 'error') {
-        setNotJson(true);
+        setWorkerFailed(true);
       }
     };
-    worker.onerror = () => setNotJson(true);
+    worker.onerror = () => setWorkerFailed(true);
     worker.postMessage({ type: 'open', requestId, content });
     return () => {
       worker.postMessage({ type: 'close', requestId });
@@ -643,11 +637,11 @@ function decodeUtf8Page(
 const PagedRemoteToolResult: React.FC<{ payload: LazyToolPayloadRef }> = ({ payload }) => {
   const pageCount = Math.max(1, Math.ceil(payload.size / TOOL_RESULT_REMOTE_PAGE_BYTES));
   const [page, setPage] = useState(0);
-  const [state, setState] = useState<{ loading: boolean; text: string; error?: string }>({
-    loading: true,
-    text: '',
-  });
   const safePage = Math.min(page, pageCount - 1);
+  const [state, setState] = useKeyedState<{ loading: boolean; text: string; error?: string }>(
+    `${payload.href}\u0000${payload.size}\u0000${safePage}`,
+    { loading: true, text: '' },
+  );
 
   useEffect(() => {
     const controller = new AbortController();
@@ -655,7 +649,6 @@ const PagedRemoteToolResult: React.FC<{ payload: LazyToolPayloadRef }> = ({ payl
     const wantedEnd = Math.min(payload.size - 1, wantedStart + TOOL_RESULT_REMOTE_PAGE_BYTES - 1);
     const requestStart = Math.max(0, wantedStart - 3);
     const requestEnd = Math.min(payload.size - 1, wantedEnd + 3);
-    setState({ loading: true, text: '' });
     void fetch(payload.href, {
       headers: { Range: `bytes=${requestStart}-${requestEnd}` },
       signal: controller.signal,
@@ -747,22 +740,21 @@ function useLazyToolPayload(payload: LazyToolPayloadRef | undefined, fallback: s
   loading: boolean;
   error: boolean;
 } {
-  const [state, setState] = useState({
-    value: fallback,
-    loading: Boolean(payload),
-    error: false,
-  });
+  const payloadKey = payload ? `${payload.uri}\u0000${payload.href}` : null;
+  const [loaded, setLoaded] = useKeyedState<{ value: string } | 'failed' | null>(payloadKey, null);
   useEffect(() => {
+    if (!payload) return undefined;
     let active = true;
-    setState({ value: fallback, loading: Boolean(payload), error: false });
-    if (!payload) return () => { active = false; };
     requestToolPayload(payload).then(
-      (value) => { if (active) setState({ value, loading: false, error: false }); },
-      () => { if (active) setState({ value: fallback, loading: false, error: true }); },
+      (value) => { if (active) setLoaded({ value }); },
+      () => { if (active) setLoaded('failed'); },
     );
     return () => { active = false; };
-  }, [fallback, payload]);
-  return state;
+  }, [payloadKey]);
+  if (!payload) return { value: fallback, loading: false, error: false };
+  if (loaded === null) return { value: fallback, loading: true, error: false };
+  if (loaded === 'failed') return { value: fallback, loading: false, error: true };
+  return { value: loaded.value, loading: false, error: false };
 }
 
 const DeferredToolResultView: React.FC<{
@@ -1863,30 +1855,26 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
     return { humanStepCalls: human, toolCallsToApprove: tools };
   }, [pendingToolCalls]);
   // --- Render window (long-conversation performance) ---
-  const [visibleCount, setVisibleCount] = useState<number>(MESSAGES_WINDOW_INITIAL);
-  useEffect(() => {
-    setVisibleCount(MESSAGES_WINDOW_INITIAL);
-  }, [conversationId]);
+  const [visibleCount, setVisibleCount] = useKeyedState<number>(conversationId, MESSAGES_WINDOW_INITIAL);
 
   const totalCount = Array.isArray(messages) ? messages.length : 0;
+  // #374: `?message=<id>` magic link target. Grow the render window while
+  // rendering so the anchor is mounted in the same commit.
+  const anchorIndex = anchorMessageId && Array.isArray(messages)
+    ? messages.findIndex((m) => m.id === anchorMessageId)
+    : -1;
+  const anchorNeededVisible = anchorIndex === -1 ? 0 : totalCount - anchorIndex;
+  if (anchorNeededVisible > visibleCount) setVisibleCount(anchorNeededVisible);
   const hiddenCount = Math.max(0, totalCount - visibleCount);
   const visibleMessages = useMemo(
     () => (Array.isArray(messages) ? (hiddenCount > 0 ? messages.slice(hiddenCount) : messages) : []),
     [messages, hiddenCount]
   );
 
-  // #374: `?message=<id>` magic link target. Expand the render window (if
-  // needed) so the anchor is actually mounted, then scroll it into view once
-  // it is; the highlight itself is driven by `isAnchor` on MessageBubble.
+  // Scroll the mounted anchor into view; the highlight itself is driven by
+  // `isAnchor` on MessageBubble.
   useEffect(() => {
-    if (!anchorMessageId || !Array.isArray(messages)) return;
-    const idx = messages.findIndex((m) => m.id === anchorMessageId);
-    if (idx === -1) return;
-    const neededVisible = totalCount - idx;
-    if (neededVisible > visibleCount) {
-      setVisibleCount(neededVisible);
-      return; // re-run after the window has expanded to include it
-    }
+    if (!anchorMessageId || anchorIndex === -1) return;
     if (typeof document === 'undefined' || typeof window === 'undefined') return;
     const raf = window.requestAnimationFrame(() => {
       document

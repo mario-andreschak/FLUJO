@@ -44,6 +44,8 @@ import {
   TOOL_NODE_BREAKPOINT_PREFIX,
 } from '@/utils/shared/debugBreakpoints';
 import RunResourcesPanel from './RunResourcesPanel';
+import { useKeyChange, useKeyedState } from './hooks/useKeyedState';
+import { useTimeout } from '@/frontend/hooks/timing';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { debugBoundaryEdgeIds } from '@/utils/shared/debugBoundaryGraph';
 
@@ -249,9 +251,11 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
     tracker: t('chat.debug.section.tracker'),
     detail: t('chat.debug.section.detail'),
   };
-  // Initialize step index safely, defaulting to -1 if no trace
-  const [currentStepIndex, setCurrentStepIndex] = useState<number>(
-    debugState.executionTrace && debugState.executionTrace.length > 0 ? debugState.executionTrace.length - 1 : -1
+  // The selected step follows the newest step whenever the trace changes (a
+  // step was added, or the trace was cleared); -1 when there is no trace.
+  const [currentStepIndex, setCurrentStepIndex] = useKeyedState<number>(
+    debugState.executionTrace,
+    (debugState.executionTrace?.length ?? 0) - 1,
   );
 
   // --- Section layout state (issue #162) ---
@@ -263,8 +267,17 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
     () => buildDebuggerFrames(debugState.flowId ?? '', executionEvents),
     [debugState.flowId, executionEvents],
   );
+  // Flow definitions are session-scoped: another conversation or flow starts
+  // from the root frame with an empty definition cache.
+  const frameSessionKey = `${conversationId}\u0000${debugState.flowId ?? ''}`;
   const [selectedFrameKey, setSelectedFrameKey] = useState<string>(DEBUGGER_ROOT_FRAME_KEY);
-  const [flowCache, setFlowCache] = useState<Record<string, FlowCacheEntry>>({});
+  // Follow the most recent qualified event frame. A manual history selection is
+  // preserved until another event arrives, at which point live-follow resumes.
+  useKeyChange(`${frameState.activeFrameKey}\u0000${executionEvents.length}`, () => {
+    setSelectedFrameKey(frameState.activeFrameKey);
+  });
+  useKeyChange(frameSessionKey, () => setSelectedFrameKey(DEBUGGER_ROOT_FRAME_KEY));
+  const [flowCache, setFlowCache] = useKeyedState<Record<string, FlowCacheEntry>>(frameSessionKey, {});
   const requestedFlowIdsRef = useRef<Set<string>>(new Set());
   const flowSessionRef = useRef(0);
 
@@ -286,34 +299,12 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
     window.localStorage.setItem(LS_DETAIL_WIDTH, String(Math.round(detailWidth)));
   }, [detailWidth]);
 
-  // Update currentStepIndex when debugState changes (new step added or trace cleared)
-  useEffect(() => {
-    const traceLength = debugState.executionTrace?.length || 0;
-    if (traceLength > 0) {
-      // If the current index is now invalid (e.g., trace got shorter?), reset to last step
-      setCurrentStepIndex(prevIndex => Math.min(prevIndex, traceLength - 1));
-      // If a new step was likely added, update to the last step
-      if (currentStepIndex < traceLength -1) {
-         setCurrentStepIndex(traceLength - 1);
-      }
-    } else {
-      setCurrentStepIndex(-1); // Set to -1 if trace is empty
-    }
-    // Depend only on the trace itself, not the index state variable
-  }, [debugState.executionTrace]);
-
   useEffect(() => {
     onStepSelectionChange?.(currentStepIndex);
   }, [currentStepIndex, onStepSelectionChange]);
 
-  // Follow the most recent qualified event frame. A manual history selection is
-  // preserved until another event arrives, at which point live-follow resumes.
-  useEffect(() => {
-    setSelectedFrameKey(frameState.activeFrameKey);
-  }, [frameState.activeFrameKey, executionEvents.length]);
-
-  // Flow definitions are session-scoped: child executions can be ephemeral, so
-  // resolve the saved definition by subflowId and cache it for frame history.
+  // Child executions can be ephemeral, so resolve the saved definition by
+  // subflowId and cache it for frame history.
   const frameFlowIds = useMemo(
     () => Array.from(new Set(frameState.order.map(key => frameState.frames[key]?.flowId).filter(Boolean))),
     [frameState],
@@ -322,9 +313,7 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
   useEffect(() => {
     flowSessionRef.current += 1;
     requestedFlowIdsRef.current.clear();
-    setFlowCache({});
-    setSelectedFrameKey(DEBUGGER_ROOT_FRAME_KEY);
-  }, [conversationId, debugState.flowId]);
+  }, [frameSessionKey]);
 
   useEffect(() => {
     const session = flowSessionRef.current;
@@ -531,7 +520,8 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
   // younger than the TTL, a low-frequency interval bumps `now` so highlights
   // fade out; it self-stops once everything has aged out.
   const [now, setNow] = useState<number>(() => Date.now());
-  useEffect(() => { setNow(Date.now()); }, [executionEvents.length]);
+  // New events read the clock again right after they commit.
+  useTimeout(() => setNow(Date.now()), 0, executionEvents.length);
   useEffect(() => {
     if (!liveActivity) return;
     const hasYoung = () => {

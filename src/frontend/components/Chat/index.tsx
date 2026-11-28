@@ -24,6 +24,7 @@ import ChatBubbleOutlineRoundedIcon from '@mui/icons-material/ChatBubbleOutlineR
 import DataObjectRoundedIcon from '@mui/icons-material/DataObjectRounded';
 import { useLocalStorage, StorageKey } from '@/utils/storage';
 import ChatHistory from './ChatHistory';
+import { useKeyChange, useKeyedState } from './hooks/useKeyedState';
 import { readWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
 import { CONVERSATION_PINS_PREFERENCE } from '@/utils/shared/conversationPins';
 import ChatMessages from './ChatMessages';
@@ -348,6 +349,7 @@ const sameConversationLists = (a: ConversationListItem[], b: ConversationListIte
  *  message "Execution cancelled by user." (mapped to a 500 by the OpenAI-shaped
  *  route). Recognise it from any error shape the SDK/REST layers throw so a
  *  deliberate Stop is never surfaced as a provider failure. */
+const NO_KEYS: ReadonlySet<string> = new Set();
 const SIDEBAR_PAGE_SIZE = 50;
 const MODEL_DELTA_COMMIT_INTERVAL_MS = 125;
 const TOOL_PROGRESS_COMMIT_INTERVAL_MS = 100;
@@ -408,8 +410,9 @@ const Chat: React.FC = () => {
   );
   const currentConversationIdRef = useRef<string | null>(currentConversationId);
   const [loadedMcpSkills, setLoadedMcpSkills] = useState<McpLoadedSkill[]>([]);
-  const [selectedMcpSkillKeys, setSelectedMcpSkillKeys] = useState<ReadonlySet<string>>(
-    () => new Set(),
+  const [selectedMcpSkillKeys, setSelectedMcpSkillKeys] = useKeyedState<ReadonlySet<string>>(
+    currentConversationId,
+    NO_KEYS,
   );
   const selectedMcpSkillSelections = useMemo<McpSkillSelection[]>(() => (
     loadedMcpSkills
@@ -426,7 +429,6 @@ const Chat: React.FC = () => {
   ), [loadedMcpSkills, selectedMcpSkillKeys]);
   useEffect(() => {
     setActiveMcpSkillConversation(currentConversationId);
-    setSelectedMcpSkillKeys(new Set());
     const sync = () => setLoadedMcpSkills(
       currentConversationId ? getConversationMcpSkills(currentConversationId) : [],
     );
@@ -434,15 +436,14 @@ const Chat: React.FC = () => {
     return subscribeMcpSkillSession(sync);
   }, [currentConversationId]);
   const personaCreationPendingRef = useRef(false);
-  const [capturedResourcesByToolCall, setCapturedResourcesByToolCall] = useState<
+  const [capturedResourcesByToolCall, setCapturedResourcesByToolCall] = useKeyedState<
     Record<string, CapturedToolResource>
-  >({});
-  useEffect(() => {
-    setCapturedResourcesByToolCall({});
-  }, [currentConversationId]);
+  >(currentConversationId, {});
   const observedMcpAppResultIdsRef = useRef<Map<string, Set<string>>>(new Map());
-  const [autoOpenMcpAppResultIds, setAutoOpenMcpAppResultIds] = useState<ReadonlySet<string>>(
-    () => new Set(),
+  // Ids only count while the shown details belong to the selected conversation.
+  const [autoOpenMcpAppResultIds, setAutoOpenMcpAppResultIds] = useKeyedState<ReadonlySet<string>>(
+    detailedConversation?.id === currentConversationId ? currentConversationId : null,
+    NO_KEYS,
   );
   const [mcpAppDismissalVersion, setMcpAppDismissalVersion] = useState(0);
   const dismissedMcpAppKeys = useMemo<ReadonlySet<string>>(() => (
@@ -564,7 +565,10 @@ const Chat: React.FC = () => {
   // small additive diff across a ~5100-line file. `error` (the plain string)
   // keeps driving any existing consumer; `errorInfo` feeds ChatErrorDetails.
   const [errorInfo, setErrorInfo] = useState<NormalizedChatError | null>(null);
-  const [subflowRecoveryOptions, setSubflowRecoveryOptions] = useState<SubflowRecoveryOptions | null>(null);
+  const [subflowRecoveryOptions, setSubflowRecoveryOptions] = useKeyedState<SubflowRecoveryOptions | null>(
+    detailedConversation?.status === 'error' ? detailedConversation.id : null,
+    null,
+  );
   const [subflowRecoveryScope, setSubflowRecoveryScope] = useState<SubflowRecoveryScope | null>(null);
 
   // Other states
@@ -665,9 +669,7 @@ const Chat: React.FC = () => {
     }
   }, [debuggerExpanded]);
 
-  useEffect(() => {
-    wirePreviewAbortRef.current?.abort();
-    wirePreviewRequestRef.current += 1;
+  useKeyChange(currentConversationId, () => {
     setTranscriptView('chat');
     setDebuggerSelectedStepIndex(-1);
     setDebuggerModelCallIndex(0);
@@ -682,19 +684,23 @@ const Chat: React.FC = () => {
     setModelTurnError(null);
     setModelTurnRetry(0);
     setModelTurnFollowLive(true);
-    modelTurnFollowLiveRef.current = true;
     setUnseenModelTurnCount(0);
+  });
+  useEffect(() => {
+    wirePreviewAbortRef.current?.abort();
+    wirePreviewRequestRef.current += 1;
+    modelTurnFollowLiveRef.current = true;
     modelTurnDetailCacheRef.current.clear();
     modelTurnIdsRef.current.clear();
     modelTurnsRef.current = [];
   }, [currentConversationId]);
 
-  useEffect(() => {
+  useKeyChange(Boolean(debugState), () => {
     if (debugState) return;
     setTranscriptView('chat');
     setDebuggerSelectedStepIndex(-1);
     setDebuggerModelCallIndex(0);
-  }, [debugState]);
+  });
 
   useEffect(() => {
     if (!currentConversationId) return;
@@ -1449,26 +1455,27 @@ const Chat: React.FC = () => {
     }
   }, [isLoadingFullTranscript, t]);
 
-  useEffect(() => {
-    // Switching conversations: drop any approval prompt belonging to the previous
-    // one so it can't linger on the newly-viewed conversation. The correct prompt
-    // re-appears from the (replayed) event stream if the now-viewed conversation
-    // is itself awaiting approval.
+  // Switching conversations: drop any approval prompt belonging to the previous
+  // one so it can't linger on the newly-viewed conversation. The correct prompt
+  // re-appears from the (replayed) event stream if the now-viewed conversation
+  // is itself awaiting approval.
+  useKeyChange(currentConversationId, () => {
     setPendingToolCalls(null);
     setPendingQuestion(null);
     setPendingElicitation(null);
-    pendingInputSnapshotGenerationRef.current++;
-    pendingInputPositionRef.current = { conversationId: currentConversationId, seq: -1 };
     // A manual node pick belongs to the conversation it was made in.
     setNodeOverride(null);
-    if (currentConversationId) {
-      fetchDetailedConversation(currentConversationId);
-    } else {
+    if (!currentConversationId) {
       // Clear details if no conversation is selected
       setDetailedConversation(null);
       setIsLoadingDetails(false);
       setDetailsError(null);
     }
+  });
+  useEffect(() => {
+    pendingInputSnapshotGenerationRef.current++;
+    pendingInputPositionRef.current = { conversationId: currentConversationId, seq: -1 };
+    if (currentConversationId) fetchDetailedConversation(currentConversationId);
   }, [currentConversationId, fetchDetailedConversation]); // Trigger fetch when selection changes
 
   // Treat the first message snapshot for a conversation as passive hydration.
@@ -1476,10 +1483,7 @@ const Chat: React.FC = () => {
   // auto-open policy, so revisiting/reloading history cannot resurrect Apps.
   useEffect(() => {
     const conversationId = detailedConversation?.id;
-    if (!conversationId || conversationId !== currentConversationId) {
-      setAutoOpenMcpAppResultIds((current) => current.size === 0 ? current : new Set());
-      return;
-    }
+    if (!conversationId || conversationId !== currentConversationId) return;
 
     const fresh = observeNewMcpAppResultIds(
       observedMcpAppResultIdsRef.current,
@@ -1511,10 +1515,7 @@ const Chat: React.FC = () => {
       conversationId &&
       detailedConversation?.status === 'error',
     );
-    if (!shouldLoad || !conversationId) {
-      setSubflowRecoveryOptions(null);
-      return;
-    }
+    if (!shouldLoad || !conversationId) return;
     let disposed = false;
     const controller = new AbortController();
     void chatService.getSubflowRecoveryOptions(conversationId, controller.signal)
@@ -1538,10 +1539,12 @@ const Chat: React.FC = () => {
   // Reflect the viewed conversation's persisted "Require Tool Approval" setting in
   // the checkbox. Keyed on the conversation id so it only re-syncs on a switch, not
   // on every content refresh (which would clobber a just-toggled value mid-run).
+  useKeyChange(detailedConversation?.id, () => {
+    if (detailedConversation) setRequireApproval(detailedConversation.requireApproval ?? false);
+  });
   useEffect(() => {
     if (detailedConversation) {
       savedApprovalRef.current = { conversationId: detailedConversation.id, value: detailedConversation.requireApproval === true };
-      setRequireApproval(detailedConversation.requireApproval ?? false);
     }
   }, [detailedConversation?.id]);
 
@@ -1697,10 +1700,10 @@ const Chat: React.FC = () => {
   // Reset the SSE-accumulated visited set when the viewed conversation changes
   // so a previous conversation's executed nodes never bleed into another
   // (issue #243). Same-conversation refetches keep the same id and don't clear.
-  useEffect(() => {
+  useKeyChange(detailedConversation?.id, () => {
     setSseVisitedNodeIds(new Set());
     setDebuggerEvents([]);
-  }, [detailedConversation?.id]);
+  });
 
   // The node the NEXT message will be processed on, for the chat input's node
   // pill: a manual pick wins, then the server's currentNodeId, then the most
@@ -2034,9 +2037,7 @@ const Chat: React.FC = () => {
     const timeout = window.setTimeout(() => setAnchorMessageId(null), 4000);
     return () => window.clearTimeout(timeout);
   }, [anchorMessageId]);
-  useEffect(() => {
-    setAnchorMessageId(null);
-  }, [currentConversationId]);
+  useKeyChange(currentConversationId, () => setAnchorMessageId(null));
 
   // --- Quick Chat (issue #61): a model + optional MCP servers, no saved flow ---
   const [quickChatOpen, setQuickChatOpen] = useState<boolean>(false);
@@ -4053,11 +4054,11 @@ const Chat: React.FC = () => {
   }, [appCallbackConversationId, setMcpAppDismissed]);
 
   // Reset the canvas when switching conversations (per-conversation surface).
-  useEffect(() => {
+  useKeyChange(currentConversationId, () => {
     setCanvasStateOwnerId(currentConversationId);
     setCanvasState(emptyCanvasState);
     setCanvasDockLayout({ placement: 'bottom', reservedWidth: 0, reservedHeight: 0 });
-  }, [currentConversationId]);
+  });
 
   // Later results replace an already-open canvas View. New apps remain inline
   // until a pip-capable View/user explicitly requests the canvas transition.
@@ -4553,11 +4554,9 @@ const Chat: React.FC = () => {
   };
 
   // Keep local breakpoints in sync with the authoritative debug state.
-  useEffect(() => {
-    if (debugState) {
-      setBreakpoints(debugState.breakpoints ?? []);
-    }
-  }, [debugState]);
+  useKeyChange(debugState, () => {
+    if (debugState) setBreakpoints(debugState.breakpoints ?? []);
+  });
 
   // Replace the whole breakpoint set (context-menu actions: clear all, arm/
   // disarm the `tool:*` tool breakpoint, …). Optimistic, reverts on failure.
@@ -4962,11 +4961,11 @@ const Chat: React.FC = () => {
     [modelTurnSnapshot],
   );
 
+  useKeyChange(Boolean(selectedModelTurn), () => {
+    if (!selectedModelTurn) setModelTurnLoading(false);
+  });
   useEffect(() => {
-    if (!selectedModelTurn) {
-      setModelTurnLoading(false);
-      return;
-    }
+    if (!selectedModelTurn) return undefined;
     const cacheKey = `${selectedModelTurn.conversationId}:${selectedModelTurn.id}`;
     const cached = modelTurnDetailCacheRef.current.get(cacheKey);
     if (cached) {
@@ -5003,19 +5002,26 @@ const Chat: React.FC = () => {
   // Fetch only while the user is looking at the predictive wire view. Cleanup
   // aborts view-close, node-change, conversation-change, and unmount requests;
   // the monotonic id also rejects responses that race with cancellation.
+  const wirePreviewWanted = Boolean(showingCurrentPreview && currentConversationId && selectedPreviewNodeId);
+  useKeyChange(
+    JSON.stringify([wirePreviewWanted, currentConversationId, selectedPreviewNodeId, wirePreviewRetry]),
+    () => {
+      if (!wirePreviewWanted) {
+        setWirePreviewLoading(false);
+        return;
+      }
+      setWirePreview(null);
+      setWirePreviewError(null);
+      setWirePreviewLoading(true);
+    },
+  );
   useEffect(() => {
     wirePreviewAbortRef.current?.abort();
     const requestId = ++wirePreviewRequestRef.current;
-    if (!showingCurrentPreview || !currentConversationId || !selectedPreviewNodeId) {
-      setWirePreviewLoading(false);
-      return;
-    }
+    if (!showingCurrentPreview || !currentConversationId || !selectedPreviewNodeId) return undefined;
 
     const controller = new AbortController();
     wirePreviewAbortRef.current = controller;
-    setWirePreview(null);
-    setWirePreviewError(null);
-    setWirePreviewLoading(true);
 
     void chatService.getWirePreview(
       currentConversationId,

@@ -54,6 +54,7 @@ import {
 } from '@/utils/shared/promptRefs';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { PointerDragShield, usePointerDrag } from './floatingPanel';
+import { useKeyedState } from './hooks/useKeyedState';
 import {
   SLASH_COMMANDS,
   filterSlashCommands,
@@ -68,6 +69,27 @@ import SlashCommandMenu, { SLASH_MENU_ID, SlashCommandNoticeBanner, slashOptionI
 
 const COMPOSER_HEIGHT_KEY = 'flujo-chat-composer-height';
 const MIN_EDITOR_HEIGHT = 24;
+
+function readSavedComposerHeight(): number | null {
+  try {
+    const saved = Number(window.localStorage.getItem(COMPOSER_HEIGHT_KEY));
+    return Number.isFinite(saved) && saved >= MIN_EDITOR_HEIGHT ? saved : null;
+  } catch {
+    return null; // Resizing still works when browser storage is unavailable.
+  }
+}
+
+// Agent tickets (#379): "Ask FLUJO" on a dashboard ticket card routes here and
+// hands over a one-shot composer draft through sessionStorage. The composer
+// starts with it, and clears it once it has mounted, so a later reload starts empty.
+function readTicketDraft(): string {
+  try {
+    return sessionStorage.getItem(ticketDraftStorageKey()) ?? '';
+  } catch (error) {
+    log.debug('Could not read ticket draft from sessionStorage', { error });
+    return '';
+  }
+}
 
 interface ChatInputProps {
   onSendMessage: (content: string, attachments: Attachment[]) => void;
@@ -160,24 +182,16 @@ const ChatInput: React.FC<ChatInputProps> = ({
       .sort((a, b) => a.localeCompare(b)),
     [globalEnvVars],
   );
-  const [message, setMessage] = useState('');
+  const [message, setMessage] = useState(readTicketDraft);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const attachmentsPending = attachments.some(attachment => attachment.pending);
   const composerRef = useRef<HTMLDivElement>(null);
-  const [preferredEditorHeight, setPreferredEditorHeight] = useState<number | null>(null);
+  const [preferredEditorHeight, setPreferredEditorHeight] = useState<number | null>(readSavedComposerHeight);
   const [editorMetrics, setEditorMetrics] = useState({ height: MIN_EDITOR_HEIGHT, maxHeight: 240 });
   const { activeCursor, startPointerDrag } = usePointerDrag();
   const editorHeight = resizable && preferredEditorHeight !== null
     ? Math.min(editorMetrics.maxHeight, Math.max(MIN_EDITOR_HEIGHT, preferredEditorHeight))
     : undefined;
-
-  useEffect(() => {
-    if (!resizable) return;
-    try {
-      const saved = Number(window.localStorage.getItem(COMPOSER_HEIGHT_KEY));
-      if (Number.isFinite(saved) && saved >= MIN_EDITOR_HEIGHT) setPreferredEditorHeight(saved);
-    } catch { /* Resizing still works when browser storage is unavailable. */ }
-  }, [resizable]);
 
   useEffect(() => {
     if (!resizable) return;
@@ -220,18 +234,11 @@ const ChatInput: React.FC<ChatInputProps> = ({
     try { window.localStorage.removeItem(COMPOSER_HEIGHT_KEY); } catch { /* Optional preference. */ }
   };
 
-  // Agent tickets (#379): "Ask FLUJO" on a dashboard ticket card routes here and
-  // hands over a one-shot composer draft through sessionStorage. The draft is
-  // consumed (and cleared) exactly once so a later reload starts empty.
   useEffect(() => {
     try {
-      const key = ticketDraftStorageKey();
-      const draft = sessionStorage.getItem(key);
-      if (!draft) return;
-      sessionStorage.removeItem(key);
-      setMessage((current) => (current ? current : draft));
+      sessionStorage.removeItem(ticketDraftStorageKey());
     } catch (error) {
-      log.debug('Could not read ticket draft from sessionStorage', { error });
+      log.debug('Could not clear ticket draft from sessionStorage', { error });
     }
   }, []);
   const [isRecording, setIsRecording] = useState(false);
@@ -303,7 +310,43 @@ const ChatInput: React.FC<ChatInputProps> = ({
     else onSelectNode?.(nodeId);
   };
 
-  const [referenceSuggestions, setReferenceSuggestions] = useState<PromptReferenceSuggestion[]>([]);
+  // The MCP servers wired to the process node the next message goes to, and the
+  // tools and resources each one allows.
+  const referenceContexts = useMemo(() => {
+    if (!flow) return [];
+    const startNode = flow.nodes.find((candidate) => (candidate.data?.type ?? candidate.type) === 'start');
+    const startTargetId = startNode
+      ? flow.edges.find((edge) => edge.source === startNode.id && edge.data?.edgeType !== 'mcp')?.target
+      : undefined;
+    const processNodeId = pickerSelectedId
+      ?? startTargetId
+      ?? flow.nodes.find((candidate) => (candidate.data?.type ?? candidate.type) === 'process')?.id;
+    if (!processNodeId) return [];
+
+    const mcpNodeIds = new Set(flow.edges
+      .filter((edge) => edge.data?.edgeType === 'mcp'
+        && (edge.source === processNodeId || edge.target === processNodeId))
+      .map((edge) => edge.source === processNodeId ? edge.target : edge.source));
+    return flow.nodes
+      .filter((candidate) => (candidate.data?.type ?? candidate.type) === 'mcp' && mcpNodeIds.has(candidate.id))
+      .map((candidate) => ({
+        server: candidate.data.properties?.boundServer as string | undefined,
+        enabledTools: Array.isArray(candidate.data.properties?.enabledTools)
+          ? candidate.data.properties.enabledTools.filter((tool): tool is string => typeof tool === 'string')
+          : [],
+        enabledResources: candidate.data.properties?.enabledResources as string[] | 'all' | undefined,
+      }))
+      .filter((context): context is {
+        server: string;
+        enabledTools: string[];
+        enabledResources: string[] | 'all' | undefined;
+      } => !!context.server);
+  }, [flow, pickerSelectedId]);
+  const referenceContextsKey = JSON.stringify(referenceContexts);
+  const [referenceSuggestions, setReferenceSuggestions] = useKeyedState<PromptReferenceSuggestion[]>(
+    referenceContextsKey,
+    [],
+  );
   const editorSuggestions = useMemo<PromptReferenceSuggestion[]>(() => [
     ...referenceSuggestions,
     ...(flow?.nodes ?? []).map(node => ({
@@ -314,51 +357,10 @@ const ChatInput: React.FC<ChatInputProps> = ({
   ], [flow, referenceSuggestions]);
 
   useEffect(() => {
+    if (referenceContexts.length === 0) return undefined;
     let cancelled = false;
-    if (!flow) {
-      setReferenceSuggestions([]);
-      return () => { cancelled = true; };
-    }
-
-    const startNode = flow.nodes.find((candidate) => (candidate.data?.type ?? candidate.type) === 'start');
-    const startTargetId = startNode
-      ? flow.edges.find((edge) => edge.source === startNode.id && edge.data?.edgeType !== 'mcp')?.target
-      : undefined;
-    const processNodeId = pickerSelectedId
-      ?? startTargetId
-      ?? flow.nodes.find((candidate) => (candidate.data?.type ?? candidate.type) === 'process')?.id;
-    if (!processNodeId) {
-      setReferenceSuggestions([]);
-      return () => { cancelled = true; };
-    }
-
-    const mcpNodeIds = new Set(flow.edges
-      .filter((edge) => edge.data?.edgeType === 'mcp'
-        && (edge.source === processNodeId || edge.target === processNodeId))
-      .map((edge) => edge.source === processNodeId ? edge.target : edge.source));
-    const contexts = flow.nodes
-      .filter((candidate) => (candidate.data?.type ?? candidate.type) === 'mcp' && mcpNodeIds.has(candidate.id))
-      .map((candidate) => ({
-        server: candidate.data.properties?.boundServer as string | undefined,
-        enabledTools: new Set<string>(
-          Array.isArray(candidate.data.properties?.enabledTools)
-            ? candidate.data.properties.enabledTools.filter((tool): tool is string => typeof tool === 'string')
-            : [],
-        ),
-        enabledResources: candidate.data.properties?.enabledResources as string[] | 'all' | undefined,
-      }))
-      .filter((context): context is {
-        server: string;
-        enabledTools: Set<string>;
-        enabledResources: string[] | 'all' | undefined;
-      } => !!context.server);
-
-    if (contexts.length === 0) {
-      setReferenceSuggestions([]);
-      return () => { cancelled = true; };
-    }
-
-    void Promise.all(contexts.map(async ({ server, enabledTools, enabledResources }) => {
+    void Promise.all(referenceContexts.map(async ({ server, enabledTools: enabledToolNames, enabledResources }) => {
+      const enabledTools = new Set(enabledToolNames);
       const suggestions: PromptReferenceSuggestion[] = [];
       try {
         const result = await mcpService.listServerTools(server);
@@ -403,7 +405,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
     });
 
     return () => { cancelled = true; };
-  }, [flow, pickerSelectedId]);
+  }, [referenceContextsKey]);
 
   // Dialog state
   const [dialogOpen, setDialogOpen] = useState(false);
