@@ -23,6 +23,30 @@ export function useTimeout(callback: () => void, delayMs: number | null, restart
   }, [delayMs, restartKey, latest]);
 }
 
+// Browsers run a timer at once when its delay does not fit in 32 bits.
+const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
+
+/**
+ * Returns whether the clock has reached `at` (ms since epoch) and re-renders when it does.
+ * `undefined` is never reached. The clock is read on mount and in timers, never while re-rendering.
+ */
+export function useReachedAt(at: number | undefined): boolean {
+  const [now, setNow] = useState(() => Date.now());
+  const reached = at !== undefined && at <= now;
+  useEffect(() => {
+    if (at === undefined || reached) return undefined;
+    const waitMs = (current: number) => Math.min(Math.max(at - current, 0), MAX_TIMER_DELAY_MS);
+    const check = () => {
+      const current = Date.now();
+      if (current >= at) setNow(current);
+      else id = setTimeout(check, waitMs(current));
+    };
+    let id = setTimeout(check, waitMs(Date.now()));
+    return () => clearTimeout(id);
+  }, [at, reached]);
+  return reached;
+}
+
 /** Runs `callback` every `delayMs`. `null` pauses it. */
 export function useInterval(callback: () => void, delayMs: number | null): void {
   const latest = useLatest(callback);

@@ -1,5 +1,5 @@
 import { act, renderHook } from '@testing-library/react';
-import { useDebouncedCallback, useDebouncedValue, useInterval, useTimeout } from '@/frontend/hooks/timing';
+import { useDebouncedCallback, useDebouncedValue, useInterval, useReachedAt, useTimeout } from '@/frontend/hooks/timing';
 
 describe('timing hooks', () => {
   beforeEach(() => {
@@ -40,6 +40,38 @@ describe('timing hooks', () => {
     expect(callback).not.toHaveBeenCalled();
     act(() => jest.advanceTimersByTime(40));
     expect(callback).toHaveBeenCalledTimes(1);
+  });
+
+  it('useReachedAt turns true exactly when the time arrives and leaves no timer behind', () => {
+    const now = Date.now();
+    const { result, rerender } = renderHook(({ at }) => useReachedAt(at), {
+      initialProps: { at: undefined as number | undefined },
+    });
+    expect(result.current).toBe(false);
+    expect(jest.getTimerCount()).toBe(0);
+
+    rerender({ at: now - 1 });
+    expect(result.current).toBe(true);
+    expect(jest.getTimerCount()).toBe(0);
+
+    rerender({ at: now + 100 });
+    expect(result.current).toBe(false);
+    act(() => jest.advanceTimersByTime(99));
+    expect(result.current).toBe(false);
+    act(() => jest.advanceTimersByTime(1));
+    expect(result.current).toBe(true);
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it('useReachedAt waits for times further away than one browser timer can reach', () => {
+    const at = Date.now() + 2 ** 31 + 1_000;
+    const { result } = renderHook(() => useReachedAt(at));
+    act(() => jest.advanceTimersByTime(2 ** 31 - 1));
+    expect(result.current).toBe(false);
+    act(() => jest.advanceTimersByTime(1_000));
+    expect(result.current).toBe(false);
+    act(() => jest.advanceTimersByTime(1));
+    expect(result.current).toBe(true);
   });
 
   it('useInterval repeats until paused', () => {

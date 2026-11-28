@@ -1,6 +1,7 @@
 /** @jest-environment jsdom */
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { formatDate } from '@/frontend/i18n/core';
 import type { PersonaWorkItem } from '@/shared/types/enduringAgent';
 
 const controlWorkItemMock = jest.fn();
@@ -56,6 +57,56 @@ it('shows a due pending session as current but preserves a future retry time', (
   view.rerender(<PersonaGoalCard item={{ ...pending, goal: { ...pending.goal, nextRunAt: Date.now() + 60_000 } }} busy={false} mutate={mutate} />);
   expect(screen.getByText(/Next attempt:/)).toBeInTheDocument();
   expect(screen.queryByText('Work session queued or in progress')).not.toBeInTheDocument();
+});
+
+describe('when the next attempt is due', () => {
+  const start = Date.parse('2026-11-28T10:00:00Z');
+  const pendingAt = (nextRunAt: number): PersonaWorkItem => ({ ...item, goal: { ...item.goal!, pendingTaskId: item.id, nextRunAt } });
+  const nextAttemptText = (at: number) => `Next attempt: ${formatDate('en', at, { dateStyle: 'medium', timeStyle: 'short' })}`;
+  const advance = (ms: number) => act(() => { jest.advanceTimersByTime(ms); });
+
+  beforeEach(() => { jest.useFakeTimers({ now: start }); });
+  afterEach(() => { jest.useRealTimers(); });
+
+  it('shows the next attempt time and switches to the current session when that time arrives', () => {
+    render(<PersonaGoalCard item={pendingAt(start + 60_000)} busy={false} mutate={mutate} />);
+    expect(screen.getByText(nextAttemptText(start + 60_000))).toBeInTheDocument();
+
+    advance(59_999);
+    expect(screen.getByText(nextAttemptText(start + 60_000))).toBeInTheDocument();
+    advance(1);
+    expect(screen.getByText('Work session queued or in progress')).toBeInTheDocument();
+    expect(screen.queryByText(/Next attempt:/)).not.toBeInTheDocument();
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it('follows a newer snapshot that moves the next attempt, measuring from the current time', () => {
+    const view = render(<PersonaGoalCard item={pendingAt(start + 60_000)} busy={false} mutate={mutate} />);
+    advance(120_000);
+    expect(screen.getByText('Work session queued or in progress')).toBeInTheDocument();
+
+    view.rerender(<PersonaGoalCard item={pendingAt(start + 150_000)} busy={false} mutate={mutate} />);
+    expect(screen.getByText(nextAttemptText(start + 150_000))).toBeInTheDocument();
+    advance(29_999);
+    expect(screen.getByText(nextAttemptText(start + 150_000))).toBeInTheDocument();
+    advance(1);
+    expect(screen.getByText('Work session queued or in progress')).toBeInTheDocument();
+
+    view.rerender(<PersonaGoalCard item={pendingAt(start + 100_000)} busy={false} mutate={mutate} />);
+    expect(screen.getByText('Work session queued or in progress')).toBeInTheDocument();
+  });
+
+  it('does not read the clock while redrawing', () => {
+    const view = render(<PersonaGoalCard item={pendingAt(start + 60_000)} busy={false} mutate={mutate} />);
+    const clock = jest.spyOn(Date, 'now');
+    try {
+      view.rerender(<PersonaGoalCard item={pendingAt(start + 60_000)} busy mutate={mutate} />);
+      expect(screen.getByText(nextAttemptText(start + 60_000))).toBeInTheDocument();
+      expect(clock).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+    }
+  });
 });
 
 it('lets the owner remove an exhausted total budget before continuing the existing goal', async () => {

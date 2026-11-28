@@ -868,9 +868,6 @@
     }
   },
   "src/frontend/components/Personas/PersonaGoalCard.tsx": {
-    "react-hooks/purity": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
