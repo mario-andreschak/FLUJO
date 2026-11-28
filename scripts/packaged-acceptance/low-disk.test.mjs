@@ -79,8 +79,13 @@ test('a "volume" that is really a big disk is never filled past the limit, leave
 
 test('a volume that cannot be created says what it needs', async t => {
   const directory = await folder(t);
-  await assert.rejects(createHostVolume({ workDirectory: directory, platform: 'win32', run: async () => { throw new Error('diskpart: elevation required'); } }),
-    /Could not create the 256 MiB virtual disk for the disk-full check; it needs an administrator \(elevated\) shell[\s\S]*elevation required/);
+  // Plans write their scripts next to the volume, so each platform is tried with a folder of its own kind.
+  const expected = process.platform === 'win32'
+    ? ['win32', /Could not create the 256 MiB virtual disk for the disk-full check; it needs an administrator \(elevated\) shell[\s\S]*refused/]
+    : ['linux', /Could not create the 256 MiB tmpfs for the disk-full check; it needs root or passwordless sudo[\s\S]*refused/];
+  await assert.rejects(createHostVolume({ workDirectory: directory, platform: expected[0], uid: 1001, gid: 1001,
+    run: async () => { throw new Error('refused'); } }), expected[1]);
+  assert.deepEqual((await readdir(directory)).filter(name => !['volume', 'low-disk-create.txt', 'low-disk-remove.txt'].includes(name)), []);
 });
 
 test('removing a volume retries while the last file handles close, then deletes its files', async t => {
