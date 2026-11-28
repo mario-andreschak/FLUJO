@@ -103,7 +103,7 @@ import {
   protectedConfigFingerprint,
   clientProtectedConfigFingerprint,
   McpRuntimeAuthorityRetirementError,
-  assertMcpRuntimeAuthorityRetired,
+  assertMcpRuntimeAuthorityRetired, settleMcpRuntimeAuthorityRetirement,
 } from "./connection";
 import {
   type McpEventDescriptor,
@@ -550,7 +550,7 @@ export class MCPService {
         statusCode: error instanceof ExecutionExtensionError ? error.status : 503, errorType: 'execution-authorization' };
     }
     await assertBundledFlujoWorkloadEffectCurrent();
-    try { assertMcpRuntimeAuthorityRetired(serverName); }
+    try { await settleMcpRuntimeAuthorityRetirement(serverName); }
     catch (error) {
       if (error instanceof McpRuntimeAuthorityRetirementError) return { success: false,
         error: 'MCP_AUTHORITY_RETIREMENT_UNCERTAIN', errorType: 'mcp-authority-retirement', statusCode: 503 };
@@ -1100,8 +1100,8 @@ export class MCPService {
               await attemptTransport.close();
             }
           } catch (cleanupError) { cleanupErrors.push(cleanupError); }
-          const retire = (attemptTransport as Transport & { __flujoRetireRuntimeAuthority?: () => void }).__flujoRetireRuntimeAuthority;
-          try { retire?.(); } catch (cleanupError) { cleanupErrors.push(cleanupError); }
+          const retire = (attemptTransport as Transport & { __flujoRetireRuntimeAuthority?: () => Promise<void> }).__flujoRetireRuntimeAuthority;
+          try { await retire?.(); } catch (cleanupError) { cleanupErrors.push(cleanupError); }
         }
         if (cleanupErrors.length) {
           throw new BundledFlujoWorkloadError(new AggregateError([error, ...cleanupErrors], 'MCP denied startup cleanup failed'));
@@ -1319,7 +1319,7 @@ export class MCPService {
     this.clearRetryTimer(serverName);
     this.connectionRetryAttempts.delete(serverName);
 
-    try { assertMcpRuntimeAuthorityRetired(serverName); }
+    try { await settleMcpRuntimeAuthorityRetirement(serverName); }
     catch (error) {
       if (error instanceof McpRuntimeAuthorityRetirementError) return { success: false,
         error: 'MCP_AUTHORITY_RETIREMENT_UNCERTAIN', errorType: 'mcp-authority-retirement', statusCode: 503 };

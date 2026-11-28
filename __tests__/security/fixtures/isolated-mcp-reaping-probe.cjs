@@ -7,7 +7,7 @@ const { execFileSync } = require('node:child_process');
 const ts = require('typescript');
 const source = path.resolve(__dirname, '../../../src/backend/services/security/isolatedMcp.ts');
 const allowedSources = new Set(['isolatedMcp.ts', 'isolatedMcpInspection.ts', 'windowsPrivateAuthority.ts']
-  .map(name => path.join(path.dirname(source), name)));
+  .map(name => path.join(path.dirname(source), name)).concat(path.resolve(path.dirname(source), '../../../utils/realpath.ts')));
 require.extensions['.ts'] = (module, filename) => {
   if (!allowedSources.has(filename)) throw new Error('Unexpected source module');
   module._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
@@ -47,7 +47,7 @@ rl.createInterface({input:process.stdin}).on('line', async line => {
    const grant=path.join(workspace,'storage/mcp-grants/probe');
    fs.mkdirSync(grant,{recursive:true}); fs.writeFileSync(path.join(grant,'server.cjs'),program);
    const policy={schemaVersion:1,kind:'docker-deny-egress',dockerExecutable,daemon,image,command:['node','/grants/probe/server.cjs'],environmentNames:[],mounts:[{name:'probe',source:'storage/mcp-grants/probe'}],memoryMiB:128,cpus:0.5,pidsLimit:32};
-   launch=createIsolatedMcpLaunch(policy,isolatedMcpPolicyDigest(policy),workspace);
+   launch=await createIsolatedMcpLaunch(policy,isolatedMcpPolicyDigest(policy),workspace);
    const sdk=await import(era==='v1'?'@modelcontextprotocol/sdk/client/index.js':'@modelcontextprotocol/client');
    const stdio=await import(era==='v1'?'@modelcontextprotocol/sdk/client/stdio.js':'@modelcontextprotocol/client/stdio');
    client=new sdk.Client({name:'owned-probe',version:'1.0.0'});
@@ -70,12 +70,12 @@ rl.createInterface({input:process.stdin}).on('line', async line => {
      || (expected==='reaped' ? host.Init!==true : host.Init===true)
      || inspect.Mounts.length!==1 || inspect.Mounts[0].Destination!=='/grants/probe' || inspect.Mounts[0].RW) throw new Error('Isolation restriction mismatch');
    await client.close(); client=undefined;
-   const cleanup=launch.close(); if(cleanup.outcome==='unknown') throw new Error('Owned cleanup unobserved');
+   const cleanup=await launch.close(); if(cleanup.outcome==='unknown') throw new Error('Owned cleanup unobserved');
    console.log(JSON.stringify({era,expected,containerId:launch.containerId,adopted,after,responsive:true,init:host.Init,cleanup:cleanup.outcome,image}));
   } finally {
    if(client) await client.close().catch(()=>{});
    if(launch) {
-    const finalCleanup=launch.close().outcome; console.log(JSON.stringify({era,finalCleanup}));
+    const finalCleanup=(await launch.close()).outcome; console.log(JSON.stringify({era,finalCleanup}));
     // Preserve the mounted source if daemon cleanup cannot be observed.
     if(finalCleanup==='unknown') throw new Error('Owned cleanup unknown; grant workspace retained: '+workspace);
    }

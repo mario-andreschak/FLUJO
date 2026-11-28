@@ -34,7 +34,6 @@ jest.mock('@/backend/utils/resolveGlobalVars', () => ({
 // runs the real owner and permission checks.
 jest.mock('@/backend/services/security/windowsPrivateAuthority', () => ({
   ...jest.requireActual('@/backend/services/security/windowsPrivateAuthority'),
-  windowsPrivateAuthorityStamp: jest.fn(() => 'synthetic-private-stamp'),
   windowsPrivateAuthorityStampAsync: jest.fn(async () => 'synthetic-private-stamp'),
 }));
 

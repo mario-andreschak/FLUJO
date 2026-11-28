@@ -13,8 +13,8 @@ const ts = require(path.join(sourceRoot, 'node_modules/typescript'));
 require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true },
 }).outputText, filename);
-const { windowsPrivateAuthorityStamp } = require(path.join(sourceRoot, 'src/backend/services/security/windowsPrivateAuthority.ts'));
-const { readPrivateApproval } = require(path.join(sourceRoot, 'src/backend/services/security/trustedHostMcp.ts'));
+const { windowsPrivateAuthorityStampAsync: windowsPrivateAuthorityStamp } = require(path.join(sourceRoot, 'src/backend/services/security/windowsPrivateAuthority.ts'));
+const { readPrivateApprovalAsync: readPrivateApproval } = require(path.join(sourceRoot, 'src/backend/services/security/trustedHostMcp.ts'));
 const directory = path.resolve(fs.mkdtempSync(path.join(fixtureBase, 'FLUJO-windows-authority-')));
 const filename = path.join(directory, 'synthetic-owner.json');
 process.env.FLUJO_DATA_DIR=path.join(directory,'data');
@@ -47,32 +47,39 @@ function configure(mode) {
   });
   assert.equal(result.status,0,result.stderr);
 }
-try {
+(async () => { try {
   fs.writeFileSync(filename,'{"ownerId":"synthetic-only"}',{mode:0o600});
   configure('foreign-file');
-  assert.throws(()=>windowsPrivateAuthorityStamp(filename));
-  assert.throws(()=>readPrivateApproval(filename));
+  await assert.rejects(windowsPrivateAuthorityStamp(filename));
+  await assert.rejects(readPrivateApproval(filename));
   configure('private');
   fs.unlinkSync(filename);fs.writeFileSync(filename,'{"ownerId":"synthetic-only"}');
-  const stamp=windowsPrivateAuthorityStamp(filename);
+  const stamp=await windowsPrivateAuthorityStamp(filename);
   assert.match(stamp,/^[a-f0-9]{64}$/);
-  assert.equal(windowsPrivateAuthorityStamp(filename),stamp);
-  assert.deepEqual(readPrivateApproval(filename),{ownerId:'synthetic-only'});
+  assert.equal(await windowsPrivateAuthorityStamp(filename),stamp);
+  assert.deepEqual(await readPrivateApproval(filename),{ownerId:'synthetic-only'});
   configure('foreign-file');
-  assert.throws(()=>windowsPrivateAuthorityStamp(filename));
+  await assert.rejects(windowsPrivateAuthorityStamp(filename));
   // Recreate only the owned file to restore inherited private fixture rules.
   fs.unlinkSync(filename);fs.writeFileSync(filename,'{"ownerId":"synthetic-only"}');
-  assert.match(windowsPrivateAuthorityStamp(filename),/^[a-f0-9]{64}$/);
+  assert.match(await windowsPrivateAuthorityStamp(filename),/^[a-f0-9]{64}$/);
   configure('foreign-parent');
-  assert.throws(()=>windowsPrivateAuthorityStamp(filename));
+  await assert.rejects(windowsPrivateAuthorityStamp(filename));
   configure('private');
-  assert.match(windowsPrivateAuthorityStamp(filename),/^[a-f0-9]{64}$/);
-  const originalRead=fs.readSync;
+  assert.match(await windowsPrivateAuthorityStamp(filename),/^[a-f0-9]{64}$/);
+  // Change the DACL during the reader's actual descriptor read.
+  const originalOpen=fs.promises.open;
   let changed=false;
-  fs.readSync=function(...args){const count=Reflect.apply(originalRead,fs,args);if(!changed&&count>0){changed=true;configure('foreign-file');}return count;};
-  try{assert.throws(()=>readPrivateApproval(filename));assert.equal(changed,true);}finally{fs.readSync=originalRead;}
+  fs.promises.open=async function(...args){
+    const handle=await Reflect.apply(originalOpen,fs.promises,args);
+    if(path.resolve(String(args[0]))!==filename)return handle;
+    const read=handle.read.bind(handle);
+    handle.read=async(...readArgs)=>{const result=await read(...readArgs);if(!changed&&result.bytesRead>0){changed=true;configure('foreign-file');}return result;};
+    return handle;
+  };
+  try{await assert.rejects(readPrivateApproval(filename));assert.equal(changed,true);}finally{fs.promises.open=originalOpen;}
   console.log(JSON.stringify({sourceControl:'windows-private-authority',nativeSidDaclInspection:true,foreignReadableAclRefused:true,ownedPrivateAclAccepted:true,stableAclStamp:true,foreignReadDenied:true,parentRenameAuthorityDenied:true,actualPrivateReaderIntegrated:true,daclChangeDuringActualReadRefused:true,scope:'Source runtime reader; not installed artifact or whole suite qualification'}));
 } finally {
   if(path.dirname(directory)!==fixtureBase||!/^FLUJO-windows-authority-[A-Za-z0-9]+$/.test(path.basename(directory))||fs.lstatSync(directory).isSymbolicLink())throw Error('Unsafe owned cleanup');
   fs.rmSync(directory,{recursive:true,force:true});
-}
+} })().catch(error=>{console.error(error);process.exitCode=1;});

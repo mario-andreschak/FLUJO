@@ -106,7 +106,7 @@ test.each(['live', 'retired-after-final-admission'] as const)('real SDK producer
         await Promise.race([observed, dispatch.then(() => { throw new Error('Dispatch settled before final admission observation.'); })]);
         // Retire only genuine request authority. The SDK connection stays open,
         // so a missing final workload check would actually reach the producer.
-        revokePendingWorkload(capsule);
+        await revokePendingWorkload(capsule);
       } finally { releaseDispatch(); await pendingCall; }
       await expect(dispatch).rejects.toBeInstanceOf(BundledFlujoWorkloadError);
       expect(mockDispatchCount).toBe(2);

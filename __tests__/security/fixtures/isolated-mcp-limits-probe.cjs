@@ -7,7 +7,7 @@ const { execFileSync } = require('node:child_process');
 const ts = require('typescript');
 const source = path.resolve(__dirname, '../../../src/backend/services/security/isolatedMcp.ts');
 const allowed = new Set(['isolatedMcp.ts', 'isolatedMcpInspection.ts', 'windowsPrivateAuthority.ts']
-  .map(name => path.join(path.dirname(source), name)));
+  .map(name => path.join(path.dirname(source), name)).concat(path.resolve(path.dirname(source), '../../../utils/realpath.ts')));
 require.extensions['.ts'] = (module, filename) => {
   if (!allowed.has(filename)) throw new Error('Unexpected source module');
   module._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
@@ -22,7 +22,7 @@ const workspace = fs.mkdtempSync(path.join(parent, 'flujo-mcp-limits-'));
 async function probe(name, program) {
   const policy = { schemaVersion: 1, kind: 'docker-deny-egress', dockerExecutable, daemon, image,
     command: ['node', '-e', program], environmentNames: [], mounts: [], memoryMiB: 128, cpus: 0.5, pidsLimit: 32 };
-  const launch = createIsolatedMcpLaunch(policy, isolatedMcpPolicyDigest(policy), workspace);
+  const launch = await createIsolatedMcpLaunch(policy, isolatedMcpPolicyDigest(policy), workspace);
   let status = 0, stdout = '';
   try {
     try {
@@ -46,7 +46,7 @@ async function probe(name, program) {
     console.log(JSON.stringify({ limitProbe: name, status, oomKilled: state.OOMKilled,
       ...(name === 'pids' ? JSON.parse(stdout) : {}) }));
   } finally {
-    const cleanup = launch.close();
+    const cleanup = await launch.close();
     console.log(JSON.stringify({ limitProbe: name, cleanup: cleanup.outcome }));
     assert.notEqual(cleanup.outcome, 'unknown');
   }

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 
 // Native PowerShell startup and fresh ancestor ACL reads can exceed five seconds on busy hosts.
 const NATIVE_INSPECTION_TIMEOUT_MS = 30_000;
@@ -104,30 +104,6 @@ function exitFailure(stderr: string): WindowsAuthorityInspectionError {
     phase === 'owner-dacl' || phase === 'outsider-access' || phase === 'evidence-bounds' ? 'refused' : 'exit');
 }
 
-/** DACL evidence supplements stable file identity; 0600 is not a Windows ACL. */
-export function windowsPrivateAuthorityStamp(filename: string | readonly string[]): string {
-  const unavailable = () => new WindowsAuthorityInspectionError('Windows authority inspection unavailable', 'unavailable');
-  if (process.platform !== 'win32') throw unavailable();
-  const filenames = typeof filename === 'string' ? [filename] : filename;
-  if (filenames.length < 1 || filenames.length > 4 || filenames.some(item => !path.isAbsolute(item) || item.length > 4096 || item.includes('\0'))) throw unavailable();
-  const systemRoot = process.env.SystemRoot;
-  if (!systemRoot || !path.isAbsolute(systemRoot)) throw unavailable();
-  const executable = path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-  if (!fs.statSync(executable).isFile()) throw unavailable();
-  const result = spawnSync(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', inspect], {
-    input: JSON.stringify(typeof filename === 'string' ? { filename: path.resolve(filename) } : { filenames: filenames.map(item => path.resolve(item)) }), encoding: 'utf8',
-    windowsHide: true, timeout: NATIVE_INSPECTION_TIMEOUT_MS, maxBuffer: 64 * 1024,
-    env: { NODE_ENV: 'production', SystemRoot: systemRoot, WINDIR: systemRoot, PATH: path.join(systemRoot, 'System32') },
-  });
-  if (result.error) {
-    const code = (result.error as NodeJS.ErrnoException).code;
-    throw new WindowsAuthorityInspectionError('Windows authority inspection refused',
-      code === 'ETIMEDOUT' ? 'deadline' : code === 'ENOBUFS' ? 'bounds' : 'spawn', result.error);
-  }
-  if (result.status !== 0 || result.signal) throw exitFailure(String(result.stderr ?? ''));
-  return authorityEvidence(result.stdout);
-}
-
 function authorityEvidence(stdout: string): string {
   const malformed = () => new WindowsAuthorityInspectionError('Windows authority inspection refused', 'evidence');
   let value: unknown;
@@ -147,7 +123,10 @@ const STOP_MESSAGES = {
   bounds: 'Windows authority inspection cancelled or exceeded bounds',
 } as const;
 
-/** Every call obtains fresh native ACL evidence; cancellation waits for exit. */
+/**
+ * DACL evidence supplements stable file identity; 0600 is not a Windows ACL.
+ * Every call obtains fresh native ACL evidence; cancellation waits for exit.
+ */
 export async function windowsPrivateAuthorityStampAsync(filename: string | readonly string[], signal?: AbortSignal): Promise<string> {
   const unavailable = () => new WindowsAuthorityInspectionError('Windows authority inspection unavailable', 'unavailable');
   if (process.platform !== 'win32' || signal?.aborted) {

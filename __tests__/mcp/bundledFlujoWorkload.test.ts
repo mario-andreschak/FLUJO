@@ -14,9 +14,26 @@ import { previewBundledHostConsent, approveBundledHostConsent } from '@/backend/
 import { attachTrustedHost, getManagedTrustedHost } from '@/backend/services/mcp/trustedHost';
 import { prepareBundledFlujoWorkload, getPendingWorkloadEnvironment } from '@/backend/services/security/bundledFlujoWorkload';
 import { installBundledFixtureOwner } from './fixtures/bundledFixtureOwner';
-import { assertMcpRuntimeAuthorityRetired, createStdioTransport, McpRuntimeAuthorityRetirementError, retireMcpRuntimeAuthority } from '@/backend/services/mcp/connection';
+import { assertMcpRuntimeAuthorityRetired, createStdioTransport, McpRuntimeAuthorityRetirementError, retireMcpRuntimeAuthority,
+  settleMcpRuntimeAuthorityRetirement } from '@/backend/services/mcp/connection';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { trustedHostMcpPolicySchema, verifyTrustedHostMcp } from '@/backend/services/security/trustedHostMcp';
+
+type FsCallback = (error: NodeJS.ErrnoException | null, ...values: unknown[]) => void;
+/**
+ * Runs the real callback-style call through `observe`, which sees the actual
+ * outcome and may answer with a fault instead. The production code keeps raw
+ * descriptor numbers, so faults land on the exact descriptor it acted on.
+ */
+function intercept(actual: (...args: never[]) => unknown, observe: (args: unknown[], error: NodeJS.ErrnoException | null, values: unknown[], done: FsCallback) => void) {
+  return (...args: unknown[]) => {
+    const done = args.pop() as FsCallback;
+    Reflect.apply(actual, fs, [...args, (error: NodeJS.ErrnoException | null, ...values: unknown[]) => observe(args, error, values, done)]);
+  };
+}
+const answer = (error: NodeJS.ErrnoException | null, values: unknown[], done: FsCallback) => done(error, ...values);
+const realFs = { open: fs.open, fstat: fs.fstat, close: fs.close };
+const ioFault = (message: string) => Object.assign(new Error(message), { code: 'EIO' });
 
 function reportRetirementSites(error: unknown, seen = new Set<unknown>()) {
   if (!(error instanceof Error) || seen.has(error)) return;
@@ -153,7 +170,7 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
   let primaryFailed = false;
   let primaryError: unknown;
   const foreignDescriptors: number[] = [];
-  let retireQuarantinedAuthority: (() => void) | undefined;
+  let retireQuarantinedAuthority: (() => Promise<void>) | undefined;
   try {
     process.env.FLUJO_APP_ROOT = application; process.env.FLUJO_DATA_DIR = path.join(fixture, 'data');
     process.env.FLUJO_BASE_URL = 'http://127.0.0.1:4200'; delete process.env.FLUJO_PARENT_DATA_DIR; delete process.env.FLUJO_WORKER_MODE;
@@ -263,6 +280,9 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
         expect(failure).toBeInstanceOf(AggregateError);
         const errors = (failure as AggregateError).errors;
         expect(errors).toEqual(reason === 'start-failed' ? [original, cleanup] : [reason === 'close' ? cleanup : original]);
+        // A server that closed by itself retires in the background; the same
+        // retirement is joined here before the durable outcome is checked.
+        if (reason === 'onclose') await getManagedTrustedHost(controlled)!.retire();
         expect(observations).toHaveLength(1);
         expect(observations[0].slice(0, 3)).toEqual(['[trusted-host-retirement]', reason, reason === 'start-failed' ? 'transport-start' : 'ready']);
         expect(Number.isSafeInteger(observations[0][3])).toBe(true);
@@ -283,12 +303,10 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
     await attachTrustedHost(transport, approved.config, undefined, capsule);
     const key = createHash('sha256').update(token).digest('hex');
     let recordDescriptor: number | undefined;
-    const actualOpen = fs.openSync;
-    const opened = mode.startsWith('retire-') ? jest.spyOn(fs, 'openSync').mockImplementation((...args: Parameters<typeof fs.openSync>) => {
-      const fd = Reflect.apply(actualOpen, fs, args) as number;
-      if (String(args[0]).endsWith(`${key}.pending`) && typeof args[1] === 'number' && (args[1] & fs.constants.O_EXCL)) recordDescriptor = fd;
-      return fd;
-    }) : undefined;
+    const opened = mode.startsWith('retire-') ? jest.spyOn(fs, 'open').mockImplementation(intercept(realFs.open, (args, error, values, done) => {
+      if (!error && String(args[0]).endsWith(`${key}.pending`) && typeof args[1] === 'number' && (args[1] & fs.constants.O_EXCL)) recordDescriptor = values[0] as number;
+      answer(error, values, done);
+    })) : undefined;
     try { await timed('guarded-start', () => transport!.start()); } finally { opened?.mockRestore(); }
     expect(start).toHaveBeenCalledTimes(1);
     expect((await timed('resolve-active', () => resolveBundledFlujoWorkloadRequest(request()))).kind).toBe('authorized');
@@ -415,59 +433,65 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
     if (mode === 'retire-quarantine-retry') {
       const retireOwned = () => retireMcpRuntimeAuthority(proposed.name, getCurrentWorkspace(), capsule, undefined);
       retireQuarantinedAuthority = retireOwned;
-      const actualUnlink = fs.unlinkSync;
+      const actualUnlink = fs.promises.unlink.bind(fs.promises);
       let injected = 0;
-      const fault = jest.spyOn(fs, 'unlinkSync').mockImplementation(filename => {
+      const fault = jest.spyOn(fs.promises, 'unlink').mockImplementation(async filename => {
         if (path.resolve(String(filename)) === path.join(workloadDirectory, `${key}.json`)) {
-          injected += 1; throw Object.assign(new Error('Owned quarantine unlink fault.'), { code: 'EIO' });
+          injected += 1; throw ioFault('Owned quarantine unlink fault.');
         }
         return actualUnlink(filename);
       });
       try {
-        expect(retireOwned).toThrow(McpRuntimeAuthorityRetirementError);
+        await expect(retireOwned()).rejects.toThrow(McpRuntimeAuthorityRetirementError);
         expect(injected).toBe(1);
         expect(() => assertMcpRuntimeAuthorityRetired(proposed.name)).toThrow(McpRuntimeAuthorityRetirementError);
+        // A launch first retries the failed retirement; the fault is still there.
         await expect(createStdioTransport(approved.config)).rejects.toThrow(McpRuntimeAuthorityRetirementError);
+        expect(injected).toBe(2);
         const unrelated = prepareBundledFlujoWorkload(approved.config);
         if (!unrelated) throw new Error('Genuine unrelated pending authority unavailable.');
-        retireMcpRuntimeAuthority(proposed.name, getCurrentWorkspace(), unrelated, undefined);
+        await retireMcpRuntimeAuthority(proposed.name, getCurrentWorkspace(), unrelated, undefined);
         expect(() => assertMcpRuntimeAuthorityRetired(proposed.name)).toThrow(McpRuntimeAuthorityRetirementError);
       } finally { fault.mockRestore(); }
-      retireOwned();
+      // Once the cause is gone, the step every launch runs first heals the quarantine by itself.
+      await settleMcpRuntimeAuthorityRetirement(proposed.name);
+      expect(injected).toBe(2);
       expect(() => assertMcpRuntimeAuthorityRetired(proposed.name)).not.toThrow();
       expect(() => getPendingWorkloadEnvironment(approved.config, capsule)).toThrow();
       expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied');
     }
     let unknownSiblingCreated = false;
     if (mode === 'retire-acquisition-ambiguous') {
-      const actualOpen = fs.openSync, actualStat = fs.fstatSync, actualClose = fs.closeSync, actualUnlink = fs.unlinkSync;
+      const actualOpen = fs.openSync, actualStat = fs.fstatSync, actualClose = fs.closeSync;
+      const actualUnlink = fs.promises.unlink.bind(fs.promises);
       const recordName = path.join(workloadDirectory, `${key}.json`);
       let acquired: number | undefined, failedStat = false;
-      const opened = jest.spyOn(fs, 'openSync').mockImplementation((...args: Parameters<typeof fs.openSync>) => {
-        const fd = actualOpen(...args);
+      const opened = jest.spyOn(fs, 'open').mockImplementation((...args: unknown[]) => {
         const stack = new Error().stack ?? '';
-        if (String(args[0]) === recordName && typeof args[1] === 'number' && (args[1] & fs.constants.O_RDWR) === 0
-            && acquired === undefined && stack.includes('closeOwnedFile') && !stack.includes('readStableFile')) acquired = fd;
-        return fd;
+        intercept(realFs.open, (openArgs, error, values, done) => {
+          if (!error && String(openArgs[0]) === recordName && typeof openArgs[1] === 'number' && (openArgs[1] & fs.constants.O_RDWR) === 0
+              && acquired === undefined && stack.includes('closeOwnedFile')) acquired = values[0] as number;
+          answer(error, values, done);
+        })(...args);
       });
-      const stat = jest.spyOn(fs, 'fstatSync').mockImplementation((...args: Parameters<typeof fs.fstatSync>) => {
-        if (args[0] === acquired && !failedStat) { failedStat = true; throw Object.assign(new Error('Owned acquisition validation fault.'), { code: 'EIO' }); }
-        return actualStat(...args);
+      const stat = jest.spyOn(fs, 'fstat').mockImplementation((...args: unknown[]) => {
+        if (args[0] === acquired && !failedStat) { failedStat = true; (args.at(-1) as FsCallback)(ioFault('Owned acquisition validation fault.')); return; }
+        intercept(realFs.fstat, (_args, error, values, done) => answer(error, values, done))(...args);
       });
-      const closed = jest.spyOn(fs, 'closeSync').mockImplementation(fd => {
-        if (fd === acquired) throw Object.assign(new Error('Ambiguous acquired descriptor close.'), { code: 'EIO' });
-        actualClose(fd);
+      const closed = jest.spyOn(fs, 'close').mockImplementation((...args: unknown[]) => {
+        if (args[0] === acquired) { (args.at(-1) as FsCallback)(ioFault('Ambiguous acquired descriptor close.')); return; }
+        intercept(realFs.close, (_args, error, values, done) => answer(error, values, done))(...args);
       });
-      const unlink = jest.spyOn(fs, 'unlinkSync').mockImplementation(filename => {
-        if (String(filename) === recordName) throw Object.assign(new Error('Owned unlink fault.'), { code: 'EIO' });
-        actualUnlink(filename);
+      const unlink = jest.spyOn(fs.promises, 'unlink').mockImplementation(async filename => {
+        if (String(filename) === recordName) throw ioFault('Owned unlink fault.');
+        return actualUnlink(filename);
       });
       try { await expect(transport.close()).rejects.toThrow(); }
       finally { opened.mockRestore(); stat.mockRestore(); closed.mockRestore(); unlink.mockRestore(); }
       expect(failedStat).toBe(true); expect(acquired).toBeDefined();
       foreignDescriptors.push(acquired!);
       expect(actualStat(acquired!).isFile()).toBe(true);
-      const retryOpen = jest.spyOn(fs, 'openSync');
+      const retryOpen = jest.spyOn(fs, 'open');
       let retryRecordOpens = 0;
       try { await expect(transport.close()).rejects.toThrow(); retryRecordOpens = retryOpen.mock.calls.filter(args => String(args[0]) === recordName).length; }
       finally { retryOpen.mockRestore(); }
@@ -492,24 +516,26 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
       expectedCloseCount = 4;
     }
     if (mode === 'retire-unlink-retry' || mode === 'retire-unknown-parent') {
-      const actualUnlink = fs.unlinkSync;
-      const actualClose = fs.closeSync;
+      const actualUnlink = fs.promises.unlink.bind(fs.promises);
       let closeObserved = false;
-      const observedClose = jest.spyOn(fs, 'closeSync').mockImplementation(fd => {
+      const observedClose = jest.spyOn(fs, 'close').mockImplementation((...args: unknown[]) => {
+        const fd = args[0] as number;
         const observe = !closeObserved && fd === recordDescriptor;
         if (observe) closeObserved = true;
         const before = observe ? fs.fstatSync(fd, { bigint: true }) : undefined;
-        actualClose(fd);
-        if (before) try {
-          const after = fs.lstatSync(path.join(workloadDirectory, `${key}.json`), { bigint: true });
-          const fields = ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'gid', 'nlink'] as const;
-          console.info('[workload-recovery-close-fields]', fields.filter(field => before[field] !== after[field]));
-        } catch { /* Observation cannot change the actual close result. */ }
+        intercept(realFs.close, (_args, error, values, done) => {
+          if (before && !error) try {
+            const after = fs.lstatSync(path.join(workloadDirectory, `${key}.json`), { bigint: true });
+            const fields = ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'gid', 'nlink'] as const;
+            console.info('[workload-recovery-close-fields]', fields.filter(field => before[field] !== after[field]));
+          } catch { /* Observation cannot change the actual close result. */ }
+          answer(error, values, done);
+        })(...args);
       });
       let injected = false;
-      const fault = jest.spyOn(fs, 'unlinkSync').mockImplementation(filename => {
+      const fault = jest.spyOn(fs.promises, 'unlink').mockImplementation(async filename => {
         if (!injected && path.resolve(String(filename)) === path.join(workloadDirectory, `${key}.json`)) {
-          injected = true; throw Object.assign(new Error('Owned record unlink fault.'), { code: 'EIO' });
+          injected = true; throw ioFault('Owned record unlink fault.');
         }
         return actualUnlink(filename);
       });
@@ -549,12 +575,11 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
     }
     if (mode === 'retire-closed-descriptor-retry') {
       expect(recordDescriptor).toBeDefined();
-      const actualClose = fs.closeSync;
       let injected = false;
-      const fault = jest.spyOn(fs, 'closeSync').mockImplementation(fd => {
-        actualClose(fd);
-        if (!injected && fd === recordDescriptor) { injected = true; throw Object.assign(new Error('Completed owned close fault.'), { code: 'EIO' }); }
-      });
+      const fault = jest.spyOn(fs, 'close').mockImplementation(intercept(realFs.close, (args, error, values, done) => {
+        if (!error && !injected && args[0] === recordDescriptor) { injected = true; done(ioFault('Completed owned close fault.')); return; }
+        answer(error, values, done);
+      }));
       try { await expect(transport.close()).rejects.toThrow(); } finally { fault.mockRestore(); }
       expect(injected).toBe(true);
       const unrelated = path.join(fixture, 'unrelated-descriptor.json');
@@ -599,7 +624,7 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
     cancellation.abort(new Error('Workload fixture cleanup.'));
     stamp('cleanup:start');
     try { Reflect.deleteProperty(globalThis, serviceKey); } catch (error) { cleanupErrors.push(error); }
-    try { retireQuarantinedAuthority?.(); } catch (error) { cleanupErrors.push(error); }
+    try { await retireQuarantinedAuthority?.(); } catch (error) { cleanupErrors.push(error); }
     try { await transport?.close(); } catch (error) { cleanupErrors.push(error); }
     for (const fd of foreignDescriptors) { try { fs.closeSync(fd); } catch (error) { cleanupErrors.push(error); } }
     try { owner?.restore(); } catch (error) { cleanupErrors.push(error); }
