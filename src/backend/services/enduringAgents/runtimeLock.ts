@@ -7,6 +7,7 @@ import { promisify } from 'util';
 
 import { assertSafeCollectionId, runInWriteChain } from '@/utils/storage/backend';
 import { retryTransientFileOperation } from '@/utils/transientFileRetry';
+import { sharedFreshCheck } from '@/utils/sharedFreshCheck';
 import { stableEnduringAgentId } from './ids';
 import { traceSpan } from '@/backend/execution/flow/turnTrace';
 import {
@@ -1144,7 +1145,9 @@ async function acquireFilesystemLock(personaId: string, timeoutMs = LOCK_ACQUIRE
     throw error;
   }
 
-  const assertOwned = async (): Promise<void> => {
+  // Every covered write verifies ownership before and after it runs; writes
+  // that ask together share one fresh read of the lock file (#757).
+  const assertOwned = sharedFreshCheck(async (): Promise<void> => {
     const current = await readOwner(lockPath);
     if (
       current?.ownerId !== owner.ownerId
@@ -1154,7 +1157,7 @@ async function acquireFilesystemLock(personaId: string, timeoutMs = LOCK_ACQUIRE
     ) {
       throw new PersonaRuntimeLockLostError(personaId);
     }
-  };
+  });
   const runtimeLock: PersonaRuntimeLock = { assertOwned };
   ISSUED_RUNTIME_LOCKS.set(runtimeLock, {
     personaId,

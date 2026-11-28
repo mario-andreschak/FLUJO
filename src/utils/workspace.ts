@@ -5,6 +5,7 @@ import { randomUUID } from 'crypto';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { getDataDir } from './paths';
 import { replaceFileWithRetry, retryTransientFileOperation } from './transientFileRetry';
+import { SharedFreshChecks } from './sharedFreshCheck';
 
 /**
  * Workspaces (#406) — a logical namespace *beneath* the existing FLUJO data root.
@@ -113,24 +114,37 @@ export function normalizeWorkspaceName(value: unknown): string {
 
 /** `<data root>/workspaces` — the only place workspace trees may live. */
 export function getWorkspacesDir(): string {
-  return path.join(getDataDir(), 'workspaces');
+  const dataDir = getDataDir();
+  if (workspacesDirFor?.dataDir !== dataDir) workspacesDirFor = { dataDir, dir: path.join(dataDir, 'workspaces') };
+  return workspacesDirFor.dir;
 }
+let workspacesDirFor: { dataDir: string; dir: string } | undefined;
 
 /**
  * `<data root>/workspaces/<name>`, validated *and* containment-checked. The
  * second check is redundant given the allowlist, but it is cheap and it means a
  * future loosening of the pattern cannot silently become a traversal bug.
+ * Every storage path is built from it, so a checked result is remembered for
+ * its root and name (#757).
  */
 export function getWorkspaceDir(workspace?: string): string {
-  const name = normalizeWorkspaceName(workspace);
   const root = getWorkspacesDir();
+  if (checkedWorkspaceDirs?.root !== root) checkedWorkspaceDirs = { root, dirs: new Map() };
+  const known = checkedWorkspaceDirs.dirs.get(workspace);
+  if (known !== undefined) return known;
+  const name = normalizeWorkspaceName(workspace);
   const resolved = path.resolve(root, name);
   const rel = path.relative(root, resolved);
   if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
     throw new InvalidWorkspaceNameError(workspace);
   }
+  if (checkedWorkspaceDirs.dirs.size >= CHECKED_WORKSPACE_DIRS) checkedWorkspaceDirs.dirs.clear();
+  checkedWorkspaceDirs.dirs.set(workspace, resolved);
   return resolved;
 }
+/** Only names that passed the check enter; more workspaces than this simply start over. */
+const CHECKED_WORKSPACE_DIRS = 1024;
+let checkedWorkspaceDirs: { root: string; dirs: Map<string | undefined, string> } | undefined;
 
 /**
  * The data root *for the selected workspace*. This is the drop-in replacement for
@@ -577,9 +591,18 @@ export async function listWorkspaces(): Promise<WorkspaceInfo[]> {
   return Promise.all(sortedNames.map(workspaceInfo));
 }
 
+// Every request revalidates its workspace's folders; requests arriving
+// together share one fresh check of the disk (#757).
+const existenceChecks = new SharedFreshChecks<boolean>();
+const folderChecks = new SharedFreshChecks<string>();
+
 /** Whether a (syntactically valid) workspace exists on disk. */
-export async function workspaceExists(workspace: string): Promise<boolean> {
-  if (!isValidWorkspaceName(workspace)) return false;
+export function workspaceExists(workspace: string): Promise<boolean> {
+  if (!isValidWorkspaceName(workspace)) return Promise.resolve(false);
+  return existenceChecks.run(getWorkspaceDir(workspace), () => checkWorkspaceExists(workspace));
+}
+
+async function checkWorkspaceExists(workspace: string): Promise<boolean> {
   try {
     const entries = await fs.readdir(getWorkspacesDir(), { withFileTypes: true });
     const aliases = entries.filter(entry =>
@@ -835,8 +858,12 @@ async function removeWorkspaceWithinNamespaceLock(workspace: string, stopWorkspa
 }
 
 /** Create the complete workspace-owned directory set if missing. Idempotent. */
-export async function ensureWorkspaceDirs(workspace?: string): Promise<string> {
+export function ensureWorkspaceDirs(workspace?: string): Promise<string> {
   const dir = getWorkspaceDir(workspace);
+  return folderChecks.run(dir, () => checkWorkspaceDirs(dir));
+}
+
+async function checkWorkspaceDirs(dir: string): Promise<string> {
   const workspacesRoot = await ensureWorkspacesRoot();
 
   const expectedName = path.basename(dir);

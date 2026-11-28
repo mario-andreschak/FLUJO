@@ -7,7 +7,8 @@ import {
 } from '@/utils/workspace';
 import { createLogger } from '@/utils/logger';
 import { waitForWorkspaceLayoutReady } from '@/backend/services/workspace/layoutReadiness';
-import { assertWorkerRequestReady, isWorkerMode } from '@/backend/services/workspace/workerMode';
+import { waitForWorkerRequestReady, isWorkerMode } from '@/backend/services/workspace/workerMode';
+import { startupWaitFor } from '@/backend/services/workspace/startupWait';
 import { authorizeExecutionTransport, withExecutionExtensionRoute, executionExtensionAdapter, hasExecutionExtensionContext } from '@/backend/execution/extensions';
 import { assertOwnerRequest, isOwnerProtocolException, resolveOwnerRequest, type OwnerRequestAuthorization } from '@/backend/services/security/ownerAccess';
 import { bindOwnerStream } from '@/backend/services/security/ownerStream';
@@ -103,8 +104,9 @@ export async function resolveWorkspace(request: Request): Promise<string> {
   const workspace = parseWorkspaceParam(request);
   try {
     // Do not let a request observe the legacy root while startup is still
-    // migrating it. Concurrent callers share the migration's in-flight promise.
-    await waitForWorkspaceLayoutReady();
+    // migrating it. Concurrent callers share the migration's in-flight promise,
+    // and a request that arrives before startup began waits for it.
+    await waitForWorkspaceLayoutReady(startupWaitFor(request));
   } catch (error) {
     log.error('Workspace layout is not ready; refusing workspace request', error);
     throw new WorkspaceRequestError(
@@ -164,7 +166,7 @@ export async function withWorkspace<T>(
       ));
     }
 
-    const workerUnavailable = assertWorkerRequestReady(request, workspace);
+    const workerUnavailable = await waitForWorkerRequestReady(request, workspace, startupWaitFor(request));
     if (workerUnavailable) return workerUnavailable;
     return handler(workspace);
   });

@@ -38,6 +38,16 @@ export const MAX_AUTOMATIC_MODEL_RETRIES = 3;
 const LIMIT_SIGNATURE =
   /(session|usage|rate|quota|message|token)[\s_-]{0,3}limit|limit reached|reached your limit|too many requests|rate[\s_-]?limited|quota exceeded|exceeded your [a-z ]{0,24}quota|resets? (at|in|on)\b/i;
 
+/**
+ * A model server that is still starting, or the gateway in front of one,
+ * answers 502, 503 or 504 (#757: vLLM answered 503 while it loaded its model
+ * and the run ended). The SDK's own two quick retries are over within seconds;
+ * these waits give a starting server about a minute across the automatic
+ * retries. A Retry-After it announces is followed, up to the same longest wait.
+ */
+const UNAVAILABLE_STATUSES = new Set([502, 503, 504]);
+const UNAVAILABLE_DELAYS_MS = [5_000, 15_000, 40_000];
+
 /** Purely numeric delta-seconds, per RFC 9110 (integers; we tolerate decimals). */
 const DELTA_SECONDS = /^\d+(?:\.\d+)?$/;
 
@@ -197,6 +207,14 @@ export function planAutomaticRetry(
 ): AutomaticRetryPlan | undefined {
   const now = options.now ?? Date.now();
   const facts = extractRetryErrorFacts(error);
+  if (facts.status !== undefined && UNAVAILABLE_STATUSES.has(facts.status)) {
+    const longest = UNAVAILABLE_DELAYS_MS[UNAVAILABLE_DELAYS_MS.length - 1];
+    const announced = facts.retryAfterMs ?? parseRetryAfterMs(facts.retryAfter, now);
+    const delayMs = announced !== undefined
+      ? Math.min(announced, longest)
+      : UNAVAILABLE_DELAYS_MS[Math.min(options.retriesUsed ?? 0, UNAVAILABLE_DELAYS_MS.length - 1)];
+    return { delayMs, retryAt: now + delayMs, reason: 'provider_interruption', status: facts.status, code: facts.code };
+  }
   // Responses endpoints can fail inside an HTTP 200 envelope. These codes
   // describe interrupted inference, not invalid credentials/input or an
   // exhausted allowance. Callers must still enforce the no-output/no-effects

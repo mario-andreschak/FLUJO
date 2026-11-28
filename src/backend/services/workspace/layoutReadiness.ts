@@ -6,6 +6,7 @@
  * would make Webpack pull the full transactional filesystem engine into every
  * route entry and exhaust the production-build heap.
  */
+import { startupChanged, waitForStartup, type StartupWait } from './startupWait';
 
 declare global {
   // Global-backed because Next.js evaluates modules in several server graphs.
@@ -39,6 +40,7 @@ export function setWorkspaceLayoutPreparation<T>(promise: Promise<T> | undefined
   global.__flujo_workspace_layout_status = promise ? 'preparing' : 'not-started';
   global.__flujo_workspace_layout_error = undefined;
   if (!promise) return;
+  startupChanged();
 
   // Observe completion without replacing the shared promise. Routes can inspect
   // this state without awaiting a potentially long first-run migration, while
@@ -66,8 +68,15 @@ export function failWorkspaceLayoutPreparation<T>(promise: Promise<T>, error: un
   global.__flujo_workspace_layout_error = error;
 }
 
-/** Await the startup-owned migration without importing its implementation. */
-export async function waitForWorkspaceLayoutReady(): Promise<void> {
+/**
+ * Await the startup-owned migration without importing its implementation. With
+ * `wait`, a request that arrives before startup has begun preparing the layout
+ * waits for it to begin instead of being refused at once.
+ */
+export async function waitForWorkspaceLayoutReady(wait?: StartupWait): Promise<void> {
+  if (wait && !getWorkspaceLayoutPreparation() && getWorkspaceLayoutStatus() === 'not-started') {
+    await waitForStartup(() => getWorkspaceLayoutPreparation() !== undefined || getWorkspaceLayoutStatus() !== 'not-started', wait);
+  }
   const promise = getWorkspaceLayoutPreparation();
   if (!promise) {
     if (getWorkspaceLayoutStatus() === 'failed') {

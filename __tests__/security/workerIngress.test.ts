@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { proxy } from '@/proxy';
 import { GET } from '@/app/api/worker/status/route';
-import { assertWorkerRequestReady, setWorkerBootstrapStatus } from '@/backend/services/workspace/workerMode';
+import { assertWorkerRequestReady, setWorkerBootstrapStatus, waitForWorkerRequestReady } from '@/backend/services/workspace/workerMode';
 
 describe('worker HTTP ingress', () => {
   const oldMode = process.env.FLUJO_WORKER_MODE;
@@ -37,6 +37,30 @@ describe('worker HTTP ingress', () => {
     expect(assertWorkerRequestReady(request('/v1/chat/completions'), 'research')?.status).toBe(503);
     expect(assertWorkerRequestReady(request('/api/mcp/flujo/tools'), 'research')).toBeNull();
     expect(assertWorkerRequestReady(request('/api/mcp/flujo/flows'), 'research')?.status).toBe(503);
+  });
+  it('lets a chat that arrives while the worker starts wait for it instead of answering 503 (#757)', async () => {
+    setWorkerBootstrapStatus({ state: 'restoring' });
+    const waiting = waitForWorkerRequestReady(request('/v1/chat/completions'), 'research', { deadline: Date.now() + 5000 });
+    setWorkerBootstrapStatus({ state: 'installing' });
+    setTimeout(() => setWorkerBootstrapStatus({ state: 'ready' }), 20);
+    await expect(waiting).resolves.toBeNull();
+  });
+  it('still answers 503 when the worker does not finish starting in time, and does not wait for a person', async () => {
+    setWorkerBootstrapStatus({ state: 'installing' });
+    const startedAt = Date.now();
+    expect((await waitForWorkerRequestReady(request('/v1/chat/completions'), 'research', { deadline: Date.now() + 60 }))?.status).toBe(503);
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(50);
+    for (const state of ['locked', 'error'] as const) {
+      setWorkerBootstrapStatus({ state });
+      const at = Date.now();
+      expect((await waitForWorkerRequestReady(request('/v1/chat/completions'), 'research', { deadline: Date.now() + 5000 }))?.status).toBe(503);
+      expect(Date.now() - at).toBeLessThan(1000);
+    }
+    const caller = new AbortController();
+    setWorkerBootstrapStatus({ state: 'restoring' });
+    const leaving = waitForWorkerRequestReady(request('/v1/chat/completions'), 'research', { deadline: Date.now() + 5000, signal: caller.signal });
+    caller.abort();
+    expect((await leaving)?.status).toBe(503);
   });
   it('reports readiness and failure privately without requiring a loopback network peer', async () => {
     expect((await GET(request('/api/worker/status'))).status).toBe(401);

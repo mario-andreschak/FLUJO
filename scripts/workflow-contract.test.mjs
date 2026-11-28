@@ -6,7 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import YAML from 'yaml';
 import {
-  assertContainerSmoke, assertContributorGuideJob, assertFullWorkflowContract, assertReleaseSweepReportsOnly, assertReleaseSweepRunsByDefault, assertWorkflowContract, CONTAINER_SMOKE_COMMAND, PACKAGED_ACCEPTANCE_TESTS, RELEASE_CONTAINER_SMOKE_COMMAND,
+  assertChatBurstLoadJob, assertContainerSmoke, assertContributorGuideJob, assertFullWorkflowContract, CHAT_BURST_RUNS, assertReleaseSweepReportsOnly, assertReleaseSweepRunsByDefault, assertWorkflowContract, CONTAINER_SMOKE_COMMAND, PACKAGED_ACCEPTANCE_TESTS, RELEASE_CONTAINER_SMOKE_COMMAND,
 } from './workflow-contract.mjs';
 
 const directory = new URL('../.github/workflows/', import.meta.url);
@@ -553,7 +553,7 @@ for (const [label, change, expected] of [
 test('the main pull-request bridge does not need the broad-only jobs, and the broad gate waits for them', () => {
   const files = Object.fromEntries(readdirSync(directory).filter(file => /\.ya?ml$/.test(file))
     .map(file => [file, YAML.parse(readFileSync(new URL(file, directory), 'utf8'))]));
-  const broadOnly = ['antigravity-cli', 'installed-windows-acceptance', 'image-acceptance', 'system-key-store', 'system-key-store-linux', 'contributor-guide', 'first-use-journey', 'scripted-pilot', 'claude-code'];
+  const broadOnly = ['antigravity-cli', 'installed-windows-acceptance', 'image-acceptance', 'system-key-store', 'system-key-store-linux', 'contributor-guide', 'first-use-journey', 'scripted-pilot', 'claude-code', 'chat-burst-load'];
   for (const id of broadOnly) assert.equal(files['verify.yml'].jobs[id], undefined, id);
   assert.deepEqual(files['verify-full.yml'].jobs.verification.needs.slice(-broadOnly.length), broadOnly);
 });
@@ -663,6 +663,42 @@ for (const [label, change, expected] of [
 ]) {
   test(`broad qualification refuses ${label}`, () => {
     const files = readWorkflows();
+    change(files);
+    assert.throws(() => assertFullWorkflowContract(files), expected);
+  });
+}
+
+const burstJob = files => files['verify.yml'].jobs['chat-burst-load'];
+const burstStep = (files, run) => burstJob(files).steps.find(step => step.run === run);
+const [stream300, json300, json50, cold300] = CHAT_BURST_RUNS;
+for (const [label, change, expected] of [
+  ['a missing chat burst load job', files => { delete files['verify.yml'].jobs['chat-burst-load']; }, /chat burst load test/],
+  ['a skipped chat burst load job', files => { burstJob(files).if = 'false'; }, /chat burst load test/],
+  ['a tolerated chat burst failure', files => { burstStep(files, stream300)['continue-on-error'] = true; }, /chat burst load test/],
+  ['a chat burst that only runs sometimes', files => { burstStep(files, json300).if = "github.event_name == 'push'"; }, /chat burst load test/],
+  ['a smaller burst than the issue measured', files => { burstStep(files, stream300).run = stream300.replace('--parallel 300', '--parallel 30'); }, /chat burst load test/],
+  ['a burst without the plain 50', files => { burstJob(files).steps = burstJob(files).steps.filter(step => step.run !== json50); }, /chat burst load test/],
+  ['a burst that leaves out the start of FLUJO', files => { burstJob(files).steps = burstJob(files).steps.filter(step => step.run !== cold300); }, /chat burst load test/],
+  ['a burst with extra settings', files => { burstStep(files, cold300).env = { FLUJO_CHAT_ADMISSION_WAIT_MS: '900000' }; }, /chat burst load test/],
+  ['a burst against another server', files => { burstStep(files, stream300).run = `${stream300} --url http://127.0.0.1:4200 --flow plain`; }, /chat burst load test/],
+  ['a burst run before the production build', files => {
+    const steps = burstJob(files).steps;
+    const [build] = steps.splice(steps.findIndex(step => step.run === 'npm run build'), 1);
+    steps.push(build);
+  }, /chat burst load test/],
+  ['burst results lost when a run fails', files => { delete burstJob(files).steps.find(step => step.uses?.startsWith('actions/upload-artifact@')).if; }, /chat burst load test/],
+  ['burst results that may be missing', files => { burstJob(files).steps.find(step => step.uses?.startsWith('actions/upload-artifact@')).with['if-no-files-found'] = 'warn'; }, /chat burst load test/],
+  ['a chat burst job without the verified Node runtime', files => {
+    burstJob(files).steps = burstJob(files).steps.filter(step => !step.run?.startsWith('node scripts/verify-ci-node.mjs'));
+  }, /verify official binary identity/],
+  ['a verification gate that ignores the chat burst', files => {
+    const gate = files['verify.yml'].jobs.verification;
+    gate.needs = gate.needs.filter(id => id !== 'chat-burst-load');
+  }, /evaluate every prerequisite/],
+]) {
+  test(`broad qualification refuses ${label} (#757)`, () => {
+    const files = readWorkflows();
+    assertChatBurstLoadJob(files['verify.yml']);
     change(files);
     assert.throws(() => assertFullWorkflowContract(files), expected);
   });

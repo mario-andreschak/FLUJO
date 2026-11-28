@@ -44,11 +44,14 @@ export async function createSmokeOperator({ scopes = ['control:admin', 'mcp:acce
   }
   const parent = await fs.realpath(process.platform === 'win32' ? process.env.LOCALAPPDATA : os.tmpdir());
   const directory = await fs.mkdtemp(path.join(parent, 'flujo-smoke-operator-'));
+  // A packaged desktop app can see this folder redirected into its own storage,
+  // so compare against where it resolved when it was made, not its plain name.
+  const resolved = await fs.realpath(directory);
   const restore = async () => {
     const stat = await fs.lstat(directory);
     if (!stat.isDirectory() || stat.isSymbolicLink() || path.dirname(directory) !== parent
       || !/^flujo-smoke-operator-[A-Za-z0-9]+$/.test(path.basename(directory))
-      || await fs.realpath(directory) !== directory) throw new Error('Unsafe smoke operator cleanup.');
+      || await fs.realpath(directory) !== resolved) throw new Error('Unsafe smoke operator cleanup.');
     await fs.rm(directory, { recursive: true, force: true });
   };
   try {

@@ -36,6 +36,11 @@ const nextConfig = {
     // turns are append-only, but edits, retries, and first sends can legitimately
     // carry the full transcript, so retain enough headroom for those paths.
     proxyClientMaxBodySize: '100mb',
+    // Load each route when it is first used. Loading all of them at start held
+    // the only thread for seconds just as a restarted FLUJO began to accept
+    // connections, so a burst of chats waited behind pages nobody asked for and
+    // Windows refused the connections it could not queue (#757).
+    preloadEntriesOnStart: false,
   },
   // Pin the workspace root to this project. Without this, a stray
   // package-lock.json in a parent dir (e.g. the user's home folder) makes

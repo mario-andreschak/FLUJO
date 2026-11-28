@@ -280,6 +280,11 @@ const runWaitRules = {
   waitable: (error: unknown) => isFlowRunPressureError(error) && error.code !== 'FLOW_RUN_INPUT_TOO_LARGE',
   // Every run is full: no later waiter, of any workspace, fits until one finishes.
   blocksAll: () => runtime.active >= configured('MAX_PROCESS_RUNS', 64),
+  group: getCurrentWorkspace,
+  // Every run of the workspace is taken: none of its later waiters fits either.
+  // A full conversation, or memory a smaller input still fits, blocks nobody else.
+  blocksGroup: (_error: unknown, workspace: string) =>
+    (runtime.workspaces.get(workspace)?.active ?? 0) >= configured('MAX_WORKSPACE_RUNS', 32),
 };
 
 /**
