@@ -158,21 +158,8 @@
       "count": 1
     }
   },
-  "src/backend/services/mcp/betaClient.ts": {
-    "flujo/no-double-cast": {
-      "count": 9
-    }
-  },
   "src/backend/services/mcp/clientTasks.ts": {
     "flujo/no-double-cast": {
-      "count": 1
-    }
-  },
-  "src/backend/services/mcp/connection.ts": {
-    "flujo/no-double-cast": {
-      "count": 18
-    },
-    "flujo/no-workaround-comment": {
       "count": 1
     }
   },
