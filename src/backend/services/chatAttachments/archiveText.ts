@@ -2,6 +2,8 @@ import { Readable } from 'node:stream';
 import { createGunzip } from 'node:zlib';
 import { classifyAttachment, fenceFor, formatBytes, looksLikeText } from '@/shared/chatAttachments/formats';
 import { TextBudget, yieldToEventLoop } from './textBudget';
+import { isCompoundFile } from './compoundFile';
+import { extractLegacyOfficeText } from './legacyOffice';
 import { detectOfficeKind, extractOfficeText, type ExtractLimits, type ExtractedText } from './officeText';
 import { extractPdfText } from './pdfText';
 import { openZip, readZipEntry } from './zipEntries';
@@ -116,9 +118,14 @@ async function entryText(
     const fence = fenceFor(text);
     return { label: truncated ? `${entry.path} (shortened)` : entry.path, body: `${fence}${kind.language ?? ''}\n${text}\n${fence}` };
   }
-  if (kind.family === 'document') {
+  if (kind.family === 'document' || kind.family === 'legacy-office') {
     const { bytes, truncated } = await entry.read(limits.maxPartBytes);
     if (truncated) return { label: entry.path, body: '(too large to open inside the archive)' };
+    if (isCompoundFile(bytes)) {
+      const extracted = await extractLegacyOfficeText(bytes, nested);
+      return { label: `${entry.path} (${extracted.format}, text extracted)`, body: extracted.text || '(no text)' };
+    }
+    if (kind.family === 'legacy-office') return undefined;
     const zip = await openZip(bytes);
     const office = await detectOfficeKind(zip, entry.path.split('.').pop()?.toLowerCase() ?? '');
     if (!office) return undefined;
@@ -178,7 +185,7 @@ export async function extractArchiveText(
   for (const entry of entries) {
     if (budget.full) break;
     const family = classifyAttachment(entry.path).family;
-    if (family !== 'text' && family !== 'document' && family !== 'pdf') continue;
+    if (family !== 'text' && family !== 'document' && family !== 'legacy-office' && family !== 'pdf') continue;
     readable++;
     if (opened >= limits.maxPages) continue;
     try {

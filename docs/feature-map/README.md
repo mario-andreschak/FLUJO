@@ -47,7 +47,9 @@ fails when an entry has no bullet the sweep can run.
   `,` or `;`, ending at the first full stop. Items: `click <role> "Name"` (role
   is button, link, tab, radio, switch, checkbox, menu item, option or
   combobox), `fill "Label"` with an optional `` with `value` `` (without it the
-  sweep types "Release sweep check"), `expect-text "Text"`, `press Enter`, and
+  sweep types "Release sweep check"), `expect-text "Text"`, `press Enter`,
+  `` choose-file "Button" with `path/from/the/repository/root` `` (clicks the
+  button and picks that file in the file dialog it opens), and
   `shot` or `aria`, which the sweep skips because it saves its own proof. A
   `steps` command with `--file` puts the list after "The steps:".
 - `click switch "X"` and `click checkbox "X"` mean "make sure it is on", so

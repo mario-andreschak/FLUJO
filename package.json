@@ -127,6 +127,7 @@
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
     "@google/genai": "^2.32.0",
+    "@hyzyla/pdfium": "3.0.0",
     "@jitl/quickjs-wasmfile-release-sync": "0.32.0",
     "@mario.andreschak/mcp-bash": "3.48.10",
     "@mario.andreschak/mcp-browser": "3.48.10",

@@ -45,6 +45,17 @@ test('clicking a switch means making sure it is on, so walking entries in a row 
   ]);
 });
 
+test('choose-file picks a repository file in the dialog a button opens, and the promised chip text is checked', () => {
+  const check = parseBullet('talk', '- **Attach an old Word file**: `steps /chat`: click button "New", choose-file "Attach files" with `__tests__/fixtures/chat-attachments/legacy.doc` → "Text extracted".');
+  assert.equal(check.status, 'auto');
+  assert.deepEqual(check.steps, [
+    { do: 'goto', route: '/chat' },
+    { do: 'click', role: 'button', name: 'New' },
+    { do: 'choose-file', role: 'button', name: 'Attach files', file: '__tests__/fixtures/chat-attachments/legacy.doc' },
+    { do: 'expect-text', text: 'Text extracted' },
+  ]);
+});
+
 test('a steps command reads the list after "The steps:", ignoring evidence and periods inside quotes', () => {
   const check = parseBullet('agents', '- **Build and save** (one session, because a draft is lost between commands): `node scripts/flujo-drive.mjs steps /flows --file agents-save.json`. The steps: click button "Start simple"; fill "Workflow goal"; click button "Create goal step"; expect-text "Agent saved."; then shot and aria.');
   assert.equal(check.status, 'auto');

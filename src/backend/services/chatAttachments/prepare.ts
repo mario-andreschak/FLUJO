@@ -1,10 +1,12 @@
-import { classifyAttachment, looksLikeText } from '@/shared/chatAttachments/formats';
+import { classifyAttachment, looksLikeText, type AttachmentClassification } from '@/shared/chatAttachments/formats';
 import type { AttachmentNote, ChatAttachmentLimits } from '@/shared/chatAttachments/limits';
 import { createLogger } from '@/utils/logger';
 import { extractArchiveText } from './archiveText';
+import { isCompoundFile, LegacyOfficeError } from './compoundFile';
 import { convertImage, ImageConvertError } from './imageConvert';
+import { extractLegacyOfficeText } from './legacyOffice';
 import { maxPartBytes } from './limits';
-import { detectOfficeKind, extractOfficeText } from './officeText';
+import { detectOfficeKind, extractOfficeText, type ExtractLimits } from './officeText';
 import { PdfReadError } from './pdfText';
 import { cachedPdfText } from './pdfTextCache';
 import { openZip } from './zipEntries';
@@ -32,6 +34,55 @@ function failed(reason: string): PreparedAttachment {
   return { kind: 'note', note: { code: 'failed', values: { reason } } };
 }
 
+function plainText(bytes: Uint8Array, maxCharacters: number): PreparedAttachment {
+  const text = new TextDecoder('utf-8').decode(bytes);
+  const kept = text.slice(0, maxCharacters);
+  return {
+    kind: 'text',
+    text: kept,
+    note: {
+      code: 'text',
+      ...(kept.length < text.length ? { shortened: { unit: 'character' as const, kept: kept.length, total: text.length } } : {}),
+    },
+  };
+}
+
+const startsWithZip = (bytes: Uint8Array) => bytes[0] === 0x50 && bytes[1] === 0x4b;
+
+/**
+ * Word, Excel and PowerPoint files by what they contain: the ZIP formats,
+ * the old compound-file formats, and the HTML or CSV text many programs save
+ * under an Office name.
+ */
+async function officeDocument(
+  bytes: Uint8Array,
+  name: string,
+  kind: AttachmentClassification,
+  extract: ExtractLimits,
+): Promise<PreparedAttachment> {
+  if (isCompoundFile(bytes)) {
+    const result = await extractLegacyOfficeText(bytes, extract);
+    return {
+      kind: 'text',
+      text: result.text || '(The document has no text.)',
+      note: { code: 'text-extracted', values: { format: result.format }, ...(result.shortened ? { shortened: result.shortened } : {}) },
+    };
+  }
+  if (startsWithZip(bytes) || kind.family === 'document') {
+    const zip = await openZip(bytes);
+    const office = await detectOfficeKind(zip, extensionOf(name));
+    if (!office) return failed('not-a-document');
+    const result = await extractOfficeText(zip, office, extract);
+    return {
+      kind: 'text',
+      text: result.text || '(The document has no text.)',
+      note: { code: 'text-extracted', values: { format: kind.format }, ...(result.shortened ? { shortened: result.shortened } : {}) },
+    };
+  }
+  if (looksLikeText(bytes.subarray(0, 4096))) return plainText(bytes, extract.maxTextCharacters);
+  return { kind: 'note', note: { code: 'legacy-office', values: { format: kind.format } } };
+}
+
 export async function prepareChatAttachment(input: {
   bytes: Uint8Array;
   name: string;
@@ -44,17 +95,9 @@ export async function prepareChatAttachment(input: {
 
   try {
     switch (kind.family) {
-      case 'document': {
-        const zip = await openZip(bytes);
-        const office = await detectOfficeKind(zip, extensionOf(name));
-        if (!office) return failed('not-a-document');
-        const result = await extractOfficeText(zip, office, extract);
-        return {
-          kind: 'text',
-          text: result.text || '(The document has no text.)',
-          note: { code: 'text-extracted', values: { format: kind.format }, ...(result.shortened ? { shortened: result.shortened } : {}) },
-        };
-      }
+      case 'document':
+      case 'legacy-office':
+        return await officeDocument(bytes, name, kind, extract);
       case 'archive': {
         const result = await extractArchiveText(bytes, name, extract);
         return {
@@ -107,27 +150,18 @@ export async function prepareChatAttachment(input: {
             : { code: 'image-converted', values: { format: kind.format } },
         };
       }
-      case 'text': {
-        const sample = bytes.subarray(0, 4096);
-        if (!looksLikeText(sample)) return { kind: 'note', note: { code: 'name-only' } };
-        const text = new TextDecoder('utf-8').decode(bytes);
-        const kept = text.slice(0, limits.maxTextCharacters);
-        return {
-          kind: 'text',
-          text: kept,
-          note: {
-            code: 'text',
-            ...(kept.length < text.length ? { shortened: { unit: 'character' as const, kept: kept.length, total: text.length } } : {}),
-          },
-        };
-      }
-      case 'legacy-office':
-        return { kind: 'note', note: { code: 'legacy-office', values: { format: kind.format } } };
+      case 'text':
+        if (!looksLikeText(bytes.subarray(0, 4096))) return { kind: 'note', note: { code: 'name-only' } };
+        return plainText(bytes, limits.maxTextCharacters);
       default:
         return { kind: 'note', note: { code: 'name-only' } };
     }
   } catch (error) {
     if (error instanceof PdfReadError) return failed(error.reason === 'password' ? 'password' : 'damaged');
+    if (error instanceof LegacyOfficeError) {
+      if (error.reason === 'unsupported') return { kind: 'note', note: { code: 'legacy-office', values: { format: kind.format } } };
+      return failed(error.reason);
+    }
     if (error instanceof ImageConvertError) return failed('image');
     log.warn(`Could not prepare chat attachment (${kind.family})`, error);
     return failed('damaged');

@@ -1,6 +1,16 @@
 // Rebuilds the tiny chat attachment fixtures: `node __tests__/fixtures/chat-attachments/generate.mjs`.
 // Every file is made here from invented text, so nothing copyrighted is committed.
-import { writeFile } from 'node:fs/promises';
+//
+// Old Office files (legacy.doc, legacy.xls, legacy.ppt) must come from a real office suite, so this
+// script only writes their OpenDocument sources: `node generate.mjs --legacy-sources <folder>`.
+// LibreOffice then writes the binary formats; the committed files came from LibreOffice 26.2:
+//   soffice --headless --convert-to doc:"MS Word 97" legacy.fodt
+//   soffice --headless --convert-to xls:"MS Excel 97" legacy.fods
+//   soffice --headless --convert-to ppt:"MS PowerPoint 97" legacy.fodp
+// The MP3 and Ogg sound files are the WAV tone below, encoded by FFmpeg 8.1:
+//   ffmpeg -i sample.wav -map_metadata -1 -fflags +bitexact -flags:a +bitexact -codec:a libmp3lame -b:a 32k sample.mp3
+//   ffmpeg -i sample.wav -map_metadata -1 -fflags +bitexact -flags:a +bitexact -codec:a libopus -b:a 24k sample.ogg
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
@@ -155,6 +165,79 @@ function bmp() {
   return Buffer.concat([header, pixels]);
 }
 
+/** Half a second of a 440 Hz tone: 8 kHz, mono, 16-bit PCM. */
+function wav() {
+  const rate = 8000;
+  const samples = rate / 2;
+  const data = Buffer.alloc(samples * 2);
+  for (let index = 0; index < samples; index++) {
+    data.writeInt16LE(Math.round(Math.sin((2 * Math.PI * 440 * index) / rate) * 8000), index * 2);
+  }
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0, 'latin1');
+  header.writeUInt32LE(36 + data.length, 4);
+  header.write('WAVEfmt ', 8, 'latin1');
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(rate, 24);
+  header.writeUInt32LE(rate * 2, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write('data', 36, 'latin1');
+  header.writeUInt32LE(data.length, 40);
+  return Buffer.concat([header, data]);
+}
+
+const FLAT_ODF_NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:presentation="urn:oasis:names:tc:opendocument:xmlns:presentation:1.0" xmlns:number="urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:of="urn:oasis:names:tc:opendocument:xmlns:of:1.2"';
+const flatOdf = (mimetype, inner) => `<?xml version="1.0" encoding="UTF-8"?>\n<office:document ${FLAT_ODF_NS} office:version="1.3" office:mimetype="${mimetype}">${inner}</office:document>\n`;
+const cell = (value, attrs = 'office:value-type="string"') => `<table:table-cell ${attrs}><text:p>${value}</text:p></table:table-cell>`;
+const row = cells => `<table:table-row>${cells.join('')}</table:table-row>`;
+
+/** Sources LibreOffice turns into legacy.doc, legacy.xls and legacy.ppt (see the top of this file). */
+const LEGACY_SOURCES = {
+  'legacy.fodt': flatOdf('application/vnd.oasis.opendocument.text', '<office:body><office:text>'
+    + '<text:h text:outline-level="1">Seed swap</text:h>'
+    + '<text:p>Bring seeds in paper envelopes – label each one.<text:line-break/>Grüße from the café: 5 € per packet, 番茄 welcome.</text:p>'
+    + '<text:p>See the <text:a xlink:type="simple" xlink:href="https://example.org/club">club website</text:a> for dates.'
+    + '<text:note text:id="ftn1" text:note-class="footnote"><text:note-citation>1</text:note-citation><text:note-body><text:p>Dry seeds only.</text:p></text:note-body></text:note></text:p>'
+    + '<table:table table:name="Seeds"><table:table-column table:number-columns-repeated="2"/>'
+    + row([cell('Seed'), cell('Owner')]) + row([cell('Bean'), cell('Ana')])
+    + '</table:table><text:p>Swap ends at noon.</text:p></office:text></office:body>'),
+  'legacy.fods': flatOdf('application/vnd.oasis.opendocument.spreadsheet', '<office:automatic-styles>'
+    + '<number:date-style style:name="N1"><number:year number:style="long"/><number:text>-</number:text><number:month number:style="long"/><number:text>-</number:text><number:day number:style="long"/></number:date-style>'
+    + '<style:style style:name="ce1" style:family="table-cell" style:data-style-name="N1"/></office:automatic-styles>'
+    + '<office:body><office:spreadsheet>'
+    + '<table:table table:name="Harvest">'
+    + row([cell('Crop'), cell('Kilos'), cell('Picked')])
+    + row([cell('Tomatoes'), cell('12.5', 'office:value-type="float" office:value="12.5"'), cell('2026-01-01', 'table:style-name="ce1" office:value-type="date" office:date-value="2026-01-01"')])
+    + row([cell('Beans, green'), cell('25', 'table:formula="of:=[.B2]*2" office:value-type="float" office:value="25"'), cell(''), cell('TRUE', 'office:value-type="boolean" office:boolean-value="true"')])
+    + row([cell('Grüße 番茄'), cell('1234567.891', 'office:value-type="float" office:value="1234567.891"'), cell('-3', 'office:value-type="float" office:value="-3"')])
+    + '</table:table>'
+    + `<table:table table:name="Notes">${row([cell('Rain expected Friday')])}</table:table>`
+    // Longer than one 8 KB record, so the shared string table must continue in a second record.
+    + `<table:table table:name="Long">${row([cell(`${'seed '.repeat(1800)}end ☀`)])}</table:table>`
+    + '</office:spreadsheet></office:body>'),
+  'legacy.fodp': flatOdf('application/vnd.oasis.opendocument.presentation', '<office:body><office:presentation>'
+    + '<draw:page draw:name="page1">'
+    + '<draw:frame svg:x="2cm" svg:y="2cm" svg:width="20cm" svg:height="3cm"><draw:text-box><text:p>Welcome to the club</text:p></draw:text-box></draw:frame>'
+    + '<draw:frame svg:x="2cm" svg:y="6cm" svg:width="20cm" svg:height="6cm"><draw:text-box><text:p>Meeting every Tuesday</text:p></draw:text-box></draw:frame>'
+    + '</draw:page><draw:page draw:name="page2">'
+    + '<draw:frame svg:x="2cm" svg:y="2cm" svg:width="20cm" svg:height="3cm"><draw:text-box><text:p>Budget</text:p></draw:text-box></draw:frame>'
+    + '<draw:frame svg:x="2cm" svg:y="6cm" svg:width="20cm" svg:height="6cm"><draw:text-box><text:p>Seeds: 40 €</text:p></draw:text-box></draw:frame>'
+    + '<presentation:notes><draw:frame svg:x="2cm" svg:y="14cm" svg:width="16cm" svg:height="8cm" presentation:class="notes"><draw:text-box><text:p>Ask about the compost bin</text:p></draw:text-box></draw:frame></presentation:notes>'
+    + '</draw:page></office:presentation></office:body>'),
+};
+
+const legacyFolder = process.argv.indexOf('--legacy-sources');
+if (legacyFolder >= 0) {
+  const folder = path.resolve(process.argv[legacyFolder + 1] ?? '.');
+  await mkdir(folder, { recursive: true });
+  for (const [name, content] of Object.entries(LEGACY_SOURCES)) await writeFile(path.join(folder, name), content);
+  console.log(`legacy Office sources written to ${folder}; convert them with LibreOffice (see the top of this file)`);
+  process.exit(0);
+}
+
 const square = () => sharp({ create: { width: 8, height: 6, channels: 3, background: '#3a7d44' } });
 const png = await square().png().toBuffer();
 
@@ -179,4 +262,5 @@ await out('sample.tiff', await square().tiff().toBuffer());
 await out('sample.heic', await square().heif({ compression: 'av1', quality: 50 }).toBuffer());
 await out('sample.svg', '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="6"><rect width="8" height="6" fill="#3a7d44"/></svg>');
 await out('sample.bin', Buffer.from([0x00, 0x13, 0x37, 0xff, 0x42, 0x00, 0x99]));
+await out('sample.wav', wav());
 console.log('chat attachment fixtures written');

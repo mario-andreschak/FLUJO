@@ -49,6 +49,8 @@ test('steps files are validated with a message that names the step', () => {
   assert.throws(() => validateSteps([{ do: 'goto', route: '/' }, { do: 'fill', label: 'Name' }]), /step 2 \(fill\) needs "value"/);
   assert.doesNotThrow(() => validateSteps([{ do: 'drop-file', role: 'heading', name: 'MCP servers', file: 'a.mcpb' }]));
   assert.throws(() => validateSteps([{ do: 'choose-file', role: 'menuitem', name: 'MCP bundle' }]), /step 1 \(choose-file\) needs "file"/);
+  assert.doesNotThrow(() => validateSteps([{ do: 'expect-no-text', text: 'Reading…' }]));
+  assert.throws(() => validateSteps([{ do: 'expect-no-text' }]), /step 1 \(expect-no-text\) needs "text"/);
 });
 
 test('commands with missing options fail before launching a browser', async () => {

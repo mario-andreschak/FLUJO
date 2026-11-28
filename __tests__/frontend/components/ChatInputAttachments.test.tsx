@@ -51,7 +51,9 @@ function installServer(): PrepareCall[] {
     if (name === 'slow.docx') await gate;
     const body = name?.endsWith('.docx') || name?.endsWith('.zip')
       ? { kind: 'text', text: '# Garden plan', note: { code: 'text-extracted', values: { format: 'Word document' } } }
-      : { kind: 'note', note: { code: 'name-only' } };
+      : name?.endsWith('.xls')
+        ? { kind: 'text', text: '## Sheet: Harvest\nCrop,Kilos', note: { code: 'text-extracted', values: { format: 'Excel 97-2003 workbook' } } }
+        : { kind: 'note', note: { code: 'name-only' } };
     return jsonResponse(body);
   }) as typeof fetch;
   return calls;
@@ -79,6 +81,7 @@ describe('ChatInput attachments of every kind (#1224)', () => {
       sized(new File(['x'], 'movie.mov', { type: 'video/quicktime' }), 40 * MiB),
       new File(['old'], 'budget.xls'),
       new File(['a,b\n1,2\n'], 'numbers.csv'),
+      new File([new Uint8Array([0x49, 0x44, 0x33, 0x04])], 'memo.mp3', { type: 'audio/mpeg' }),
     ]) });
 
     await waitFor(() => expect(screen.queryByText('Reading…')).not.toBeInTheDocument());
@@ -87,18 +90,22 @@ describe('ChatInput attachments of every kind (#1224)', () => {
       'Text extracted',
       'Can’t be read: only the name is sent',
       'Too large (limit 16 MB): not sent',
-      'Old format: save it as .docx, .xlsx or .pptx',
+      'Text extracted',
       'Sent as text',
+      'Sent as audio; models that can’t listen get a transcript',
     ]);
 
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
     await waitFor(() => expect(onSendMessage).toHaveBeenCalledTimes(1));
     const [, attachments] = onSendMessage.mock.calls[0];
-    expect(attachments).toHaveLength(5);
+    expect(attachments).toHaveLength(6);
     expect(attachments[0]).toMatchObject({ type: 'document', content: '# Garden plan', originalName: 'plan.docx' });
     expect(attachments[1]).toMatchObject({ originalName: 'tool.bin', content: '', note: { code: 'name-only' } });
     expect(attachments[2]).toMatchObject({ originalName: 'movie.mov', note: { code: 'too-large', values: { limit: 16 * MiB } } });
+    expect(attachments[3]).toMatchObject({ originalName: 'budget.xls', content: '## Sheet: Harvest\nCrop,Kilos', note: { code: 'text-extracted' } });
     expect(attachments[4]).toMatchObject({ content: 'a,b\n1,2\n', language: 'csv', note: { code: 'text' } });
+    expect(attachments[5]).toMatchObject({ type: 'audio', originalName: 'memo.mp3', mimeType: 'audio/mpeg', note: { code: 'audio' } });
+    expect(attachments[5].content).toMatch(/^data:audio\/mpeg;base64,/);
   });
 
   it('waits for files that are still being read before sending', async () => {

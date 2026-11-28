@@ -168,7 +168,7 @@ describe('chat attachment preparation (#1224)', () => {
 
   it('turns unreadable files into notes instead of errors', async () => {
     expect(await prepare('sample.bin')).toEqual({ kind: 'note', note: { code: 'name-only' } });
-    const legacy = await prepareChatAttachment({ bytes: Buffer.from('old'), name: 'budget.xls', limits: LIMITS });
+    const legacy = await prepareChatAttachment({ bytes: Buffer.from([0, 0x6f, 0x6c, 0x64, 0xff]), name: 'budget.xls', limits: LIMITS });
     expect(legacy).toEqual({ kind: 'note', note: { code: 'legacy-office', values: { format: 'Excel 97-2003 workbook' } } });
     const broken = await prepareChatAttachment({ bytes: Buffer.from('not a zip'), name: 'broken.docx', limits: LIMITS });
     expect(broken).toEqual({ kind: 'note', note: { code: 'failed', values: { reason: 'damaged' } } });

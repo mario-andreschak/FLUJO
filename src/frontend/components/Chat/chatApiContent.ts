@@ -54,7 +54,7 @@ export function attachmentLabel(attachment: Attachment, note: AttachmentNote): s
     case 'text-extracted': return `[${head}: text extracted${shortenedText(note)}]`;
     case 'archive': return `[${head}: list of files and the text of readable files${shortenedText(note)}]`;
     case 'pdf': return `[${head}${pages}]`;
-    case 'pdf-no-text': return `[${head}${pages}; it has no text layer, so a model that cannot read PDF files will not see it]`;
+    case 'pdf-no-text': return `[${head}${pages}; it has no text layer, so a model that cannot read PDF files sees it only as page pictures, when it sees images]`;
     case 'pdf-as-text': return `[${head}${pages}: too large to send as a PDF, so its text was extracted${shortenedText(note)}]`;
     case 'image-converted': return `[${head}: converted to an image format models can read]`;
     case 'image-reduced': return `[${head}: made smaller so it fits in the message]`;
@@ -62,7 +62,7 @@ export function attachmentLabel(attachment: Attachment, note: AttachmentNote): s
     case 'image':
     case 'audio':
     case 'video': return `[${head}]`;
-    case 'legacy-office': return `[${head}: not sent; this old Office format cannot be read. Ask for a .docx, .xlsx or .pptx copy if it matters]`;
+    case 'legacy-office': return `[${head}: not sent; FLUJO cannot read this Office file (it may come from a version older than Office 97). Ask for a .docx, .xlsx or .pptx copy if it matters]`;
     case 'too-large': return `[${head}: not sent; larger than the chat file limit${limitText(note)}]`;
     case 'too-large-to-send': return `[${head}: not sent; too large to send to a model${limitText(note)}]`;
     case 'failed': return `[${head}: not sent; it could not be read${note.values?.reason === 'password' ? ' because it is protected with a password' : ''}]`;

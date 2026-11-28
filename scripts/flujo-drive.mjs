@@ -34,7 +34,7 @@ const STATE_FILE = stateFileFor(ROOT);
 const SHARED_STATE_FILE = path.join(HOME, 'instance.json');
 export const EVIDENCE_DIR = path.join(HOME, 'evidence');
 const RESERVED_PORTS = new Set([4200]);
-const STEP_KINDS = new Set(['goto', 'click', 'fill', 'press', 'wait-for', 'expect-text', 'drop-file', 'choose-file', 'shot', 'aria']);
+const STEP_KINDS = new Set(['goto', 'click', 'fill', 'press', 'wait-for', 'expect-text', 'expect-no-text', 'drop-file', 'choose-file', 'shot', 'aria']);
 
 export const USAGE = `Usage: node scripts/flujo-drive.mjs <command> [options]
 
@@ -105,7 +105,7 @@ export function validateSteps(steps) {
     if (!STEP_KINDS.has(step?.do)) throw new Error(`${where}: "do" must be one of ${[...STEP_KINDS].join(', ')}`);
     const need = {
       goto: ['route'], click: ['role', 'name'], fill: ['label', 'value'], press: ['key'], 'wait-for': ['role', 'name'],
-      'expect-text': ['text'], 'drop-file': ['role', 'name', 'file'], 'choose-file': ['role', 'name', 'file'], shot: ['out'], aria: ['out'],
+      'expect-text': ['text'], 'expect-no-text': ['text'], 'drop-file': ['role', 'name', 'file'], 'choose-file': ['role', 'name', 'file'], shot: ['out'], aria: ['out'],
     }[step.do];
     for (const field of need) {
       if (typeof step[field] !== 'string' || !step[field]) throw new Error(`${where} (${step.do}) needs "${field}"`);
@@ -413,6 +413,15 @@ export async function runStep(page, step, baseUrl, log) {
         { timeout: Number(step.timeout ?? 60_000) },
       ).catch(() => {
         throw new Error(`"${step.text}" did not appear on the page within ${Number(step.timeout ?? 60_000) / 1000}s.`);
+      });
+      break;
+    case 'expect-no-text':
+      await page.waitForFunction(
+        (text) => !document.body.innerText.replace(/\s+/g, ' ').toLowerCase().includes(text.replace(/\s+/g, ' ').toLowerCase()),
+        step.text,
+        { timeout: Number(step.timeout ?? 60_000) },
+      ).catch(() => {
+        throw new Error(`"${step.text}" was still on the page after ${Number(step.timeout ?? 60_000) / 1000}s.`);
       });
       break;
     case 'drop-file': {

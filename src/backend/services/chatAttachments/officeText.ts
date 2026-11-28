@@ -79,13 +79,13 @@ function csvCell(value: string): string {
   return /[",\n\r]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
 }
 
-function csvLine(cells: string[]): string {
+export function csvLine(cells: string[]): string {
   let end = cells.length;
   while (end > 0 && !cells[end - 1]) end--;
   return cells.slice(0, end).map(cell => csvCell(cell ?? '')).join(',');
 }
 
-function shortenedByCharacters(budget: TextBudget): ExtractedText['shortened'] {
+export function shortenedByCharacters(budget: TextBudget): ExtractedText['shortened'] {
   return budget.full ? { unit: 'character', kept: budget.used } : undefined;
 }
 
@@ -207,6 +207,11 @@ const BUILT_IN_DATE_FORMATS = new Set([14, 15, 16, 17, 18, 19, 20, 21, 22, 27, 2
 function isDateFormatCode(code: string): boolean {
   const visible = code.replace(/"[^"]*"/g, '').replace(/\[[^\]]*\]/g, '').replace(/\\./g, '');
   return /[dmyhs]/i.test(visible) && !/^general$/i.test(visible.trim());
+}
+
+/** Whether a number format shows dates: its own format code decides, else the built-in list. */
+export function isDateFormat(formatId: number, code: string | undefined): boolean {
+  return code !== undefined ? isDateFormatCode(code) : BUILT_IN_DATE_FORMATS.has(formatId);
 }
 
 async function excelStyles(zip: JSZip, limits: ExtractLimits): Promise<ExcelStyles> {

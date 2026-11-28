@@ -11,7 +11,7 @@ export type AttachmentFamily =
   | 'image'
   /** HEIC, AVIF, TIFF, BMP or SVG: turned into PNG before sending. */
   | 'image-convert'
-  /** Sent as a PDF to models that read PDFs, as extracted text to the rest. */
+  /** Sent as a PDF to models that read PDFs; the rest get its text, plus page pictures when they see images. */
   | 'pdf'
   /** Word, Excel, PowerPoint and OpenDocument files: text is extracted. */
   | 'document'
@@ -19,7 +19,7 @@ export type AttachmentFamily =
   | 'archive'
   | 'audio'
   | 'video'
-  /** Old Office formats (.doc, .xls, .ppt): only the name is sent. */
+  /** Old Office formats (.doc, .xls, .ppt): text is extracted like from their newer forms. */
   | 'legacy-office'
   /** Anything else: only the name, type and size are sent. */
   | 'binary';

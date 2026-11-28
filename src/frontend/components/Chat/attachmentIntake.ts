@@ -14,9 +14,9 @@ const log = createLogger('frontend/components/Chat/attachmentIntake');
 
 /**
  * Turns any file dropped, pasted or picked in the chat into an attachment
- * (#1224). Text, images, sound and video are read in the browser. Documents,
- * archives, PDFs and unusual images go to the server, which extracts text or
- * converts them. Every file ends up as a chip: when nothing readable comes
+ * (#1224). Text, images, sound and video are read in the browser. Documents
+ * (old Office formats too), archives, PDFs and unusual images go to the
+ * server, which extracts text or converts them. Every file ends up as a chip: when nothing readable comes
  * out, the chip and the model get a short note instead.
  */
 export type PreparedResponse =
@@ -184,8 +184,6 @@ export async function fileToAttachment(
       case 'video':
         if (file.size > limits.maxInlineBytes) return noteOnly(base, { code: 'too-large-to-send', values: { limit: limits.maxInlineBytes } });
         return { ...base, type: classification.family, content: await readDataUrl(file), note: { code: classification.family } };
-      case 'legacy-office':
-        return noteOnly(base, { code: 'legacy-office', values: { format: classification.format } });
       case 'binary':
         // Unknown extensions are often plain text (config files, logs, notes).
         return await asText(file, { ...base, format: 'Text' }, limits) ?? noteOnly(base, { code: 'name-only' });
