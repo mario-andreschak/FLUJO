@@ -19,13 +19,19 @@ import {
   DialogTitle,
   Divider,
   FormControlLabel,
+  IconButton,
+  InputAdornment,
   Link,
   Stack,
   Switch,
   TextField,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
+import FolderOpenIcon from '@mui/icons-material/FolderOpen';
+import InsertDriveFileOutlinedIcon from '@mui/icons-material/InsertDriveFileOutlined';
+import FolderPickerDialog from '@/frontend/components/shared/FolderPickerDialog';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { TranslationKey } from '@/frontend/i18n/messages';
 import { installMcpbFile, isMcpbFileName, McpbRequestError, reviewMcpbFile } from '@/frontend/services/mcp/bundles';
@@ -35,6 +41,8 @@ import type {
   McpbReview,
   McpbReviewWarning,
   McpbServerType,
+  McpbSignature,
+  McpbSignatureProblem,
   McpbSignatureStatus,
   McpbUserConfigField,
   McpbUserConfigValue,
@@ -55,16 +63,30 @@ const TYPE_KEYS: Record<McpbServerType, TranslationKey> = {
   uv: 'mcp.bundle.type.uv',
 };
 const SIGNATURE_KEYS: Record<McpbSignatureStatus, TranslationKey> = {
+  signed: 'mcp.bundle.signature.signed',
+  invalid: 'mcp.bundle.signature.invalid',
   unsigned: 'mcp.bundle.signature.unsigned',
-  'signed-unverified': 'mcp.bundle.signature.signed-unverified',
-  damaged: 'mcp.bundle.signature.damaged',
+};
+const SIGNATURE_SEVERITY: Record<McpbSignatureStatus, 'success' | 'error' | 'info'> = {
+  signed: 'success',
+  invalid: 'error',
+  unsigned: 'info',
+};
+const PROBLEM_KEYS: Record<McpbSignatureProblem, TranslationKey> = {
+  damaged: 'mcp.bundle.signatureProblem.damaged',
+  changed: 'mcp.bundle.signatureProblem.changed',
+  'wrong-certificate': 'mcp.bundle.signatureProblem.wrong-certificate',
+  expired: 'mcp.bundle.signatureProblem.expired',
+  'not-yet-valid': 'mcp.bundle.signatureProblem.not-yet-valid',
+  'not-for-code-signing': 'mcp.bundle.signatureProblem.not-for-code-signing',
+  'unsupported-method': 'mcp.bundle.signatureProblem.unsupported-method',
 };
 const WARNING_KEYS: Record<McpbReviewWarning, TranslationKey> = {
   'secret-in-command-line': 'mcp.bundle.warning.secret-in-command-line',
   'runs-bundled-program': 'mcp.bundle.warning.runs-bundled-program',
   'installs-python-packages': 'mcp.bundle.warning.installs-python-packages',
   'newer-format': 'mcp.bundle.warning.newer-format',
-  'signature-damaged': 'mcp.bundle.warning.signature-damaged',
+  'signer-changed': 'mcp.bundle.warning.signer-changed',
 };
 
 type FormValue = string | boolean;
@@ -87,6 +109,19 @@ function initialValue(field: McpbUserConfigField): FormValue {
   return value === undefined ? '' : String(value);
 }
 
+/** Where the picker opens: the last folder typed, or the folder of the last file typed. */
+function pickerStart(field: McpbUserConfigField, value: FormValue | undefined): string | undefined {
+  const last = typeof value === 'string' ? value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).pop() : undefined;
+  if (!last || field.type !== 'file') return last;
+  const folder = last.replace(/[\\/][^\\/]*$/, '');
+  return /^[A-Za-z]:$/.test(folder) ? `${folder}\\` : folder || undefined;
+}
+
+function withPickedPath(field: McpbUserConfigField, value: FormValue | undefined, picked: string): string {
+  const current = typeof value === 'string' ? value.trim() : '';
+  return field.multiple && current ? `${current}\n${picked}` : picked;
+}
+
 function submittedValues(fields: McpbUserConfigField[], values: Record<string, FormValue>): Record<string, McpbUserConfigValue> {
   return Object.fromEntries(fields.map((field) => [field.key, values[field.key] ?? '']));
 }
@@ -104,7 +139,7 @@ export interface McpBundleInstaller {
 }
 
 export function useMcpBundleInstaller({ onInstalled }: { onInstalled: (result: McpbInstallResult) => void }): McpBundleInstaller {
-  const { t, formatNumber } = useI18n();
+  const { t, formatNumber, formatDate } = useI18n();
   const inputRef = useRef<HTMLInputElement>(null);
   const dragDepth = useRef(0);
   const requestId = useRef(0);
@@ -117,6 +152,8 @@ export function useMcpBundleInstaller({ onInstalled }: { onInstalled: (result: M
   const [result, setResult] = useState<McpbInstallResult | null>(null);
   const [serverName, setServerName] = useState('');
   const [values, setValues] = useState<Record<string, FormValue>>({});
+  const [pickerField, setPickerField] = useState<McpbUserConfigField | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const startReview = useCallback(async (candidate: File) => {
     const id = ++requestId.current;
@@ -213,7 +250,8 @@ export function useMcpBundleInstaller({ onInstalled }: { onInstalled: (result: M
 
   const nameValid = SERVER_NAME.test(serverName.trim());
   const upgrading = Boolean(review?.existing);
-  const canInstall = Boolean(review && review.platformSupported && nameValid && !busy && !result);
+  const signatureRefused = review?.signature.status === 'invalid';
+  const canInstall = Boolean(review && review.platformSupported && !signatureRefused && nameValid && !busy && !result);
 
   const renderField = (field: McpbUserConfigField) => {
     const value = values[field.key];
@@ -230,9 +268,11 @@ export function useMcpBundleInstaller({ onInstalled }: { onInstalled: (result: M
         </Box>
       );
     }
+    const pathField = field.type === 'directory' || field.type === 'file';
+    const chooseLabel = t(field.type === 'file' ? 'mcp.bundle.chooseFile' : 'mcp.bundle.chooseFolder');
     const help = [
       field.description,
-      field.type === 'directory' || field.type === 'file' ? t(field.multiple ? 'mcp.bundle.pathsHelp' : 'mcp.bundle.pathHelp') : '',
+      pathField ? t(field.multiple ? 'mcp.bundle.pathsHelp' : 'mcp.bundle.pathHelp') : '',
       field.type === 'number' && field.min !== undefined && field.max !== undefined
         ? t('mcp.bundle.numberRange', { min: field.min, max: field.max })
         : '',
@@ -253,9 +293,44 @@ export function useMcpBundleInstaller({ onInstalled }: { onInstalled: (result: M
         autoComplete={field.sensitive ? 'new-password' : 'off'}
         size="small"
         fullWidth
-        slotProps={{ htmlInput: { ...(field.min !== undefined ? { min: field.min } : {}), ...(field.max !== undefined ? { max: field.max } : {}), 'data-config-key': field.key } }}
+        slotProps={{
+          htmlInput: { ...(field.min !== undefined ? { min: field.min } : {}), ...(field.max !== undefined ? { max: field.max } : {}), 'data-config-key': field.key },
+          ...(pathField
+            ? {
+              input: {
+                endAdornment: (
+                  <InputAdornment position="end">
+                    <Tooltip title={chooseLabel}>
+                      <IconButton aria-label={`${chooseLabel}: ${field.title}`} edge="end" size="small" onClick={() => { setPickerField(field); setPickerOpen(true); }}>
+                        {field.type === 'file' ? <InsertDriveFileOutlinedIcon fontSize="small" /> : <FolderOpenIcon fontSize="small" />}
+                      </IconButton>
+                    </Tooltip>
+                  </InputAdornment>
+                ),
+              },
+            }
+            : {}),
+        }}
       />
     );
+  };
+
+  const signerText = (signature: McpbSignature) => signature.signer
+    ? (signature.signer.organization ? `${signature.signer.name} (${signature.signer.organization})` : signature.signer.name)
+    : '';
+
+  const signatureNote = (signature: McpbSignature): string => {
+    const signer = signerText(signature);
+    const validTo = signature.signer ? formatDate(signature.signer.validTo, { dateStyle: 'medium' }) : '';
+    const validFrom = signature.signer ? formatDate(signature.signer.validFrom, { dateStyle: 'medium' }) : '';
+    if (signature.status === 'signed') {
+      return t('mcp.bundle.signatureNote.signed', { signer, issuer: signature.signer?.issuer ?? '', date: validTo });
+    }
+    if (signature.status === 'invalid') {
+      const reason = t(PROBLEM_KEYS[signature.problem ?? 'damaged'], { date: signature.problem === 'not-yet-valid' ? validFrom : validTo });
+      return t('mcp.bundle.signatureNote.invalid', { reason });
+    }
+    return signer ? t('mcp.bundle.signatureNote.untrusted', { signer }) : t('mcp.bundle.signatureNote.unsigned');
   };
 
   const renderList = (items: Array<{ name: string; description?: string }>) => (
@@ -342,15 +417,13 @@ export function useMcpBundleInstaller({ onInstalled }: { onInstalled: (result: M
         <Box>
           <Typography variant="subtitle2">{t('mcp.bundle.section.trust')}</Typography>
           <Typography variant="body2">{t('mcp.bundle.trustNote', { author: current.author.name })}</Typography>
-          <Chip
-            size="small"
-            sx={{ mt: 0.5, height: 'auto', '& .MuiChip-label': { whiteSpace: 'normal', py: 0.25 } }}
-            color={current.signature.status === 'damaged' ? 'error' : 'default'}
-            label={t(SIGNATURE_KEYS[current.signature.status])}
-          />
+          <Alert severity={SIGNATURE_SEVERITY[current.signature.status]} role="note" sx={{ mt: 1 }} data-testid="mcpb-signature">
+            <Typography variant="body2" component="p" sx={{ fontWeight: 600 }}>{t(SIGNATURE_KEYS[current.signature.status])}</Typography>
+            <Typography variant="body2" component="p">{signatureNote(current.signature)}</Typography>
+          </Alert>
           {current.warnings.map((warning) => (
             <Alert key={warning} severity="warning" sx={{ mt: 1 }}>
-              {t(WARNING_KEYS[warning], { version: current.manifestVersion })}
+              {t(WARNING_KEYS[warning], { version: current.manifestVersion, signer: current.existing?.signer ?? '' })}
             </Alert>
           ))}
         </Box>
@@ -458,6 +531,19 @@ export function useMcpBundleInstaller({ onInstalled }: { onInstalled: (result: M
           <Typography variant="h6" color="primary">{t('mcp.bundle.dropHere')}</Typography>
         </Box>
       )}
+      <FolderPickerDialog
+        open={pickerOpen && pickerField !== null}
+        title={pickerField ? `${t(pickerField.type === 'file' ? 'mcp.bundle.chooseFile' : 'mcp.bundle.chooseFolder')}: ${pickerField.title}` : undefined}
+        selectFiles={pickerField?.type === 'file'}
+        selectFolders={pickerField?.type !== 'file'}
+        initialPath={pickerField ? pickerStart(pickerField, values[pickerField.key]) : undefined}
+        onClose={() => setPickerOpen(false)}
+        onSelect={(picked) => {
+          if (!pickerField) return;
+          const field = pickerField;
+          setValues((current) => ({ ...current, [field.key]: withPickedPath(field, current[field.key], picked) }));
+        }}
+      />
       <Dialog open={open} onClose={close} maxWidth="md" fullWidth scroll="paper" aria-labelledby="mcpb-install-title">
         <DialogTitle id="mcpb-install-title">{title}</DialogTitle>
         <DialogContent dividers>

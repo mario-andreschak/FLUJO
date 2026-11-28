@@ -48,12 +48,21 @@ interface BrowseResponse {
 export interface FolderPickerDialogProps {
   open: boolean;
   title?: string;
-  /** Allow picking files too; folders are always navigable and selectable. */
+  /** Allow picking files too; folders are always navigable. */
   selectFiles?: boolean;
-  /** Where to start browsing; defaults to the backend's home directory. */
+  /** Offer "Select this folder"; turn off when only a file will do. */
+  selectFolders?: boolean;
+  /** Where to start browsing; the backend's home directory when left out or missing. */
   initialPath?: string;
   onClose: () => void;
   onSelect: (path: string) => void;
+}
+
+async function browse(target?: string): Promise<{ body: BrowseResponse; status: number; failed: boolean }> {
+  const query = target ? `?path=${encodeURIComponent(target)}` : '';
+  const response = await fetch(`/api/browse${query}`);
+  const body = (await response.json()) as BrowseResponse;
+  return { body, status: response.status, failed: !response.ok || Boolean(body.error) };
 }
 
 /**
@@ -67,6 +76,7 @@ const FolderPickerDialog = ({
   open,
   title,
   selectFiles = false,
+  selectFolders = true,
   initialPath,
   onClose,
   onSelect,
@@ -77,15 +87,15 @@ const FolderPickerDialog = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async (target?: string) => {
+  const load = useCallback(async (target?: string, homeIfMissing = false): Promise<void> => {
     setLoading(true);
     setError(null);
     try {
-      const query = target ? `?path=${encodeURIComponent(target)}` : '';
-      const response = await fetch(`/api/browse${query}`);
-      const body = (await response.json()) as BrowseResponse;
-      if (!response.ok || body.error) {
-        setError(body.error || `HTTP ${response.status}`);
+      let listing = await browse(target);
+      if (listing.failed && homeIfMissing && target) listing = await browse();
+      const { body } = listing;
+      if (listing.failed) {
+        setError(body.error || `HTTP ${listing.status}`);
         return;
       }
       setData(body);
@@ -100,7 +110,7 @@ const FolderPickerDialog = ({
 
   useEffect(() => {
     if (open) {
-      void load(initialPath || undefined);
+      void load(initialPath || undefined, true);
     } else {
       setData(null);
       setError(null);
@@ -204,13 +214,15 @@ const FolderPickerDialog = ({
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>{t('common.cancel')}</Button>
-        <Button
-          variant="contained"
-          disabled={!data || loading}
-          onClick={() => data && pick(data.path)}
-        >
-          {t('folderPicker.select')}
-        </Button>
+        {selectFolders && (
+          <Button
+            variant="contained"
+            disabled={!data || loading}
+            onClick={() => data && pick(data.path)}
+          >
+            {t('folderPicker.select')}
+          </Button>
+        )}
       </DialogActions>
     </Dialog>
   );
