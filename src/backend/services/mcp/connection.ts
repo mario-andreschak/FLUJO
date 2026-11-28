@@ -8,7 +8,7 @@ import { trustedHostMcpApprovalAsync, TrustedHostMcpError } from '../security/tr
 import { attachLocalHostLaunch } from './localHost';
 import {
   prepareMcpIsolation, isolatedSdkEnvironment, attachMcpIsolation, getManagedMcpIsolation, assertHostMcpLaunchAllowed,
-  type ManagedMcpIsolation,
+  settleMcpIsolationCleanup, type ManagedMcpIsolation,
 } from './isolation';
 import { isProtectedExecutionServer } from '@/backend/execution/extensions';
 import { assertExecutionServerConfig } from '@/backend/execution/extensions';
@@ -150,7 +150,7 @@ export interface TransportWithConfigKey {
   /** Opaque pending capability for this bundled FLUJO process generation. */
   __flujoBundledWorkload?: PendingBundledFlujoWorkload;
   /** Retires only the authority captured by this transport constructor. */
-  __flujoRetireRuntimeAuthority?: () => void;
+  __flujoRetireRuntimeAuthority?: () => Promise<void>;
   /** Inner SDK transport when FLUJO applies a protocol decorator. */
   __flujoInnerTransport?: unknown;
 }
@@ -179,12 +179,19 @@ export class McpRuntimeAuthorityRetirementError extends AggregateError {
 interface AuthorityRetirementQuarantine {
   owner: unknown;
   error: McpRuntimeAuthorityRetirementError;
+  /** Runs the same retirement again; success releases the quarantine. */
+  retry(): Promise<void>;
 }
 declare global {
   var __flujo_mcp_authority_retirement_quarantines: Map<string, AuthorityRetirementQuarantine> | undefined;
+  var __flujo_mcp_authority_retirements: Map<string, Set<Promise<void>>> | undefined;
 }
 function authorityRetirementQuarantines() {
   return globalThis.__flujo_mcp_authority_retirement_quarantines ??= new Map<string, AuthorityRetirementQuarantine>();
+}
+/** Retirements still running, including those started by a server that closed by itself. */
+function authorityRetirementsInFlight() {
+  return globalThis.__flujo_mcp_authority_retirements ??= new Map<string, Set<Promise<void>>>();
 }
 function authorityRetirementKey(serverName: string, workspace = getCurrentWorkspace()) {
   return `${workspace}\u0000${serverName}`;
@@ -193,25 +200,84 @@ export function assertMcpRuntimeAuthorityRetired(serverName: string): void {
   const failed = authorityRetirementQuarantines().get(authorityRetirementKey(serverName));
   if (failed) throw failed.error;
 }
-function noteAuthorityRetirement(serverName: string, workspace: string, owner: unknown, error?: McpRuntimeAuthorityRetirementError) {
+function noteAuthorityRetirement(serverName: string, workspace: string, owner: unknown,
+  failure?: Omit<AuthorityRetirementQuarantine, 'owner'>) {
   const failures = authorityRetirementQuarantines();
   const key = authorityRetirementKey(serverName, workspace);
-  if (error) failures.set(key, { owner, error });
+  if (failure) failures.set(key, { owner, ...failure });
   else if (failures.get(key)?.owner === owner) failures.delete(key);
+}
+function trackAuthorityRetirement(key: string, retirement: Promise<void>) {
+  const inFlight = authorityRetirementsInFlight();
+  const running = inFlight.get(key) ?? new Set<Promise<void>>();
+  running.add(retirement);
+  inFlight.set(key, running);
+  void retirement.catch(() => undefined).finally(() => {
+    running.delete(retirement);
+    if (running.size === 0 && inFlight.get(key) === running) inFlight.delete(key);
+  });
+}
+
+/**
+ * How long a launch waits for its predecessor's retirement. After that it goes
+ * on: the old token is already refused, and a retirement that fails later is
+ * quarantined and retried by the next launch.
+ */
+const AUTHORITY_RETIREMENT_WAIT_MS = 30_000;
+function withinRetirementWait(work: Promise<unknown>): Promise<void> {
+  return new Promise<void>(resolve => {
+    const timer = setTimeout(resolve, AUTHORITY_RETIREMENT_WAIT_MS);
+    timer.unref?.();
+    void work.catch(() => undefined).finally(() => { clearTimeout(timer); resolve(); });
+  });
 }
 
 export function retireMcpRuntimeAuthority(serverName: string, workspace: string,
   workload: PendingBundledFlujoWorkload | undefined,
-  runtimeBroker: ReturnType<typeof issueMcpAppRuntimeBrokerEnvironment> | undefined): void {
-    const errors: unknown[] = [];
-    try { if (workload) revokePendingWorkload(workload); } catch (error) { errors.push(error); }
-    try { revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId); } catch (error) { errors.push(error); }
+  runtimeBroker: ReturnType<typeof issueMcpAppRuntimeBrokerEnvironment> | undefined): Promise<void> {
+  const owner = workload ?? runtimeBroker;
+  const retirement = (async () => {
+    // Both revocations take effect before the first await; only the durable
+    // file retirement of the workload settles later.
+    const steps = await Promise.allSettled([
+      revokePendingWorkload(workload),
+      new Promise<void>(resolve => { revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId); resolve(); }),
+    ]);
+    const errors = steps.flatMap(step => step.status === 'rejected' ? [step.reason] : []);
     if (errors.length) {
       const failure = new McpRuntimeAuthorityRetirementError(errors, 'MCP runtime authority retirement failed.', { cause: errors[0] });
-      noteAuthorityRetirement(serverName, workspace, workload ?? runtimeBroker, failure);
+      noteAuthorityRetirement(serverName, workspace, owner, { error: failure,
+        retry: () => retireMcpRuntimeAuthority(serverName, workspace, workload, runtimeBroker) });
       throw failure;
     }
-    noteAuthorityRetirement(serverName, workspace, workload ?? runtimeBroker);
+    noteAuthorityRetirement(serverName, workspace, owner);
+  })();
+  trackAuthorityRetirement(authorityRetirementKey(serverName, workspace), retirement);
+  return retirement;
+}
+
+/**
+ * A launch waits for retirements of the same server that are still running,
+ * then retries one that failed, so a failed retirement heals on the next launch
+ * instead of blocking the server until FLUJO restarts.
+ */
+export async function settleMcpRuntimeAuthorityRetirement(serverName: string): Promise<void> {
+  const key = authorityRetirementKey(serverName);
+  const running = authorityRetirementsInFlight().get(key);
+  if (running?.size) await withinRetirementWait(Promise.allSettled([...running]));
+  const failed = authorityRetirementQuarantines().get(key);
+  if (failed) await withinRetirementWait(failed.retry());
+  assertMcpRuntimeAuthorityRetired(serverName);
+}
+
+/**
+ * The application's shutdown hook: finish every retirement and container
+ * removal still running, then retry the ones that failed, before the process exits.
+ */
+export async function settleMcpRuntimeRetirements(): Promise<void> {
+  const running = [...authorityRetirementsInFlight().values()].flatMap(retirements => [...retirements]);
+  await Promise.allSettled([...running, settleMcpIsolationCleanup()]);
+  await Promise.allSettled([...authorityRetirementQuarantines().values()].map(failed => failed.retry()));
 }
 
 /** Resolve through FLUJO-owned transport decorators without relying on SDK privates. */
@@ -1150,7 +1216,7 @@ export async function createStdioTransport(
 
   let transport: StdioClientTransport;
   try {
-    assertMcpRuntimeAuthorityRetired(config.name);
+    await settleMcpRuntimeAuthorityRetirement(config.name);
     workload = prepareBundledFlujoWorkload(config);
     runtimeBroker = options?.enableRuntimeBroker && mcpAppRuntimeBrokerEnabled(config)
       ? issueMcpAppRuntimeBrokerEnvironment(config.name) : undefined;
@@ -1180,8 +1246,8 @@ export async function createStdioTransport(
     }
   } catch (error) {
     const cleanupErrors: unknown[] = [];
-    try { isolation?.close(); } catch (cleanup) { cleanupErrors.push(cleanup); }
-    try { retireRuntimeAuthority(); } catch (cleanup) { cleanupErrors.push(cleanup); }
+    try { await isolation?.close(); } catch (cleanup) { cleanupErrors.push(cleanup); }
+    try { await retireRuntimeAuthority(); } catch (cleanup) { cleanupErrors.push(cleanup); }
     if (cleanupErrors.length) throw new McpRuntimeAuthorityRetirementError([error, ...cleanupErrors], 'MCP transport creation and authority retirement failed.', { cause: error });
     throw error;
   }
@@ -1502,7 +1568,7 @@ export async function safelyCloseClient(
   let forced = false;
   const rawTransport = getUnderlyingTransport(client.transport);
   const isolation = getManagedMcpIsolation(rawTransport);
-  let isolationCleanup: ReturnType<ManagedMcpIsolation['close']> | undefined;
+  let isolationCleanup: Awaited<ReturnType<ManagedMcpIsolation['close']>> | undefined;
   const child: ChildProcess | undefined = (
     rawTransport as { _process?: ChildProcess } | undefined
   )?._process;
@@ -1574,14 +1640,14 @@ export async function safelyCloseClient(
     log.warn(`Error closing client for ${serverName}:`, error);
     // We continue even if close fails
   } finally {
-    try { isolationCleanup = isolation?.close(); } catch (error) { retirementErrors.push(error); }
+    try { isolationCleanup = await isolation?.close(); } catch (error) { retirementErrors.push(error); }
     const retire = (rawTransport as TransportWithConfigKey | undefined)?.__flujoRetireRuntimeAuthority;
     if (retire) {
-      try { retire(); } catch (error) { retirementErrors.push(error); }
+      try { await retire(); } catch (error) { retirementErrors.push(error); }
     } else {
       try {
         const workload = (rawTransport as TransportWithConfigKey | undefined)?.__flujoBundledWorkload;
-        if (workload) revokePendingWorkload(workload);
+        if (workload) await revokePendingWorkload(workload);
       } catch (error) { retirementErrors.push(error); }
       try {
         revokeMcpAppRuntimeBrokerLease((rawTransport as TransportWithConfigKey | undefined)?.__flujoRuntimeBrokerLeaseId);

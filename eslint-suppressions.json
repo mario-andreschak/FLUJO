@@ -341,26 +341,6 @@
       "count": 1
     }
   },
-  "src/backend/services/security/bundledFlujoWorkload.ts": {
-    "flujo/no-sync-fs": {
-      "count": 34
-    }
-  },
-  "src/backend/services/security/isolatedMcp.ts": {
-    "flujo/no-sync-fs": {
-      "count": 13
-    }
-  },
-  "src/backend/services/security/trustedHostMcp.ts": {
-    "flujo/no-sync-fs": {
-      "count": 12
-    }
-  },
-  "src/backend/services/security/windowsPrivateAuthority.ts": {
-    "flujo/no-sync-fs": {
-      "count": 1
-    }
-  },
   "src/backend/services/workspace/migrationLandscape.ts": {
     "flujo/no-double-cast": {
       "count": 1

@@ -28,7 +28,7 @@ import {
   httpConfigKey,
   resolveStdioLaunch,
   McpRuntimeAuthorityRetirementError,
-  assertMcpRuntimeAuthorityRetired,
+  settleMcpRuntimeAuthorityRetirement,
   retireMcpRuntimeAuthority,
   stdioConfigKey,
   capabilityKey,
@@ -362,7 +362,7 @@ export async function createBetaTransport(
   const retireRuntimeAuthority = () => retireMcpRuntimeAuthority(config.name, workloadWorkspace, workload, runtimeBroker);
   let transport: BetaStdioClientTransport;
   try {
-    assertMcpRuntimeAuthorityRetired(config.name);
+    await settleMcpRuntimeAuthorityRetirement(config.name);
     workload = prepareBundledFlujoWorkload(config);
     runtimeBroker = options?.enableRuntimeBroker && mcpAppRuntimeBrokerEnabled(config)
       ? issueMcpAppRuntimeBrokerEnvironment(config.name) : undefined;
@@ -391,8 +391,8 @@ export async function createBetaTransport(
     }
   } catch (error) {
     const cleanupErrors: unknown[] = [];
-    try { isolation?.close(); } catch (cleanup) { cleanupErrors.push(cleanup); }
-    try { retireRuntimeAuthority(); } catch (cleanup) { cleanupErrors.push(cleanup); }
+    try { await isolation?.close(); } catch (cleanup) { cleanupErrors.push(cleanup); }
+    try { await retireRuntimeAuthority(); } catch (cleanup) { cleanupErrors.push(cleanup); }
     if (cleanupErrors.length) throw new McpRuntimeAuthorityRetirementError([error, ...cleanupErrors], 'MCP transport creation and authority retirement failed.', { cause: error });
     throw error;
   }
