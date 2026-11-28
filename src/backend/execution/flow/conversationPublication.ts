@@ -375,7 +375,45 @@ export function getConversationPublicationDiagnostics() {
     fences: ledger.fences.size, receipts: ledger.receipts.size, quarantinedWriterSlots: ledger.quarantined, rejected: ledger.rejected };
 }
 
+/**
+ * Whether `value` can be written with one JSON.stringify call: plain JSON data
+ * (as captured publications are), at most `budget` bytes even if every
+ * character were escaped. The walk stops as soon as the budget is spent, so it
+ * costs at most that much work. One native call per small message replaced
+ * thousands of generator steps per save (#757); larger values keep the bounded
+ * part-by-part encoding.
+ */
+function fitsOnePart(value: object, budget: number): boolean {
+  const pending: unknown[] = [value];
+  let bytes = 0;
+  while (pending.length) {
+    const item = pending.pop();
+    if (typeof item === 'string') bytes += item.length * 6 + 2;
+    else if (typeof item === 'number' || typeof item === 'boolean' || item === null) bytes += 24;
+    else if (typeof item !== 'object') return false;
+    else {
+      const array = Array.isArray(item);
+      const prototype = Object.getPrototypeOf(item);
+      if (array ? prototype !== Array.prototype : prototype !== null && prototype !== Object.prototype) return false;
+      if (typeof (item as { toJSON?: unknown }).toJSON === 'function') return false;
+      bytes += 2;
+      let index = 0;
+      for (const key in item) {
+        if (!Object.hasOwn(item, key)) continue;
+        if (array && key !== String(index)) return false;
+        if (!array) bytes += key.length * 6 + 3;
+        bytes += 1;
+        index++;
+        pending.push((item as Record<string, unknown>)[key]);
+      }
+      if (array && index !== (item as unknown[]).length) return false;
+    }
+    if (bytes > budget) return false;
+  }
+  return true;
+}
 function* stringParts(value: string): Generator<string> {
+  if (value.length <= CONVERSATION_PUBLICATION_LIMITS.stringChars) { yield JSON.stringify(value); return; }
   yield '"';
   for (let start = 0; start < value.length;) {
     let end = Math.min(start + CONVERSATION_PUBLICATION_LIMITS.stringChars, value.length);
@@ -389,6 +427,7 @@ function* stringParts(value: string): Generator<string> {
 function* jsonParts(value: unknown): Generator<string> {
   if (typeof value === 'string') { yield* stringParts(value); return; }
   if (value === null || typeof value !== 'object') { yield JSON.stringify(value); return; }
+  if (fitsOnePart(value, CONVERSATION_PUBLICATION_LIMITS.bufferBytes)) { yield JSON.stringify(value); return; }
   const array = Array.isArray(value);
   yield array ? '[' : '{';
   let count = 0;

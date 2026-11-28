@@ -251,3 +251,19 @@ it('releases quarantined descriptor slots so later writers still run', async () 
   expect(getConversationPublicationDiagnostics()).toMatchObject({ writers: 0, queuedWriters: 0, quarantinedWriterSlots: 0 });
   await expect(publishConversation('close-after', {}, async () => 'written')).resolves.toBe('written');
 });
+it('writes small messages in one piece and large ones in bounded parts, byte for byte like JSON (#757)', async () => {
+  const messages = [
+    ...Array.from({ length: 200 }, (_, index) => ({ role: index % 2 ? 'assistant' : 'user', content: `message ${index} \u0000"🌈`, n: index / 3, ok: true, none: null })),
+    { role: 'tool', content: 'y'.repeat(200_000), nested: [{ deep: [[1, 2, { three: '3' }]] }] },
+    { escapes: '\u0001'.repeat(20_000) },
+  ];
+  await publishConversation('mixed-sizes', { messages }, async owned => {
+    const copies: Buffer[] = [];
+    for (const chunk of conversationJsonChunks([owned, owned], true)) {
+      expect(chunk.length).toBeLessThanOrEqual(CONVERSATION_PUBLICATION_LIMITS.bufferBytes);
+      copies.push(Buffer.from(chunk));
+    }
+    const line = JSON.stringify({ messages });
+    expect(Buffer.concat(copies).toString('utf8')).toBe(`${line}\n${line}\n`);
+  });
+});
