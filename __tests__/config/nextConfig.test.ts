@@ -17,6 +17,18 @@ describe('Next request proxy configuration', () => {
 
     expect(JSON.parse(stdout)).toBe('100mb');
   });
+
+  it('loads routes when first used, so a restart answers its first chats without loading every page (#757)', async () => {
+    const script = [
+      "import config from './next.config.mjs';",
+      'process.stdout.write(JSON.stringify(config.experimental?.preloadEntriesOnStart));',
+    ].join(' ');
+    const { stdout } = await execFileAsync(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: process.cwd(),
+    });
+
+    expect(JSON.parse(stdout)).toBe(false);
+  });
 });
 
 describe('production TypeScript scope', () => {

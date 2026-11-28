@@ -45,3 +45,23 @@ it('reports not started only before any preparation has run or after an explicit
     code: 'WORKSPACE_LAYOUT_NOT_STARTED',
   });
 });
+
+it('lets a request that arrives before startup began preparing wait for it (#757)', async () => {
+  setWorkspaceLayoutPreparation(undefined);
+  const waiting = waitForWorkspaceLayoutReady({ deadline: Date.now() + 5000 });
+  let settled = false;
+  void waiting.then(() => { settled = true; }, () => { settled = true; });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  expect(settled).toBe(false);
+  setWorkspaceLayoutPreparation(Promise.resolve());
+  await expect(waiting).resolves.toBeUndefined();
+});
+
+it('still reports not started when startup does not begin before the wait ends', async () => {
+  setWorkspaceLayoutPreparation(undefined);
+  const caller = new AbortController();
+  const leaving = waitForWorkspaceLayoutReady({ deadline: Date.now() + 5000, signal: caller.signal });
+  caller.abort();
+  await expect(leaving).rejects.toMatchObject({ code: 'WORKSPACE_LAYOUT_NOT_STARTED' });
+  await expect(waitForWorkspaceLayoutReady({ deadline: Date.now() + 30 })).rejects.toMatchObject({ code: 'WORKSPACE_LAYOUT_NOT_STARTED' });
+});

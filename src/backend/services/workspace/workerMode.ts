@@ -1,3 +1,5 @@
+import { startupChanged, waitForStartup, type StartupWait } from './startupWait';
+
 /** Why an MCP server is not running on the worker. Built only by `workerMcpReason.ts`. */
 export type WorkerMcpReasonCode =
   | 'HOST_CONSENT_REQUIRED' | 'HOST_SOURCE_CHANGED' | 'HOST_POLICY_INVALID'
@@ -60,6 +62,7 @@ export function setWorkerBootstrapStatus(update: Partial<WorkerBootstrapStatus>)
     ...update,
     mode: 'worker',
   };
+  startupChanged();
 }
 
 /** Route-runtime gate; proxy authentication must not depend on shared globals. */
@@ -78,4 +81,18 @@ export function assertWorkerRequestReady(request: Request, workspace: string): R
   return Response.json({ error: 'Worker is not ready.', code: 'WORKER_NOT_READY' }, {
     status: 503, headers: { 'Cache-Control': 'no-store' },
   });
+}
+
+/** States a worker passes through on its own while it starts; `locked` and `error` need someone. */
+const STARTING_STATES: ReadonlySet<WorkerBootstrapStatus['state']> = new Set(['not-started', 'restoring', 'installing']);
+
+/**
+ * Like assertWorkerRequestReady, but a request that arrives while the worker is
+ * still starting waits for it (#757) instead of getting 503 at once.
+ */
+export async function waitForWorkerRequestReady(request: Request, workspace: string, wait: StartupWait): Promise<Response | null> {
+  const refused = assertWorkerRequestReady(request, workspace);
+  if (!refused || refused.status !== 503 || !STARTING_STATES.has(getWorkerBootstrapStatus().state)) return refused;
+  await waitForStartup(() => !STARTING_STATES.has(getWorkerBootstrapStatus().state), wait);
+  return assertWorkerRequestReady(request, workspace);
 }
