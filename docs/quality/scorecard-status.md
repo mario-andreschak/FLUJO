@@ -159,7 +159,8 @@ not kept current.
   and 1 from that outside person. 674 stars,
   92 forks, 6 watchers. No account or duty in the maintainer access table has a
   backup person. On the cleanup branch (#576): the contributor guide was walked through on
-  Windows and fixed, five `good first issue` issues are open (#1438–#1442), and
+  Windows and fixed, the five starter issues (#1438–#1442) were finished at the
+  owner's request so none is open, and
   the [maintainership basics](../contributing/maintainership.md) are a draft
   waiting for Mario's decisions.
 - **Missing:** two more human maintainers and three or more outside contributors
