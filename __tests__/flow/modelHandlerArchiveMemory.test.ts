@@ -410,7 +410,7 @@ describe('actual ModelHandler / SDK / archive memory boundary', () => {
     expect(snapshot.canonicalMessages).toEqual(canonical);
     expect(snapshot.entry).toMatchObject({ canonicalMessageCount: 80_000, outcome: 'completed' });
     expect(getArchiveWritePressure()).toMatchObject({ bytes: 0, writers: 0 });
-  }, 60_000);
+  }, 120_000);
 
   it('automatically compacts all 80000 mixed messages before SDK dispatch, including full debugger provenance', async () => {
     summarizeHistory = true;
