@@ -168,6 +168,15 @@ const FlowsPage = () => {
     severity: 'info'
   });
 
+  const showSnackbar = useCallback((message: string, severity: 'success' | 'error' | 'info' | 'warning' = 'info') => {
+    log.debug('Showing snackbar', { message, severity });
+    setSnackbar({
+      open: true,
+      message,
+      severity
+    });
+  }, []);
+
   // Load flows on component mount and when selected flow changes
   useEffect(() => {
     let cancelled = false;
@@ -274,16 +283,6 @@ const FlowsPage = () => {
     active: isEditing && !!selectedFlow,
     currentUrl: selectedFlow ? magicLinkPath({ kind: 'flow-editor', id: selectedFlow }) : '/flows',
   });
-
-  // Show snackbar notification (declared before its first useCallback consumer)
-  const showSnackbar = useCallback((message: string, severity: 'success' | 'error' | 'info' | 'warning' = 'info') => {
-    log.debug('Showing snackbar', { message, severity });
-    setSnackbar({
-      open: true,
-      message,
-      severity
-    });
-  }, []);
 
   // Handle back to dashboard — routed through the builder's navigation
   // guard so unsaved changes get a Save/Discard dialog first.

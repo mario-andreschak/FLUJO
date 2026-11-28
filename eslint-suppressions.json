@@ -18,9 +18,6 @@
     "flujo/no-raw-timers": {
       "count": 1
     },
-    "react-hooks/immutability": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -413,9 +410,6 @@
     }
   },
   "src/frontend/components/AvatarWorld/useAvatarWork.ts": {
-    "react-hooks/immutability": {
-      "count": 1
-    },
     "react-hooks/refs": {
       "count": 1
     }
@@ -1152,11 +1146,6 @@
       "count": 1
     }
   },
-  "src/frontend/components/mcp/MCPServerManager/Modals/ServerModal/tabs/ReferenceServersTab/index.tsx": {
-    "react-hooks/immutability": {
-      "count": 1
-    }
-  },
   "src/frontend/components/mcp/MCPServerManager/ServerCard.tsx": {
     "flujo/no-raw-timers": {
       "count": 5
@@ -1238,14 +1227,6 @@
       "count": 3
     }
   },
-  "src/frontend/components/shared/CardPickerGrid.tsx": {
-    "react-hooks/immutability": {
-      "count": 2
-    },
-    "react-hooks/refs": {
-      "count": 1
-    }
-  },
   "src/frontend/components/shared/FolderPickerDialog.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -1253,9 +1234,6 @@
   },
   "src/frontend/components/shared/GlobalReferenceEditor.tsx": {
     "flujo/no-raw-timers": {
-      "count": 2
-    },
-    "react-hooks/immutability": {
       "count": 2
     },
     "react-hooks/set-state-in-effect": {

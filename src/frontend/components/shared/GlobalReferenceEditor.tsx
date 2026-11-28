@@ -393,6 +393,14 @@ const insertReference = (editor: Editor, ref: PromptRef) => {
   Transforms.move(editor);
 };
 
+/** Swaps the whole document, as Slate documents for a value set from outside. `caretAtEnd` keeps a caret for a focused editor. */
+const replaceEditorContent = (editor: Editor, nodes: Descendant[], caretAtEnd: boolean) => {
+  editor.children = nodes;
+  const end = Editor.end(editor, []);
+  editor.selection = caretAtEnd ? { anchor: end, focus: end } : null;
+  editor.onChange();
+};
+
 const replaceCompletedGlobalBeforeCaret = (editor: Editor) => {
   if (!editor.selection || !Range.isCollapsed(editor.selection)) return;
   const point = editor.selection.anchor;
@@ -711,10 +719,7 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
     // the end of the new content instead.
     const wasFocused = ReactEditor.isFocused(editor);
     applyingExternalValue.current = true;
-    editor.children = deserializeReferenceValue(value || '') as typeof editor.children;
-    const end = Editor.end(editor, []);
-    editor.selection = wasFocused ? { anchor: end, focus: end } : null;
-    editor.onChange();
+    replaceEditorContent(editor, deserializeReferenceValue(value || ''), wasFocused);
     setRevision((currentRevision) => currentRevision + 1);
     if (!wasFocused) return;
     // Slate writes the DOM selection in a layout effect; refocus afterwards so the

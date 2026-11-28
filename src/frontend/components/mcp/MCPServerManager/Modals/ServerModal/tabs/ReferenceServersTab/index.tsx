@@ -87,59 +87,6 @@ const ReferenceServersTab: React.FC<TabProps> = ({
     clearConsole
   } = useConsoleOutput();
 
-  // Fetch the current working directory and check if the repo exists
-  useEffect(() => {
-    const initializeTab = async () => {
-      setIsLoading(true);
-      try {
-        // Get MCP servers directory
-        const cwdResponse = await fetch('/api/cwd');
-        const cwdData = await cwdResponse.json();
-        
-        if (cwdData.success) {
-          setMcpServersDir(cwdData.mcpServersDir);
-          
-          // Check if the modelcontextprotocol/servers repo already exists
-          const repoPath = `${cwdData.mcpServersDir}/servers`;
-          
-          const checkResponse = await fetch('/api/git', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              action: 'exists',
-              savePath: repoPath,
-            }),
-          });
-          
-          const checkResult = await checkResponse.json();
-          setRepoExists(checkResult.exists);
-          
-          if (checkResult.exists) {
-            // If repo exists, fetch server info
-            await fetchServerInfo(repoPath);
-          } else {
-            setMessage({
-              type: 'warning',
-              text: t('mcp.reference.repoMissing')
-            });
-          }
-        }
-      } catch (error) {
-        console.error('Error initializing Reference Servers tab:', error);
-        setMessage({
-          type: 'error',
-          text: t('mcp.reference.initializeError', { error: error instanceof Error ? error.message : t('mcp.server.unknownError') })
-        });
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    
-    initializeTab();
-  }, [t]);
-  
   // Function to clone or pull the repository
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -388,6 +335,59 @@ const ReferenceServersTab: React.FC<TabProps> = ({
       throw error;
     }
   };
+
+  // Fetch the current working directory and check if the repo exists
+  useEffect(() => {
+    const initializeTab = async () => {
+      setIsLoading(true);
+      try {
+        // Get MCP servers directory
+        const cwdResponse = await fetch('/api/cwd');
+        const cwdData = await cwdResponse.json();
+        
+        if (cwdData.success) {
+          setMcpServersDir(cwdData.mcpServersDir);
+          
+          // Check if the modelcontextprotocol/servers repo already exists
+          const repoPath = `${cwdData.mcpServersDir}/servers`;
+          
+          const checkResponse = await fetch('/api/git', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              action: 'exists',
+              savePath: repoPath,
+            }),
+          });
+          
+          const checkResult = await checkResponse.json();
+          setRepoExists(checkResult.exists);
+          
+          if (checkResult.exists) {
+            // If repo exists, fetch server info
+            await fetchServerInfo(repoPath);
+          } else {
+            setMessage({
+              type: 'warning',
+              text: t('mcp.reference.repoMissing')
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Error initializing Reference Servers tab:', error);
+        setMessage({
+          type: 'error',
+          text: t('mcp.reference.initializeError', { error: error instanceof Error ? error.message : t('mcp.server.unknownError') })
+        });
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    
+    initializeTab();
+  }, [t]);
   
   // Helper function to check if a file exists
   const hasFile = async (filePath: string): Promise<boolean> => {
