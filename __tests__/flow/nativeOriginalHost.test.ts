@@ -179,8 +179,11 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
     };
     const tools=await rpc('tools/list',{});const tool=tools.result.tools.find(t=>t.name.startsWith('handoff_to_'));
     const keeperScript='const parent='+process.pid+';const done='+JSON.stringify(wire+'.keeper-exit')+';const tick=setInterval(()=>{try{process.kill(parent,0)}catch{clearInterval(tick);setTimeout(()=>{require("node:fs").writeFileSync(done,String(Date.now()));process.exit(0)},700)}},10);setTimeout(()=>process.exit(0),15000);';
-    const keeper=require('node:child_process').spawn(process.execPath,['-e',keeperScript],{stdio:['ignore',process.stdout,process.stderr],windowsHide:true,detached:true});
-    await new Promise(resolve=>keeper.once('spawn',resolve));
+    // The keeper's launcher exits at once, so no tree kill of this Original reaches
+    // the keeper: it always holds the pipes for 700 ms after this process exits.
+    const launcherScript='require("node:child_process").spawn(process.execPath,["-e",'+JSON.stringify(keeperScript)+'],{stdio:["ignore","inherit","inherit"],windowsHide:true,detached:true}).unref();';
+    const launcher=require('node:child_process').spawn(process.execPath,['-e',launcherScript],{stdio:['ignore',process.stdout,process.stderr],windowsHide:true});
+    await new Promise(resolve=>launcher.once('exit',resolve));
     fs.writeFileSync(wire+'.mcp',JSON.stringify({name:tool.name,callId:'codex-handoff-1',threadId}));
     if(process.argv[3]==='handoff-queued'){
      let pending=true,sent=0;

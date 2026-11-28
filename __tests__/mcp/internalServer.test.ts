@@ -33,6 +33,9 @@ import { installBundledFixtureOwner } from './fixtures/bundledFixtureOwner';
 import { ensureShippedWorkspacePackages } from '@/backend/services/mcp/shippedWorkspacePackages';
 import { approveBundledHostConsent, previewBundledHostConsent } from '@/backend/services/security/bundledMcpConsent';
 import { saveConfig } from '@/backend/services/mcp/config';
+import { PRIVATE_READ_TEST_MS } from '../helpers/privateReadTime';
+
+jest.setTimeout(PRIVATE_READ_TEST_MS);
 
 const loadItemMock = loadItem as jest.Mock;
 const saveItemMock = saveItem as jest.Mock;
