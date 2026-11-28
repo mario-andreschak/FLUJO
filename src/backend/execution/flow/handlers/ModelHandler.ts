@@ -20,14 +20,11 @@ import { createModelError } from '../errorFactory';
 import { assertNativeBrokerAuthority, createNativeToolPort, nativeDigest, nativeToolInventoryDigest } from './nativeToolBroker';
 import { prepareNativeInvocation, submitNativeInvocation, finishNativeInvocation, holdNativeInvocation,
   NativeInvocationHeldError, type NativeInvocationReceipt } from './nativeToolJournal';
-import { readNativeOriginLineage } from './nativeOriginLineage';
 import {
   assertNativeInvocationSessionHook,
   createNativeInvocationSession,
   type NativeInvocationSessionPayload,
 } from './nativeInvocationSession';
-import { readNativeSessionPayload, saveNativeSessionPayload } from './nativeSessionPayload';
-import { assertNativeArchiveFormat, readSavedNativeOrigin, saveNativeSessionOrigin } from './nativeSavedOrigin';
 import {
   assertNativeOriginalProcessHost,
   assertNativeOriginalExecutionContext,
@@ -73,12 +70,7 @@ import type { ModelStreamDelta, ModelToolProgress, SdkRequestSnapshot } from '@/
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { extractAssistantMedia } from '@/backend/services/model/adapters/messageUtils';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
-import {
-  archiveModelDispatch,
-  preparePagedCanonicalArchive,
-  readNativeModelTurnSnapshot,
-  updateModelDispatchOutcome,
-} from '@/backend/execution/flow/modelTurnArchive';
+import { archiveModelDispatch, preparePagedCanonicalArchive, updateModelDispatchOutcome } from '@/backend/execution/flow/modelTurnArchive';
 import { flushConversationLog } from '@/backend/execution/flow/conversationLog';
 import {
   assertFlowExecutionCurrent,
@@ -108,6 +100,7 @@ import { materializeModelTurn } from './modelTurnResult';
 import { prepareProviderWire } from './providerWire';
 import { refitWireAfterContextOverflow } from './contextOverflowRetry';
 import { createProviderAttemptRecorder } from './providerAttemptStatistics';
+import { publishNativeOriginalSession } from './nativeOriginalPublication';
 
 export { extractGeneratedImageParts } from './modelMedia';
 
@@ -1125,82 +1118,13 @@ export class ModelHandler {
                         await opts!.nativeBrokerAuthority!.assertCurrent();
                         abortController.signal.throwIfAborted();
                         if (opts?.nativeInvocationSessionHook) {
-                          const archived = await readNativeModelTurnSnapshot(nativeReceipt.owner.conversationId,
-                            entry.id, opts.nativeInvocationSessionHook.root.workspace, abortController.signal);
-                          if (archived) assertNativeArchiveFormat(archived, entry.archiveVersion);
-                          if (!archived || archived.entry.outcome !== 'running' || archived.entry.id !== nativeReceipt.invocationId
-                            || archived.entry.conversationId !== nativeReceipt.owner.conversationId
-                            || archived.entry.runId !== nativeReceipt.owner.runId
-                            || archived.entry.node.nodeId !== nativeReceipt.owner.nodeId
-                            || archived.entry.modelId !== nativeReceipt.owner.modelId
-                            || archived.entry.attempt !== nativeReceipt.owner.attemptOrdinal
-                            || archived.entry.adapter !== snapshot.adapter
-                            || archived.entry.operation !== snapshot.operation
-                            || !nativeInventory || nativeInventory.digest !== nativeReceipt.owner.inventoryDigest) {
-                            throw new NativeInvocationHeldError(nativeReceipt.invocationId);
-                          }
-                          const lineage = await readNativeOriginLineage({
-                            receipt: nativeReceipt, authority: opts.nativeBrokerAuthority!,
-                            root: opts.nativeInvocationSessionHook.root, signal: abortController.signal,
+                          await publishNativeOriginalSession({
+                            receipt: nativeReceipt, entry, snapshot,
+                            hook: opts.nativeInvocationSessionHook, authority: opts.nativeBrokerAuthority!,
+                            inventory: nativeInventory, abortController,
+                            cancelToolPort: () => nativeToolPort?.cancel(),
+                            onSessionCreated: session => { nativeSession = session; },
                           });
-                          const payloadRef = await saveNativeSessionPayload({
-                            invocationId: nativeReceipt.invocationId,
-                            archive: { sdkRequest: archived.sdkRequest, genericWire: archived.genericWire,
-                              media: archived.media },
-                            inventory: { tools: nativeInventory.tools, bindings: nativeInventory.bindings,
-                                ...(nativeInventory.terminationProtocol ? { terminationProtocol: nativeInventory.terminationProtocol } : {}),
-                              syntheticNames: nativeInventory.syntheticNames },
-                          });
-                          const savedPayload = await readNativeSessionPayload(payloadRef);
-                          if (savedPayload.invocationId !== nativeReceipt.invocationId
-                            || nativeDigest(savedPayload.archive.sdkRequest) !== nativeDigest(archived.sdkRequest)
-                            || nativeDigest(savedPayload.archive.genericWire) !== nativeDigest(archived.genericWire)
-                            || nativeDigest(savedPayload.archive.media) !== nativeDigest(archived.media)
-                            || nativeDigest(savedPayload.inventory.tools) !== nativeDigest(nativeInventory.tools)
-                            || nativeDigest(savedPayload.inventory.bindings) !== nativeDigest(nativeInventory.bindings)
-                            || nativeDigest(savedPayload.inventory.syntheticNames) !== nativeDigest(nativeInventory.syntheticNames)) {
-                            throw new NativeInvocationHeldError(nativeReceipt.invocationId);
-                          }
-                          nativeSession = createNativeInvocationSession({
-                            receipt: nativeReceipt, lineage,
-                            archive: {
-                              dispatchId: entry.id, adapter: archived.entry.adapter,
-                                archiveVersion: archived.version,
-                              operation: archived.entry.operation,
-                              sanitizedSdkRequestDigest: nativeDigest(archived.sdkRequest),
-                              sanitizedGenericWireDigest: nativeDigest(archived.genericWire),
-                              mediaCount: archived.media.length,
-                            },
-                              inventory: { digest: nativeInventory.digest, toolCount: nativeInventory.tools.length,
-                                ...(nativeInventory.terminationProtocol ? { terminationProtocol: nativeInventory.terminationProtocol } : {}) },
-                            payloadRef,
-                          }, abortController.signal, () => {
-                            abortController.abort();
-                            nativeToolPort?.cancel();
-                          });
-                          await saveNativeSessionOrigin(nativeSession.session.descriptor);
-                          const savedOrigin = await readSavedNativeOrigin({ invocationId: nativeReceipt.invocationId,
-                            authority: opts.nativeBrokerAuthority!, root: opts.nativeInvocationSessionHook.root,
-                            signal: abortController.signal });
-                          if (nativeDigest(savedOrigin) !== nativeDigest(nativeSession.session.descriptor)) {
-                            throw new NativeInvocationHeldError(nativeReceipt.invocationId);
-                          }
-                          await opts.nativeInvocationSessionHook.publish(nativeSession.session);
-                          abortController.signal.throwIfAborted();
-                          const publishedLineage = await readNativeOriginLineage({
-                            receipt: nativeReceipt, authority: opts.nativeBrokerAuthority!,
-                            root: opts.nativeInvocationSessionHook.root, signal: abortController.signal,
-                          });
-                          if (publishedLineage.digest !== lineage.digest) {
-                            throw new NativeInvocationHeldError(nativeReceipt.invocationId);
-                          }
-                          nativeSession.emit('issue-uncertain');
-                          // A synchronous subscriber can cancel this very session.
-                          abortController.signal.throwIfAborted();
-                          await opts.nativeBrokerAuthority!.assertCurrent();
-                          await opts.nativeInvocationSessionHook.root.assertCurrent();
-                          await opts.nativeBrokerAuthority!.assertCurrent();
-                          abortController.signal.throwIfAborted();
                         }
                         nativeSdkRequestStarted = true;
                       }

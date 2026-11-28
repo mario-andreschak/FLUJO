@@ -15,7 +15,7 @@
     },
     {
       "file": "src/backend/execution/flow/handlers/ModelHandler.ts",
-      "maxLines": 1793,
+      "maxLines": 1717,
       "modules": [
         "src/backend/execution/flow/handlers/toolCallProcessing.ts",
         "src/backend/execution/flow/handlers/modelMedia.ts",
@@ -31,7 +31,8 @@
         "src/backend/execution/flow/handlers/modelTurnResult.ts",
         "src/backend/execution/flow/handlers/providerWire.ts",
         "src/backend/execution/flow/handlers/contextOverflowRetry.ts",
-        "src/backend/execution/flow/handlers/providerAttemptStatistics.ts"
+        "src/backend/execution/flow/handlers/providerAttemptStatistics.ts",
+        "src/backend/execution/flow/handlers/nativeOriginalPublication.ts"
       ]
     },
     {
