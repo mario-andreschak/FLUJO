@@ -57,7 +57,7 @@ into the module that now owns the code.
 | File | Lines before (`wip-cleanup` `de5a1cdf`) | Lines after |
 | --- | --- | --- |
 | `src/backend/execution/flow/runFlow.ts` | 4,048 | 2,056 |
-| `src/backend/execution/flow/handlers/ModelHandler.ts` | 5,279 | 1,705 |
+| `src/backend/execution/flow/handlers/ModelHandler.ts` | 5,279 | 1,700 |
 | `src/backend/services/mcp/index.ts` | 4,294 | 2,532 |
 
 What stays in each file is the part that needs all of its state at once:
