@@ -468,6 +468,12 @@ for (const [label, change, expected] of [
   ['a first-use journey without the 128-tool app', files => {
     journeyJob(files).steps = journeyJob(files).steps.filter(step => !step.run?.includes('playwright.features-first-use.config.mjs'));
   }, /128-tool app/],
+  ['a first-use journey without the tool tester check', files => {
+    journeyJob(files).steps = journeyJob(files).steps.filter(step => !step.run?.includes('playwright.features.config.mjs'));
+  }, /tool tester/],
+  ['an optional tool tester check', files => {
+    journeyStep(files, 'npx playwright test --config=playwright.features.config.mjs')['continue-on-error'] = true;
+  }, /tool tester/],
   ['a 128-tool check against another build', files => {
     journeyStep(files, 'npx playwright test').env.FEATURE_BROWSER_APP_DIR = '/opt/old-flujo';
   }, /128-tool app/],

@@ -13,28 +13,31 @@ const BROAD_ONLY_JOB_IDS = Object.freeze(['antigravity-cli', 'installed-windows-
 const JOURNEY_DESKTOP = 'npm run journey:first-use';
 const JOURNEY_PHONE = 'npm run journey:first-use -- --viewport 390x844';
 const BIG_APP = 'npx playwright test --config=playwright.features-first-use.config.mjs';
+const TOOL_TESTER = 'npx playwright test --config=playwright.features.config.mjs';
 
 /**
  * The first-use journey (#572) walks a fresh production build on desktop and
- * phone screens, then reaches every tool of a 128-tool app on that build, with
- * nothing optional, and keeps its evidence even when it fails.
+ * phone screens, then reaches every tool of a 128-tool app and tests the tool
+ * tester on that build, with nothing optional, and keeps its evidence even when it fails.
  */
 export function assertFirstUseJourneyJob(workflow) {
   const job = workflow?.jobs?.['first-use-journey'];
   const steps = job?.steps ?? [];
   const at = (run) => steps.findIndex(step => step.run === run);
-  const [install, browser, build, desktop, phone, bigApp] = ['npm ci --include=dev', 'npx playwright install --with-deps chromium',
-    'npm run build', JOURNEY_DESKTOP, JOURNEY_PHONE, BIG_APP].map(at);
+  const [install, browser, build, desktop, phone, bigApp, toolTester] = ['npm ci --include=dev', 'npx playwright install --with-deps chromium',
+    'npm run build', JOURNEY_DESKTOP, JOURNEY_PHONE, BIG_APP, TOOL_TESTER].map(at);
   const evidence = steps.find(step => step.uses?.startsWith('actions/upload-artifact@'));
   const kept = (evidence?.with?.path ?? '').split('\n').map(line => line.trim());
   if (!job || job['runs-on'] !== 'ubuntu-24.04' || job.if !== undefined || job['continue-on-error'] || job.strategy
       || install < 0 || browser <= install || build <= browser || desktop <= build || phone <= build || bigApp <= build
-      || steps[bigApp].env?.FEATURE_BROWSER_APP_DIR !== '${{ github.workspace }}'
+      || toolTester <= build
+      || [bigApp, toolTester].some(index => steps[index].env?.FEATURE_BROWSER_APP_DIR !== '${{ github.workspace }}')
       || steps.some(step => step.run && (step.if !== undefined || step['continue-on-error']))
       || evidence?.if !== 'always()' || !kept.some(line => line.endsWith('/flujo-drive/evidence/first-journey/'))
-      || !kept.includes('feature-first-use-artifacts/')) {
+      || !kept.includes('feature-first-use-artifacts/') || !kept.includes('feature-browser-artifacts/')) {
     throw new Error('The broad qualification must walk the first-use journey on desktop and phone after a fresh production build '
-      + 'and reach every tool of the 128-tool app on that build, with nothing optional, and keep its screenshots and reports even when it fails.');
+      + 'and reach every tool of the 128-tool app and test the tool tester on that build, with nothing optional, '
+      + 'and keep its screenshots and reports even when it fails.');
   }
 }
 const ANTIGRAVITY_INSTALL = "node -e \"require('./bin/antigravity-runtime.cjs').resolveBinary().then(binary => console.log(binary))\"";

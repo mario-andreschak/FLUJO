@@ -35,6 +35,9 @@ published artifact or a human observation.
   audience filtering/late-page authorization, later-page error, opaque empty cursor,
   cycle termination and 1,000-page admission limit. This page limit bounds request
   count; it is not an arbitrary-response byte or RSS bound (#569).
+- `__tests__/mcp/toolDiscoveryModernSdk.test.ts`: the modern SDK client walks pages
+  itself and silently stops at a page that points back to its own cursor;
+  `rejectRepeatedToolCursors` turns that into the repeated-cursor error.
 - `__tests__/mcp/toolDiscoverySdk.test.ts`: real installed SDK client/server over
   its in-memory transport; complete definitions plus retained early/late output
   validators and task metadata. This is source protocol acceptance, not stdio/HTTP
@@ -77,7 +80,7 @@ stand-in AI answers, so no account or key is needed.
 | --- | --- |
 | A newcomer finishes a model-plus-app agent run within 15 minutes, without coding or coaching | The journey uses only what a newcomer sees (labels and buttons, no code) and fails when the path takes longer than 15 minutes on the production build. |
 | Record where people drop off | `report.json` per screen size records the seconds for each stage, the stage where a run stopped and every error on the page; the job keeps it with a screenshot and an accessibility snapshot per stage, also after a failure. |
-| On the built candidate, complex forms stay stable and all 128 tools of a big app are reachable | The same job connects the 128-tool fixture through the screens over Streamable HTTP and SSE on that production build (`playwright.features-first-use.config.mjs`, desktop and 360px), reaches the last tool by keyboard, fills its form and runs one test with no page errors. `__tests__/frontend/components/MCPToolRefresh.integration.test.tsx` keeps edits, result and the app frame through successful and failed refreshes and checks the stale-list warning. |
+| On the built candidate, complex forms stay stable and all 128 tools of a big app are reachable | The same job connects the 128-tool fixture through the screens over Streamable HTTP and SSE on that production build (`playwright.features-first-use.config.mjs`, desktop and 360px), reaches the last tool by keyboard, fills its form and runs one test with no page errors. The tool tester check (`playwright.features.config.mjs`) then keeps unfinished form input, the result and the embedded app through slow and failed refreshes, shows the "Using cached tools" warning, and renders the tool selector in all seven languages. An app whose tool pages loop now fails discovery instead of showing a shortened list (`__tests__/mcp/toolDiscoveryModernSdk.test.ts`). |
 | Saved settings, forms and history survive an upgrade | `Back up, restart, upgrade and restore the installed npm package` in the same workflow upgrades the last published package to the candidate (`scripts/packaged-acceptance.mjs`). |
 | A documented provider/transport/API smoke matrix | The table at the top of this page; the journey covers `/v1` and the MCP proxy on every run. |
 

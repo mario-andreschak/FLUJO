@@ -6,14 +6,15 @@ import { createFeatureBrowserEnvironment } from '../../scripts/feature-surface-a
 const labelName = label => new RegExp('^' + label + '(?: |$)');
 let environment;
 const toolNames = Array.from({ length: 128 }, (_, index) => `fixture_tool_${String(index + 1).padStart(3, '0')}`);
+// [locale, the app card's open button ({name} is the app), the tool selector]
 const locales = [
-  ['en', 'Your first AI + app agent', 'Saved app to inspect', 'Inspect and test tools', 'Select tool'],
-  ['es', 'Tu primer agente con IA y una aplicación', 'Aplicación guardada para inspeccionar', 'Inspeccionar y probar herramientas', 'Seleccionar herramienta'],
-  ['de', 'Dein erster Agent mit KI und App', 'Gespeicherte App prüfen', 'Werkzeuge prüfen und testen', 'Tool auswählen'],
-  ['fr', 'Votre premier agent avec IA et application', 'Application enregistrée à inspecter', 'Inspecter et tester les outils', 'Sélectionner un outil'],
-  ['it', 'Il tuo primo agente con IA e app', 'App salvata da esaminare', 'Esamina e prova gli strumenti', 'Seleziona strumento'],
-  ['pt', 'Seu primeiro agente com IA e aplicativo', 'Aplicativo salvo para inspecionar', 'Inspecionar e testar ferramentas', 'Selecionar ferramenta'],
-  ['zh-CN', '创建首个 AI 与应用智能体', '选择要检查的已保存应用', '检查并测试工具', '选择工具'],
+  ['en', 'Open {name}', 'Select tool'],
+  ['es', 'Abrir {name}', 'Seleccionar herramienta'],
+  ['de', '{name} öffnen', 'Tool auswählen'],
+  ['fr', 'Ouvrir {name}', 'Sélectionner un outil'],
+  ['it', 'Apri {name}', 'Seleziona strumento'],
+  ['pt', 'Abrir {name}', 'Selecionar ferramenta'],
+  ['zh-CN', '打开 {name}', '选择工具'],
 ];
 
 test.beforeAll(async () => {
@@ -28,23 +29,15 @@ test.afterAll(async ({}, testInfo) => {
   }
 });
 
+// The first-run guide hides once any app is connected (#1278), so whether it shows depends on
+// timing. Open the app from its card by keyboard instead; the guide's own links and seven
+// languages are covered by __tests__/frontend/components/McpAgentJourney.test.tsx.
 async function openInspector(page, serverName, labels = locales[0], navigate = true) {
-  const [, title, savedApp, inspect] = labels;
-  if (navigate) await page.goto(`${environment.baseURL}/mcp?featureTestLocale=${labels[0]}`);
-  const summary = page.getByRole('button', { name: title, exact: true });
-  if (await summary.getAttribute('aria-expanded') !== 'true') await summary.click();
-  const detailsId = await summary.getAttribute('aria-controls');
-  const guide = page.locator(`[id=${JSON.stringify(detailsId)}]`);
-  await expect(guide.locator('a[href="/models"]')).toBeVisible();
-  await expect(guide.locator('a[href="/flows?create=assistant"]')).toBeVisible();
-  await expect(guide.locator('a[href="/docs"]')).toBeVisible();
-  const appSelector = page.getByRole('combobox', { name: labelName(savedApp) });
-  await appSelector.click();
-  await page.getByRole('option', { name: serverName, exact: true }).click();
-  await expect(appSelector).toContainText(serverName);
-  await page.keyboard.press('Escape');
-  await expect(page.getByRole('listbox')).toHaveCount(0);
-  await page.getByRole('button', { name: inspect, exact: true }).click();
+  const [locale, open, selectTool] = labels;
+  if (navigate) await page.goto(`${environment.baseURL}/mcp?featureTestLocale=${locale}`);
+  await page.getByRole('button', { name: open.replace('{name}', serverName), exact: true }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('combobox', { name: labelName(selectTool) })).toBeVisible();
 }
 
 async function selectTool(page, name, label = 'Select tool') {
@@ -158,7 +151,7 @@ test('128 tools and real draft/result/App retention with explicit execution', as
       await page.getByRole('textbox', { name: 'options (JSON object)', exact: true }).fill('{"marker":"late-receipt"}');
       await page.getByRole('combobox', { name: labelName('button') }).click();
       await page.getByRole('option', { name: 'right', exact: true }).click();
-      const enabled = page.getByRole('checkbox', { name: 'enabled', exact: true });
+      const enabled = page.getByRole('switch', { name: 'enabled', exact: true });
       await enabled.check();
       await enabled.uncheck();
       await page.getByRole('button', { name: 'Test tool', exact: true }).click();
@@ -193,7 +186,7 @@ test('128 tools and real draft/result/App retention with explicit execution', as
   }
 });
 
-test('seven rendered guide/tool-selector languages without implicit execution', async ({ page, browser }, testInfo) => {
+test('seven rendered app-card/tool-selector languages without implicit execution', async ({ page, browser }, testInfo) => {
   const before = environment.fixture.state.snapshot().toolCalls;
   const observations = [];
   try {
@@ -204,7 +197,7 @@ test('seven rendered guide/tool-selector languages without implicit execution', 
     for (const labels of locales) {
       await openInspector(page, 'Feature HTTP fixture', labels);
       await expect(page.locator('html')).toHaveAttribute('data-locale', labels[0]);
-      await page.getByRole('combobox', { name: labelName(labels[4]) }).click();
+      await page.getByRole('combobox', { name: labelName(labels[2]) }).click();
       await expect(page.getByRole('option')).toHaveCount(129);
       await page.keyboard.press('Escape');
       observations.push({ locale: labels[0], completedAt: new Date().toISOString() });
