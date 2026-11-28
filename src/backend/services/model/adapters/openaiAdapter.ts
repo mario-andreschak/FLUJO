@@ -11,6 +11,8 @@ import { extractAssistantMedia } from './messageUtils';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { stripOpenAiPromptCacheBreakpoints } from './openaiPromptCaching';
 import { readOpenAiCompatibleUsage } from './openaiUsage';
+import { chatTemplateWireFor } from './chatTemplateWire';
+import { withLengthFromUsage } from './cutOffReply';
 import { isOwnerCredentialBoundModel, type Model } from '@/shared/types/model';
 import { assertExecutionExtensionAdapterCurrent, assertExecutionExtensionCurrent, claimExecutionModelRequest, dispatchExecutionModelRequest, executionOwnerModelRouting, ExecutionExtensionError, executionExtensionSignal, executionExtensionSinglePhysicalAttempt, type ExecutionBoundModelIdentity, type ExecutionExtensionContext, type ExecutionModelRequestIntent } from '@/backend/execution/extensions';
 import {
@@ -216,6 +218,19 @@ async function prepareProtectedOpenAiRequest<T extends object>(
   };
 }
 
+/**
+ * LM Studio refuses a request with `{"error": "<reason>"}`, a plain string
+ * where OpenAI sends an object. Give that reason to the SDK error as its
+ * message, so it reads as text instead of escaped JSON.
+ */
+function withReadableErrorBody(error: unknown): unknown {
+  if (!(error instanceof OpenAI.APIError) || !error.status || !error.headers) return error;
+  const reason: unknown = error.error;
+  return typeof reason === 'string'
+    ? OpenAI.APIError.generate(error.status, { error: { message: reason } }, undefined, error.headers)
+    : error;
+}
+
 function unwrapProtectedFetchError(error: unknown): never {
   if (error instanceof ExecutionExtensionError) throw error;
   const cause = (error as { cause?: unknown } | null)?.cause;
@@ -353,7 +368,7 @@ export class OpenAiAdapter implements CompletionAdapter {
     // canonical SDK client only after the final body is detached below.
     const openai = brandedSinglePhysicalAttempt ? undefined : this.createClient(model, apiKey);
     const toolNames = buildProviderToolNameTranslation(tools, toolNameMap);
-    const providerMessages = translateMessagesForProvider(messages, toolNames);
+    const providerMessages = chatTemplateWireFor(model, translateMessagesForProvider(messages, toolNames));
     const providerTools = translateToolsForProvider(tools, toolNames);
 
     const requestParams: OpenAI.Chat.ChatCompletionCreateParams = {
@@ -448,7 +463,7 @@ export class OpenAiAdapter implements CompletionAdapter {
               );
             } catch (error) {
               if (brandedSinglePhysicalAttempt) unwrapProtectedFetchError(error);
-              throw error;
+              throw withReadableErrorBody(error);
             }
           },
         ),
@@ -462,7 +477,10 @@ export class OpenAiAdapter implements CompletionAdapter {
       try {
         const completion = await send(useCacheKey, useCacheControls);
         const canonicalCompletion = translateCompletionFromProvider(
-          { ...completion, usage: readOpenAiCompatibleUsage(completion) },
+          withLengthFromUsage(
+            { ...completion, usage: readOpenAiCompatibleUsage(completion) },
+            { maxTokens, contextWindow: model.contextWindow },
+          ),
           toolNames,
         );
         return {
@@ -524,7 +542,7 @@ export class OpenAiAdapter implements CompletionAdapter {
     const signal = modelAbortSignal(executionExtensionContext, inputSignal);
     const openai = singlePhysicalAttempt ? undefined : this.createClient(model, apiKey);
     const toolNames = buildProviderToolNameTranslation(tools, toolNameMap);
-    const providerMessages = translateMessagesForProvider(messages, toolNames);
+    const providerMessages = chatTemplateWireFor(model, translateMessagesForProvider(messages, toolNames));
     const providerTools = translateToolsForProvider(tools, toolNames);
     const requestParams: OpenAI.Chat.ChatCompletionCreateParamsStreaming = {
       model: model.name,
@@ -595,7 +613,7 @@ export class OpenAiAdapter implements CompletionAdapter {
             );
           } catch (error) {
             if (singlePhysicalAttempt) unwrapProtectedFetchError(error);
-            throw error;
+            throw withReadableErrorBody(error);
           }
         },
       );
@@ -693,7 +711,7 @@ export class OpenAiAdapter implements CompletionAdapter {
         });
       }
 
-      const completion = translateCompletionFromProvider({
+      const completion = translateCompletionFromProvider(withLengthFromUsage({
         id: completionId,
         object: 'chat.completion',
         created,
@@ -710,7 +728,7 @@ export class OpenAiAdapter implements CompletionAdapter {
           },
         }],
         ...(usage ? { usage } : {}),
-      }, toolNames);
+      }, { maxTokens, contextWindow: model.contextWindow }), toolNames);
       return {
         liveMessageId,
         media,
