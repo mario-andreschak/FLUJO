@@ -1,6 +1,9 @@
 import { scopedRegistry } from './serviceRegistries';
 import { readServerStatus } from './serverStatus';
 import * as serviceSkills from './serviceSkills';
+import { isUnparsableStdioLine, transportForHostInspection } from './transportInspection';
+import { clearLegacyInferredOAuthScopesForHeaderAuth, hasConfiguredAuthorizationHeader } from './headerAuthScopes';
+import { testConnection } from './connectionTest';
 import { ensureManagedServerRootDir, resolveEnvForSave, resolveHeadersForSave, resolveOAuthSecretForSave } from './serverConfigSave';
 import { subscribeModernResource, retireModernSubscriptions } from './modernSubscriptions';
 import { completeRequiredUrlElicitations, requiredUrlElicitationsOf } from './elicitation';
@@ -11,8 +14,6 @@ import { executionApprovalFailure } from './executionApproval';
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { v4 as uuidv4 } from "uuid";
-import { StringDecoder } from "node:string_decoder";
-import { collectMcpDiagnosticSecrets, createMcpDiagnosticRedactor } from "@/utils/mcp/diagnosticRedaction";
 import { createLogger } from "@/utils/logger";
 import { bindToCurrentWorkspace, DEFAULT_WORKSPACE, getCurrentWorkspace } from "@/utils/workspace";
 import { runWithConcurrency } from "./utils/boundedConcurrency";
@@ -92,7 +93,6 @@ import {
   isTransientStreamError,
 } from "@/utils/mcp/utils";
 import { removeMcpbServerFiles } from "./mcpb/files";
-import { normalizeHeaderValue, hydrateMaskedHeaders } from "@/utils/mcp/headers";
 import {
   hasMaskedStoredHeaders,
   hasStoredSecretHeaders,
@@ -100,10 +100,6 @@ import {
   MCP_HEADER_DESTINATION_CHANGED,
   usesMcpHttpHeaders,
 } from "@/utils/mcp/headerDestination";
-import {
-  getTestConnectionTimeoutMs,
-  isRunnerStdioConfig,
-} from "@/utils/mcp/testConnectionTimeout";
 import { probeOAuthSupport } from "@/utils/mcp/oauthProbe";
 import {
   createNewClient,
@@ -183,55 +179,6 @@ type ToolArgs = Record<string, unknown>;
 const log = createLogger("backend/services/mcp/index");
 /** A server may ask for links again after the first round; stop after this many. */
 const MAX_URL_ELICITATION_ROUNDS = 2;
-const RETRY_WITH_CLASSIC_HANDSHAKE = Symbol("retry with the classic MCP handshake");
-
-function transportForHostInspection(transport: unknown): unknown {
-  let current = transport;
-  const seen = new Set<unknown>();
-  while (current && typeof current === "object" && !seen.has(current)) {
-    seen.add(current);
-    const inner = (current as { __flujoInnerTransport?: unknown })
-      .__flujoInnerTransport;
-    if (!inner) break;
-    current = inner;
-  }
-  return current;
-}
-
-/** Whether a remote config explicitly selects static Authorization-header auth. */
-function hasConfiguredAuthorizationHeader(config: MCPServerConfig): boolean {
-  if (config.transport !== "streamable" && config.transport !== "sse")
-    return false;
-  const headers = (config as MCPStreamableConfig | MCPSSEConfig).headers;
-  if (!headers) return false;
-
-  return Object.entries(headers).some(([key, raw]) => {
-    if (key.toLowerCase() !== "authorization") return false;
-    return normalizeHeaderValue(raw, key).value.trim().length > 0;
-  });
-}
-
-/**
- * The legacy OAuth inference path persisted exactly this default. Restrict cleanup to that
- * signature so user-authored scope lists are never removed speculatively.
- */
-function hasLegacyInferredOAuthScopes(config: MCPStreamableConfig): boolean {
-  return config.oauthScopes?.length === 1 && config.oauthScopes[0] === "read";
-}
-
-/** Whether a config contains durable or in-progress FLUJO-managed OAuth state. */
-function hasManagedOAuthState(config: MCPStreamableConfig): boolean {
-  return !!(
-    config.oauthClientId ||
-    config.oauthClientSecret ||
-    config.oauthClientMetadata ||
-    config.oauthClientInformation ||
-    config.oauthTokens ||
-    config.oauthCodeVerifier ||
-    config.oauthState ||
-    config.authorizationUrl
-  );
-}
 
 /**
  * Main service class for MCP server management
@@ -239,14 +186,6 @@ function hasManagedOAuthState(config: MCPStreamableConfig): boolean {
  * This simplified version focuses on providing a clean interface for server management
  * while maintaining compatibility with the MCP SDK.
  */
-/**
- * Whether a stdio transport error means "this stdout line was not an MCP message". The
- * SDK reports a line it cannot parse this way and keeps reading the stream.
- */
-function isUnparsableStdioLine(error: Error): boolean {
-  return error instanceof SyntaxError || error?.name === "ZodError" || error?.name === "$ZodError";
-}
-
 export class MCPService {
   // --- Workspace-scoped registries (#406) -----------------------------------
   // Every registry below is keyed by SERVER NAME, and a server name is only
@@ -303,51 +242,6 @@ export class MCPService {
   private pendingResourceUpdatesBase: Map<string, Set<string>> = new Map();
   private get pendingResourceUpdates(): Map<string, Set<string>> {
     return scopedRegistry("pendingResourceUpdates", this.pendingResourceUpdatesBase);
-  }
-
-  /**
-   * Remove the exact stale marker written by the old auth-inference path once a static
-   * Authorization header has proved it can establish a real connection. Reload from storage
-   * before saving so resolved/decrypted connection material is never persisted accidentally.
-   */
-  private async clearLegacyInferredOAuthScopesForHeaderAuth(
-    serverName: string,
-  ): Promise<void> {
-    try {
-      const configs = await this.loadServerConfigs();
-      if (!Array.isArray(configs)) return;
-
-      const index = configs.findIndex((c) => c.name === serverName);
-      if (index === -1 || configs[index].transport !== "streamable") return;
-
-      const stored = configs[index] as MCPStreamableConfig;
-      if (
-        !hasConfiguredAuthorizationHeader(stored) ||
-        !hasLegacyInferredOAuthScopes(stored) ||
-        hasManagedOAuthState(stored)
-      ) {
-        return;
-      }
-
-      configs[index] = { ...stored, oauthScopes: undefined };
-      await assertBundledFlujoWorkloadEffectCurrent();
-      const result = await saveConfig(new Map(configs.map((c) => [c.name, c])));
-      if (result.success) {
-        log.info(
-          `Removed stale inferred OAuth scopes from header-authenticated server ${serverName}`,
-        );
-      } else {
-        log.warn(
-          `Failed to remove stale inferred OAuth scopes from ${serverName}: ${result.error}`,
-        );
-      }
-    } catch (error) {
-      if (error instanceof BundledFlujoWorkloadError || error instanceof McpRuntimeAuthorityRetirementError) throw error;
-      // Cleanup is best-effort and must never turn a successful MCP connection into a failure.
-      log.warn(
-        `Failed to clean inferred OAuth scopes for ${serverName}: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
   }
 
   // Connected clients per server name. Global-backed (see __mcp_clients) so EVERY
@@ -1037,7 +931,7 @@ export class MCPService {
           // zombie's late close) must not fire against it later.
           this.clearRetryTimer(config.name);
           this.connectionRetryAttempts.delete(config.name);
-          await this.clearLegacyInferredOAuthScopesForHeaderAuth(config.name);
+          await clearLegacyInferredOAuthScopesForHeaderAuth(this, config.name);
           return { success: true };
         }
 
@@ -1369,7 +1263,7 @@ export class MCPService {
       this.approvalFailures.delete(config.name);
       this.clearRetryTimer(config.name);
       this.connectionRetryAttempts.delete(config.name);
-      await this.clearLegacyInferredOAuthScopesForHeaderAuth(config.name);
+      await clearLegacyInferredOAuthScopesForHeaderAuth(this, config.name);
       if (executionExtensionContext) await this.assertProtectedConnectionIntent(executionExtensionContext, config);
 
       const negotiated = negotiatedProtocolVersion(client);
@@ -1560,286 +1454,9 @@ export class MCPService {
     onOutput?: (event: TestConnectionEvent) => void,
     options?: { storedName?: string },
   ): Promise<MCPServiceResponse> {
-    const result = await this.testConnectionAttempt(config, onOutput, options);
-    if (result !== RETRY_WITH_CLASSIC_HANDSHAKE) return result;
-    const retried = await this.testConnectionAttempt(config, onOutput, options);
-    return retried === RETRY_WITH_CLASSIC_HANDSHAKE ? { success: false, error: "MCP server quit during startup." } : retried;
+    return testConnection(this, config, onOutput, options);
   }
 
-  private async testConnectionAttempt(
-    config: MCPServerConfig,
-    onOutput?: (event: TestConnectionEvent) => void,
-    options?: { storedName?: string },
-  ): Promise<MCPServiceResponse | typeof RETRY_WITH_CLASSIC_HANDSHAKE> {
-    if (!isMcpTransport(config.transport)) {
-      return { success: false, error: MCP_TRANSPORT_INVALID, statusCode: 400 };
-    }
-    log.info(
-      `testConnection: Testing connection to ${config.name || "(unnamed)"} via ${config.transport} transport`,
-    );
-
-    // Optional live-output sink (issue #64). When omitted, behaviour is byte-for-byte
-    // identical to the original one-shot request/response probe.
-    const emit = (event: TestConnectionEvent): void => {
-      try {
-        onOutput?.(event);
-      } catch {
-        // A misbehaving sink must never break the probe itself.
-      }
-    };
-
-    const stderrLogs: string[] = [];
-    let diagnosticRedactor = createMcpDiagnosticRedactor(collectMcpDiagnosticSecrets(config, config));
-    let stderrRedactor = diagnosticRedactor.stream();
-    const stderrDecoder = new StringDecoder("utf8");
-    let diagnosticsFinished = false;
-    const appendStderr = (chunk: string) => {
-      if (!chunk) return;
-      stderrLogs.push(chunk);
-      emit({ type: "stderr", data: chunk });
-    };
-    const finishDiagnostics = () => {
-      if (diagnosticsFinished) return;
-      diagnosticsFinished = true;
-      appendStderr(stderrRedactor.write(stderrDecoder.end()));
-      appendStderr(stderrRedactor.end());
-    };
-    let client: Client | null = null;
-    let transport:
-      | Awaited<ReturnType<typeof createTransport>>
-      | Awaited<ReturnType<typeof createBetaTransport>>
-      | null = null;
-
-    try {
-      // For remote (streamable/sse) servers the browser may send back a MASKED secret header
-      // (e.g. Authorization: "********") when the user did not re-type the token — i.e. when
-      // editing or re-testing a server whose secret was saved earlier (#137). Hydrate those
-      // masked SECRET headers from the stored, saved config (looked up by the pre-edit name so
-      // rename + Test Connection also works) before resolving, mirroring resolveHeadersForSave's
-      // masked->keep contract. This happens entirely server-side — the real secret is read from
-      // disk here and never sent to the browser. resolveConfigHeaders then decrypts/resolves it
-      // exactly as the live connection does.
-      let toTest = config;
-      const lookupName = options?.storedName || config.name;
-      if (
-        (config.transport === "streamable" || config.transport === "sse") &&
-        lookupName
-      ) {
-        const stored = await this.loadServerConfigs();
-        const savedCfg = Array.isArray(stored)
-          ? stored.find((c) => c.name === lookupName)
-          : undefined;
-        const savedHeaders = (
-          savedCfg as MCPSSEConfig | MCPStreamableConfig | undefined
-        )?.headers;
-        const incomingHeaders = (config as MCPSSEConfig | MCPStreamableConfig)
-          .headers;
-        if (
-          hasMaskedStoredHeaders(incomingHeaders, savedHeaders) &&
-          !isSameMcpHeaderDestination(config, savedCfg)
-        ) {
-          emit({ type: "result", success: false, error: MCP_HEADER_DESTINATION_CHANGED });
-          return { success: false, error: MCP_HEADER_DESTINATION_CHANGED, statusCode: 400 };
-        }
-        toTest = {
-          ...config,
-          headers: hydrateMaskedHeaders(incomingHeaders, savedHeaders),
-        } as MCPServerConfig;
-      }
-
-      // Resolve + decrypt custom headers (#84) so the probe uses the same real header values
-      // the live connection would (shares createTransport). Global bindings / encrypted
-      // secrets are resolved here; plain values pass through unchanged.
-      const connectConfig = await resolveConfigHeaders(toTest);
-      await assertBundledFlujoWorkloadEffectCurrent();
-      assertMcpRuntimeAuthorityRetired(connectConfig.name);
-      diagnosticRedactor = createMcpDiagnosticRedactor(collectMcpDiagnosticSecrets(toTest, connectConfig));
-      stderrRedactor = diagnosticRedactor.stream();
-      // Same experimental v2-beta routing as the live connection, so Test Run
-      // probes exactly what connectServer would build.
-      const useBeta =
-        !isProtectedExecutionServer(connectConfig.name) && (await isMcpBetaProtocolEnabled()) &&
-        connectConfig.transport !== "websocket";
-      const isolateRuntimeHome = await resolveRuntimeHomeIsolation(connectConfig);
-      const transportOptions = { isolateRuntimeHome };
-      client = useBeta
-        ? createNewBetaClient(connectConfig)
-        : createNewClient(connectConfig);
-      transport = useBeta
-        ? await createBetaTransport(connectConfig, transportOptions)
-        : await createTransport(connectConfig, transportOptions);
-      if (connectConfig.transport === "stdio") {
-        registerExternalAuthorizationClient(
-          client,
-          connectConfig.name,
-          useBeta ? getStdioOAuthMrtrController(transport) : undefined,
-        );
-      }
-
-      // Capture stdio stderr (for stdio servers) and transport errors so we can build a
-      // meaningful message if the handshake fails. When a live-output sink is attached
-      // (issue #64), also forward each chunk AS IT ARRIVES so a slow cold `npx`/`uvx`
-      // start fills the console instead of looking frozen. (The child's stdout is the
-      // MCP JSON-RPC channel owned by the SDK transport, so only stderr + lifecycle
-      // markers are reliably streamable for stdio.) Duck-typed on the stderr stream so
-      // the v2-beta stdio transport is covered too.
-      const probeStderr = (
-        transportForHostInspection(transport) as {
-          stderr?: NodeJS.ReadableStream | null;
-        }
-      ).stderr;
-      if (probeStderr && typeof probeStderr.on === "function") {
-        probeStderr.on("data", (data: Buffer) => {
-          if (!diagnosticsFinished) appendStderr(stderrRedactor.write(stderrDecoder.write(data)));
-        });
-      }
-      transport.onerror = (err: Error) => {
-        if (!diagnosticsFinished) appendStderr(diagnosticRedactor.redact(`Transport error: ${formatErrorChain(err)}\n`));
-      };
-
-      emit({
-        type: "status",
-        phase: "spawning",
-        message: "Starting server / opening transport...",
-      });
-
-      // Runner-aware timeout: a cold `npx`/`uvx`/`bunx`/`pnpm dlx` may need to DOWNLOAD
-      // the package before the MCP handshake even starts, which routinely exceeds the 15s
-      // default (issue #43). Local commands and HTTP transports keep the 15s default.
-      const timeoutMs = getTestConnectionTimeoutMs(config);
-      const isRunner = isRunnerStdioConfig(config);
-      let timeoutHandle: NodeJS.Timeout | undefined;
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        timeoutHandle = setTimeout(
-          () =>
-            reject(
-              new Error(
-                `Connection timeout after ${timeoutMs / 1000}s` +
-                  (isRunner
-                    ? " — the package may still be downloading via npx/uvx. Try running the Test again (the package is cached after the first download), or verify the command and network access."
-                    : ""),
-              ),
-            ),
-          timeoutMs,
-        );
-      });
-
-      emit({
-        type: "status",
-        phase: "handshaking",
-        message: "Performing MCP handshake...",
-      });
-      try {
-        await assertBundledFlujoWorkloadEffectCurrent();
-        await Promise.race([client.connect(transport, { timeout: timeoutMs }), timeoutPromise]);
-      } finally {
-        if (timeoutHandle) clearTimeout(timeoutHandle);
-      }
-      if (connectConfig.transport === "stdio" && useBeta) {
-        activateStdioOAuthMrtrController(transport);
-      }
-
-      // Handshake succeeded — try to list tools to confirm full protocol compatibility.
-      emit({
-        type: "status",
-        phase: "listing-tools",
-        message: "Handshake OK — listing tools...",
-      });
-      let toolCount = 0;
-      try {
-        const result = await client.listTools();
-        toolCount = Array.isArray(result?.tools) ? result.tools.length : 0;
-      } catch (listError) {
-          if (listError instanceof BundledFlujoWorkloadError) throw listError;
-        log.debug(
-          `testConnection: connected to ${config.name} but listTools failed: ${diagnosticRedactor.redact(formatErrorChain(listError))}`,
-        );
-      }
-
-      log.info(
-        `testConnection: Successfully connected to ${config.name} (${toolCount} tools)`,
-      );
-      finishDiagnostics();
-      emit({ type: "result", success: true, data: { toolCount } });
-      return { success: true, data: { toolCount } };
-    } catch (error) {
-      if (error instanceof BundledFlujoWorkloadError || error instanceof McpRuntimeAuthorityRetirementError) throw error;
-      finishDiagnostics();
-      if (config.transport === "stdio") {
-        noteStdioConnectFailure(config, error);
-        if (takeClassicHandshakeRetry(config.name)) return RETRY_WITH_CLASSIC_HANDSHAKE;
-      }
-      const approvalFailure = executionApprovalFailure(error);
-      if (approvalFailure) {
-        emit({ type: 'result', success: false, error: approvalFailure.error });
-        return approvalFailure;
-      }
-      log.warn(`testConnection: Failed to connect to ${config.name}:`, diagnosticRedactor.redact(formatErrorChain(error)));
-
-      const requiresAuthentication = isAuthRequiredError(error);
-
-      // When a remote server rejects the probe for auth, find out WHETHER it speaks OAuth
-      // (RFC 9728) so the UI can offer to authenticate instead of only hinting at a static
-      // Authorization header. Best-effort: probeOAuthSupport never throws.
-      let oauthCapable: boolean | undefined;
-      if (
-        requiresAuthentication &&
-        (config.transport === "streamable" || config.transport === "sse")
-      ) {
-        const serverUrl = (config as MCPStreamableConfig | MCPSSEConfig)
-          .serverUrl;
-        if (serverUrl) {
-          oauthCapable = (await probeOAuthSupport(serverUrl)).oauthCapable;
-        }
-      }
-
-      const enhancedErrorMessage = await enhanceConnectionErrorMessage(
-        error,
-        config,
-        stderrLogs.length ? [stderrLogs.join("")] : [],
-        diagnosticRedactor.redact,
-      );
-      emit({
-        type: "result",
-        success: false,
-        error: enhancedErrorMessage,
-        requiresAuthentication,
-        oauthCapable,
-      });
-      return {
-        success: false,
-        error: enhancedErrorMessage,
-        requiresAuthentication,
-        oauthCapable,
-      };
-    } finally {
-      if (client) {
-        try {
-          // Short grace: this is a throwaway probe and the Test Run response is
-          // waiting on this close - don't hold it for the full production window.
-          await safelyCloseClient(client, config.name, config, {
-            gracePeriodMs: 3000,
-            killEscalationMs: 2000,
-          });
-        } catch (closeError) {
-          if (closeError instanceof McpRuntimeAuthorityRetirementError || closeError instanceof BundledFlujoWorkloadError) throw closeError;
-          log.debug(
-            `testConnection: error closing test client for ${config.name}: ${diagnosticRedactor.redact(formatErrorChain(closeError))}`,
-          );
-        }
-      }
-    }
-  }
-
-  /**
-   * Register (or clear, when `roots` is empty) the workspace-folder overlay a FlowBuilder
-   * MCP node contributes to its bound server (issue 46). Connections are singletons keyed
-   * by server name, so node roots are additive: roots/list answers with the union of the
-   * server-level roots and all currently-registered node roots (falling back to the
-   * server's rootPath when there are none at all). The roots capability is always
-   * declared, so this NEVER rebuilds a connection — servers whose effective roots
-   * changed are told via notifications/roots/list_changed instead.
-   */
   setNodeRoots(serverName: string, nodeId: string, roots?: string[]): void {
     const changedServers = setNodeRootsOverlay(serverName, nodeId, roots);
     for (const changed of changedServers) {
