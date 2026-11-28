@@ -301,6 +301,47 @@ describe('workspace copies of shipped application packages', () => {
     await expect(fs.stat(copied('partial', 'bash/dist/index.js'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  describe('a package whose whole dist folder is missing', () => {
+    const failureOf = (pending: Promise<unknown>) => pending.then(() => new Error('expected a failure'), (error: Error) => error);
+    const removeDist = (root: string) => fs.rm(path.join(root, 'dist'), { recursive: true });
+
+    it('names the package and "npm run build:mcp" in a source checkout that was never built', async () => {
+      await removeDist(path.join(application, 'mcp-servers/bash'));
+      const { message } = await failureOf(createWorkspace('fresh-clone'));
+      expect(message).toContain('Shipped package is not built: bash.');
+      expect(message).toContain(`Run "npm run build:mcp" once in ${await fs.realpath(application)}`);
+      expect(message).not.toContain('ENOENT');
+      await expect(fs.stat(getWorkspaceDir('fresh-clone'))).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('asks a packaged installation without sources to be reinstalled', async () => {
+      await fs.rm(path.join(application, 'mcp-servers/bash/src'), { recursive: true });
+      await removeDist(path.join(application, 'mcp-servers/bash'));
+      const { message } = await failureOf(createWorkspace('broken-install'));
+      expect(message).toContain('Shipped package is not built: bash.');
+      expect(message).toContain('Reinstall or update FLUJO');
+      expect(message).not.toContain('build:mcp');
+    });
+
+    it('tells the owner of a workspace copy how to rebuild it, without replacing the copy', async () => {
+      await createWorkspace('owned');
+      await fs.writeFile(copied('owned', 'bash/src/index.ts'), 'owner edit');
+      await removeDist(copied('owned', 'bash'));
+      const { message } = await failureOf(ensureShippedWorkspacePackages(getWorkspaceDir('owned'), application, ['bash']));
+      expect(message).toContain('Shipped package is not built: bash.');
+      expect(message).toContain(`Run "npm run build" in ${copied('owned', 'bash')}`);
+      expect(message).not.toContain('ENOENT');
+      await expect(fs.readFile(copied('owned', 'bash/src/index.ts'), 'utf8')).resolves.toBe('owner edit');
+    });
+
+    it('still refuses a linked dist folder', async () => {
+      await removeDist(path.join(application, 'mcp-servers/bash'));
+      await fs.symlink(path.join(application, 'mcp-servers/filesystem/dist'), path.join(application, 'mcp-servers/bash/dist'),
+        process.platform === 'win32' ? 'junction' : 'dir');
+      await expect(createWorkspace('linked-dist')).rejects.toThrow('must not be a symlink or junction');
+    });
+  });
+
   it('records provenance and refuses a snapshot recipe after source code changes', async () => {
     await createWorkspace('snapshot');
     const root = copied('snapshot', 'bash');

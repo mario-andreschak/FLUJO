@@ -3,11 +3,13 @@
 This guide takes you from nothing to a first pull request. You do not need an AI
 account, a paid service, private files or an existing FLUJO installation.
 
-Last walked through step by step on **Windows 10, November 25, 2026** (Node.js
-22.23.4, npm 10.9.9, Git 2.47). Times below are from that machine. If a step is
-wrong on your system, fixing this page is a welcome first pull request
-([#1441](https://github.com/mario-andreschak/FLUJO/issues/1441) asks for a
-Linux or macOS check).
+A machine follows this page word for word on **Linux and macOS**: it runs every
+command below in a fresh clone, starts the app, checks that it answers, stops it
+with Ctrl+C and runs the checks from step 6 (`scripts/contributor-guide.mjs`, in
+the full CI checks). On **Windows** it was last walked through by hand on November
+25, 2026 (Windows 10, Node.js 22.23.4, npm 10.9.9, Git 2.47). Times below are
+from that machine unless they say otherwise. If a step is wrong on your system,
+fixing this page is a welcome first pull request.
 
 ## What you need
 
@@ -15,7 +17,12 @@ Linux or macOS check).
   comes with it. The app and the test runner refuse older versions with a message
   that explains how to update.
 - **Git.**
-- About **2 GB of free disk space** (the installed packages take 1.4 GB).
+- About **5 GB of free disk space**. The installed packages take 1.4 GB; with the
+  pages the app compiles on its first start, a clone took 4 GB on Linux.
+- About **8 GB of memory**. The type check and the app's first start each use
+  about 4 GB, more than Node.js allows itself on a computer with less than 16 GB.
+  `npm run typecheck` and the app launcher raise that limit to fit your computer,
+  so you do not need to set anything.
 
 Check what you have:
 
@@ -66,7 +73,9 @@ npm run build:mcp
   4 minutes. Warnings about deprecated packages are normal.
 - `npm run build:mcp` builds the four built-in MCP servers in `mcp-servers/`
   (about 30 seconds). The app and every test that creates a workspace need them.
-  Without this step those tests fail with `ENOENT ... mcp-servers/flujo/dist`.
+  If you skip this step, the test runner and `npm run dev` build them for you the
+  first time. When a package is still missing, FLUJO names it and tells you to
+  run `npm run build:mcp`.
 
 If `npm ci` fails, keep the error and your Node.js, npm and OS versions and open
 an issue. Do not copy `node_modules` from another folder or delete the lock file:
@@ -95,8 +104,9 @@ node scripts/flujo-drive.mjs stop
 ```
 
 `launch` prints the address to open (for example `http://127.0.0.1:4301/`) and
-returns once the first page loads; the first start compiles pages and can take a
-few minutes. `stop` stops only that instance and deletes the data folder it
+returns once the first page loads. The first start compiles pages and can take
+ten minutes or more on a slower computer; `launch` says so every minute while it
+waits. `stop` stops only that instance and deletes the data folder it
 created. The tool can also click through pages for you; see the
 [feature map](../feature-map/README.md).
 
@@ -116,7 +126,7 @@ node scripts/launch-next.mjs dev --webpack --hostname 127.0.0.1 --port 4300
 Linux or macOS:
 
 ```sh
-export FLUJO_DATA_DIR="$(mktemp -d -t flujo-contributor.XXXXXX)"
+export FLUJO_DATA_DIR="$(mktemp -d "${TMPDIR:-/tmp}/flujo-contributor.XXXXXX")"
 export FLUJO_EXPOSURE_MODE=localhost
 node scripts/launch-next.mjs dev --webpack --hostname 127.0.0.1 --port 4300
 ```
@@ -124,9 +134,6 @@ node scripts/launch-next.mjs dev --webpack --hostname 127.0.0.1 --port 4300
 Open `http://127.0.0.1:4300` and stop with Ctrl+C. Close that terminal afterwards
 so the throwaway settings do not leak into your everyday FLUJO. Do not connect a
 real AI account or import a personal backup for a first change.
-
-The November 25 check did not start the app (the machine was shared with other
-work), so tell us in an issue if this step does not work for you.
 
 ## 5. Make your change
 

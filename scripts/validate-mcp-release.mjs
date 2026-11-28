@@ -120,6 +120,7 @@ for (const required of [
   'bin/node-runtime-preflight.mjs',
   'bin/app-node-runtime-preflight.mjs',
   'bin/node-runtime-update.mjs',
+  'bin/node-heap.mjs',
   'scripts/launch-next.mjs',
   'scripts/bootstrap-directory.mjs',
   'scripts/exposure-mode.mjs',

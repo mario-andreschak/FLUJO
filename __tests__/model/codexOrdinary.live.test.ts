@@ -9,6 +9,7 @@ import type { SdkRequestSnapshot } from '@/backend/services/model/adapters/types
 import { _clearCodexSessionsForTests } from '@/backend/services/model/adapters/codexSessionStore';
 import type { CodexSessionMetadata } from '@/backend/execution/flow/types';
 import { readCodexRuntimeCompatibility, acquireOrdinaryCodexExecutable } from '@/backend/services/model/adapters/codexRuntimeUpdate';
+import { bundledMcpEntry } from '../helpers/bundledMcpEntry';
 
 // Focused opt-in acceptance only. It uses existing file-backed Codex login,
 // production adapter/bridge and actual bundled read-only filesystem MCP.
@@ -30,7 +31,7 @@ live('accepts real inference/MCP, durable restart resume, protocol usage and own
   const controller = new AbortController();
   const client = new Client({ name: 'flujo-codex-acceptance', version: '1' }, { capabilities: {} });
   const transport = new StdioClientTransport({ command: process.execPath,
-    args: [path.resolve('mcp-servers/filesystem/dist/index.js')],
+    args: [bundledMcpEntry('filesystem')],
     env: { ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
       FLUJO_FS_ROOTS: root!, FLUJO_DATA_DIR: path.join(root!, 'filesystem-data') }, stderr: 'pipe',
   });

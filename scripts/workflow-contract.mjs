@@ -9,7 +9,7 @@ const isApplicationSelection = (file, id, condition) => file === 'verify.yml' &&
 const VERIFICATION_MATRIX_RUNNER = "${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}";
 
 /** Jobs only the manual broad qualification runs; its verification gate needs them too. */
-const BROAD_ONLY_JOB_IDS = Object.freeze(['antigravity-cli', 'installed-windows-acceptance', 'image-acceptance', 'system-key-store', 'system-key-store-linux']);
+const BROAD_ONLY_JOB_IDS = Object.freeze(['antigravity-cli', 'installed-windows-acceptance', 'image-acceptance', 'system-key-store', 'system-key-store-linux', 'contributor-guide']);
 const ANTIGRAVITY_INSTALL = "node -e \"require('./bin/antigravity-runtime.cjs').resolveBinary().then(binary => console.log(binary))\"";
 const ANTIGRAVITY_SUITE = 'node scripts/run-local-jest.cjs --ci --selectProjects node --runInBand --runTestsByPath __tests__/model/antigravityCliIntegration.test.ts';
 
@@ -31,6 +31,34 @@ export function assertAntigravityPlatformJob(workflow) {
       || install < 0 || cli <= install || suite <= cli
       || steps.some(step => step.if !== undefined || step['continue-on-error'])) {
     throw new Error('The broad qualification must run the official Antigravity CLI suite on macOS and Windows after installing the CLI the way FLUJO does, with nothing optional.');
+  }
+}
+
+const GUIDE_WALKTHROUGH = 'node scripts/contributor-guide.mjs --report "${{ runner.temp }}/contributor-guide"';
+const GUIDE_REPORT = '${{ runner.temp }}/contributor-guide/';
+
+/**
+ * A machine follows the contributor guide on Linux and macOS (#1441): a full-history checkout, the
+ * verified Node runtime, the walkthrough with no extra settings and nothing optional, and its
+ * report and logs kept even when a step fails.
+ */
+export function assertContributorGuideJob(workflow) {
+  const job = workflow?.jobs?.['contributor-guide'];
+  const matrix = job?.strategy?.matrix;
+  const steps = job?.steps ?? [];
+  const checkout = steps.find(step => step.uses?.startsWith('actions/checkout@'));
+  const guard = steps.findIndex(step => step.run === `node scripts/verify-ci-node.mjs ${CI_NODE_PROFILES.current22} --record`);
+  const walk = steps.findIndex(step => step.run === GUIDE_WALKTHROUGH);
+  const keep = steps.findIndex(step => step.uses?.startsWith('actions/upload-artifact@'));
+  if (!job || job.name !== 'Contributor guide (${{ matrix.os }})' || job['runs-on'] !== '${{ matrix.os }}'
+      || job.if !== undefined || job['continue-on-error'] || job.env !== undefined || job.strategy?.['fail-fast'] !== false
+      || Object.keys(matrix ?? {}).join() !== 'os' || JSON.stringify(matrix.os) !== JSON.stringify(['ubuntu-latest', 'macos-latest'])
+      || checkout?.with?.['fetch-depth'] !== 0 || guard < 0 || walk <= guard || keep <= walk || steps[walk].env !== undefined
+      || steps[keep].if !== 'always()' || steps[keep].with?.path !== GUIDE_REPORT || steps[keep].with['if-no-files-found'] !== 'error'
+      || steps.some(step => step['continue-on-error'] || (step.if !== undefined && step !== steps[keep]))) {
+    throw new Error('The broad qualification must follow the contributor guide on Linux and macOS: a full-history checkout, '
+      + `the verified Node runtime, \`${GUIDE_WALKTHROUGH}\` with no extra settings and nothing optional, `
+      + 'and its report kept even when a step fails.');
   }
 }
 
@@ -84,8 +112,8 @@ export function assertSystemKeyStoreJobs(workflow) {
 
 function assertVerificationRunners(workflow) {
   for (const [id, job] of Object.entries(workflow?.jobs ?? {})) {
-    // Their macOS, Windows and Linux runners are checked by assertAntigravityPlatformJob and assertSystemKeyStoreJobs.
-    if (['antigravity-cli', 'system-key-store', 'system-key-store-linux'].includes(id)) continue;
+    // Their runners are checked by assertAntigravityPlatformJob, assertSystemKeyStoreJobs and assertContributorGuideJob.
+    if (['antigravity-cli', 'system-key-store', 'system-key-store-linux', 'contributor-guide'].includes(id)) continue;
     if (Object.hasOwn(NON_LINUX_VERIFICATION_JOBS, id)) {
       if (job['runs-on'] !== NON_LINUX_VERIFICATION_JOBS[id][0]) throw new Error(`${id} must run on ${NON_LINUX_VERIFICATION_JOBS[id][0]}: ${NON_LINUX_VERIFICATION_JOBS[id][1]}`);
     } else if (['production-build', 'release-safety'].includes(id)) {
@@ -592,6 +620,7 @@ export function assertFullWorkflowContract(workflows, { mainIntegration = false 
   if (!mainIntegration) {
     assertAntigravityPlatformJob(workflow);
     assertSystemKeyStoreJobs(workflow);
+    assertContributorGuideJob(workflow);
   }
   const gate = workflow.jobs.verification;
   if (gate?.name !== 'verification' || gate.if !== 'always()'

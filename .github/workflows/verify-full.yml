@@ -703,10 +703,46 @@ jobs:
       - name: Prove the system key against the real keyring and its fallbacks
         run: node scripts/check-system-key-store.mjs
 
+  # Follows docs/contributing/README.md word for word on Linux and macOS: a
+  # fresh clone of this commit, the install, the first checks, the throwaway
+  # app (it must answer, then stop on Ctrl+C) and the checks before a pull
+  # request, including the type check. The commands come from the guide
+  # itself, so the guide cannot drift from what works (#1441).
+  contributor-guide:
+    name: Contributor guide (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          # The guide clones the full history.
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '22.23.4'
+          cache: npm
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
+      - name: Follow the contributor guide in a fresh clone
+        run: node scripts/contributor-guide.mjs --report "${{ runner.temp }}/contributor-guide"
+      - name: Keep the walkthrough report and logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: contributor-guide-${{ matrix.os }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/contributor-guide/
+          if-no-files-found: error
+          retention-days: 30
+
   verification:
     name: verification
     if: always()
-    needs: [production-build, release-safety, typecheck, lint, test, test-isolated, workflow-contract, dependency-security, codeql, antigravity-cli, installed-windows-acceptance, image-acceptance, system-key-store, system-key-store-linux]
+    needs: [production-build, release-safety, typecheck, lint, test, test-isolated, workflow-contract, dependency-security, codeql, antigravity-cli, installed-windows-acceptance, image-acceptance, system-key-store, system-key-store-linux, contributor-guide]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

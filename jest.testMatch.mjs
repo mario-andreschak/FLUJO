@@ -82,6 +82,8 @@ export const ISOLATED_TEST_FILES = [
   '__tests__/model/claudeArchiveMemoryBoundary.test.ts',
   '__tests__/mcp/processBoundary.test.ts',
   '__tests__/mcp/stdioServers.test.ts',
+  // A real event server process that the checks kill, restart and hang on purpose.
+  '__tests__/mcp/realEventSource.test.ts',
   // A local authorization server, and the official conformance tool once per scenario.
   '__tests__/mcp/oauthReferenceServer.test.ts',
   '__tests__/mcp/mcpClientConformance.test.ts',

@@ -30,6 +30,7 @@ import nextEnv from '@next/env';
 import { loadBootstrapEnvironment } from './bootstrap-directory.mjs';
 import { applyExposureRuntimeEnv, withExposureHostname } from './exposure-mode.mjs';
 import { prepareLocalInstance, withLocalInstanceHostname, privateStorageFailureStage } from './local-instance.mjs';
+import { withScaledHeap } from '../bin/node-heap.mjs';
 
 const require = createRequire(import.meta.url);
 const { loadEnvConfig } = nextEnv;
@@ -83,6 +84,15 @@ export function buildLaunchEnv(baseEnv = process.env) {
   }
 
   return env;
+}
+
+/**
+ * Development compiles FLUJO's pages in the server process and needs more than Node's 2 GB
+ * default on computers with less than 15 GB of memory (#1441), so `dev` gets a heap that
+ * follows the machine. Other commands and a heap already set in NODE_OPTIONS stay as they are.
+ */
+export function withDevelopmentHeap(env, args) {
+  return args[0] === 'dev' ? { ...env, NODE_OPTIONS: withScaledHeap(env.NODE_OPTIONS) } : env;
 }
 
 function portFromNextArgs(args) {
@@ -141,7 +151,12 @@ async function launchNext(passthroughArgs) {
     FLUJO_APP_ROOT: process.env.FLUJO_APP_ROOT || process.cwd(),
     FLUJO_BASE_URL: process.env.FLUJO_BASE_URL || `http://127.0.0.1:${portFromNextArgs(passthroughArgs)}`,
   };
-  const env = applyExposureRuntimeEnv(buildLaunchEnv(baseEnv), process.cwd());
+  if (passthroughArgs[0] === 'dev') {
+    // A source checkout copies its bundled MCP packages into every new workspace.
+    const { ensureBundledMcpBuilt } = require('./bundled-mcp-build.cjs');
+    await ensureBundledMcpBuilt(baseEnv.FLUJO_APP_ROOT, { log: (line) => console.log(`[FLUJO] ${line}`) });
+  }
+  const env = applyExposureRuntimeEnv(withDevelopmentHeap(buildLaunchEnv(baseEnv), passthroughArgs), process.cwd());
   const nextArgs = withLocalInstanceHostname(withExposureHostname(withPort(passthroughArgs), env), env);
   const instance = await prepareLocalInstance({ env, args: nextArgs });
 

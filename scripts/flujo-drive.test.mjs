@@ -6,7 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
-  defaultDriveHome, evidencePath, isOwnedDataDir, main, parseArgs, parseViewport, routeUrl, stateFileFor, stopPlan, validateSteps,
+  defaultDriveHome, evidencePath, isOwnedDataDir, main, parseArgs, parseViewport, routeUrl, startupProblem, stateFileFor, stopPlan, validateSteps,
 } from './flujo-drive.mjs';
 
 const SCRIPT = fileURLToPath(new URL('./flujo-drive.mjs', import.meta.url));
@@ -18,6 +18,13 @@ test('arguments split into command, positional values and options', () => {
     positional: ['/flows'],
     options: { role: 'button', name: 'New agent', full: true, viewport: '360x800' },
   });
+});
+
+test('a start that keeps running out of memory is reported instead of waited on', () => {
+  const restart = '⚠ Server is approaching the used memory threshold, restarting...\n';
+  assert.equal(startupProblem(''), undefined);
+  assert.equal(startupProblem(`✓ Ready in 2.2s\n${restart}✓ Ready in 2.9s\n`), undefined, 'one restart can still finish');
+  assert.match(startupProblem(`${restart}${restart}${restart}`), /ran out of memory while compiling and restarted 3 times.*NODE_OPTIONS/);
 });
 
 test('viewports and routes are checked before a browser starts', () => {

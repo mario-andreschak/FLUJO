@@ -18,7 +18,7 @@
    ```
 
 2. Install dependencies and build the four built-in Connected Apps (MCP servers).
-   Without the second command they cannot start:
+   If you skip the second command, `npm run dev` builds them the first time:
    ```bash
    npm ci
    npm run build:mcp

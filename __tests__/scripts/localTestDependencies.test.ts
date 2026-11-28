@@ -6,7 +6,6 @@ const {
   REQUIRED_TEST_ARTIFACTS,
   assertSupportedTestRuntime,
   inspectLocalTestDependencies,
-  unbuiltMcpPackages,
   unsupportedTestRuntime,
 } = require('../../scripts/local-test-dependencies.cjs') as {
   REQUIRED_TEST_ARTIFACTS: ReadonlyArray<{
@@ -20,7 +19,6 @@ const {
     jestBin: string;
     issues: string[];
   };
-  unbuiltMcpPackages(root: string): string[];
   unsupportedTestRuntime(version?: string, executable?: string): string | null;
 };
 
@@ -130,17 +128,6 @@ describe('local test dependency isolation', () => {
     expect(unsupportedTestRuntime('22.23.4', 'node')).toBeNull();
     expect(unsupportedTestRuntime('24.22.1', 'node')).toBeNull();
     expect(() => assertSupportedTestRuntime(process.versions.node, process.execPath)).not.toThrow();
-  });
-
-  it('lists bundled MCP packages that still need npm run build:mcp', () => {
-    const servers = path.join(tempRoot, 'mcp-servers');
-    for (const name of ['shared', 'flujo', 'bash']) writeJson(path.join(servers, name, 'package.json'), { name });
-    fs.mkdirSync(path.join(servers, 'shared', 'dist'), { recursive: true });
-    fs.writeFileSync(path.join(servers, 'shared', 'dist', 'index.js'), '', 'utf8');
-    fs.mkdirSync(path.join(servers, 'notes'), { recursive: true });
-
-    expect(unbuiltMcpPackages(tempRoot)).toEqual(['bash', 'flujo']);
-    expect(unbuiltMcpPackages(path.join(tempRoot, 'missing'))).toEqual([]);
   });
 
   it('removes ancestor node_modules bins from the child PATH', () => {

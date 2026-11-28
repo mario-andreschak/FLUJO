@@ -45,7 +45,11 @@ All three modes:
   being idle);
 - show a note on the automation card when the server reports skipped events (`truncated` or
   a `gap`), when the connection is lost, or when the server ends the subscription, and clear
-  it on the next success. They keep trying with growing waits and never give up for good.
+  it on the next success. They keep trying with growing waits and never give up for good;
+- replace a connection that stopped answering. When a request gets no usable answer and the
+  server does not answer a ping either, FLUJO builds a new connection (a stdio server that
+  hangs is ended and started again) and tries once more. A server that still answers keeps
+  its own error, and the waits above apply.
 
 On Streamable HTTP with the newer client, every `events/*` request except `events/list`
 carries `Mcp-Name` and one `Mcp-Param-*` header per argument marked `x-mcp-header`, as the
@@ -121,7 +125,7 @@ Such a server declares `experimental['claude/channel']` and sends
 Like Claude Code, FLUJO keeps only `meta` keys made of letters, digits and underscores.
 
 - FLUJO keeps the server running and connected while the automation is on, and checks
-  the connection every few minutes.
+  the connection every few minutes. A connection that no longer answers a ping is replaced.
 - Messages go through the same steps as events: the same checks, the same "already seen"
   list, the same steering into a running conversation, and they reach the flow as untrusted
   data (`data.channel` and `data.messages`).
@@ -186,3 +190,10 @@ Declare the extension and implement `events/list` plus at least one mode: `event
 `eventId` and, if you can, a `cursor` on every event. `mcp-whatsapp-web` is a complete
 webhook example; `__tests__/mcp/mcpEventsPushPoll.test.ts` has a small push and poll server
 built on the official SDK.
+
+`__tests__/mcp/fixtures/eventSourceServer.mjs` is a complete server on the official SDK that
+runs as its own process, over stdio or Streamable HTTP: push, poll, Claude channel messages
+and resource notifications, with a history file so a restarted server replays from a cursor.
+`__tests__/mcp/realEventSource.test.ts` connects it through FLUJO's real connection code,
+kills it, restarts it and hangs it, and checks the run history, the card note, the server
+status and the resource list version.

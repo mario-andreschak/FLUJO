@@ -18,7 +18,7 @@ Run every command from the repository root, with Node 22.23+ and this
 checkout's own `npm ci`.
 
 ```
-npm run build:mcp                          # once per checkout; FLUJO cannot start without its built-in tool servers
+npm run build:mcp                          # optional: launch builds missing built-in tool servers itself the first time
 node scripts/flujo-drive.mjs launch        # free port, new empty data folder
 node scripts/flujo-drive.mjs warm          # compile every page once (dev mode); takes several minutes
 ```

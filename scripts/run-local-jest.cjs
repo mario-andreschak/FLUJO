@@ -4,8 +4,6 @@ const { spawn } = require('node:child_process');
 const {
   assertLocalTestDependencies,
   assertSupportedTestRuntime,
-  formatUnbuiltMcpNote,
-  unbuiltMcpPackages,
 } = require('./local-test-dependencies.cjs');
 const EXPECTED_TEST_FILES_ENV = 'FLUJO_JEST_EXPECTED_TEST_FILES';
 
@@ -145,9 +143,6 @@ function main() {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exit(1);
   }
-  const unbuilt = unbuiltMcpPackages(root);
-  if (unbuilt.length > 0) process.stderr.write(`${formatUnbuiltMcpNote(unbuilt)}\n`);
-
   const localBin = path.join(dependencies.nodeModules, '.bin');
   const { jestArgs, env: runnerEnv } = partitionRunnerFlags(
     jestArgsFromNpm(process.argv.slice(2), process.env),
