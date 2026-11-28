@@ -83,6 +83,29 @@ tester.run('no-raw-timers', rules['no-raw-timers'], {
   ],
 });
 
+tester.run('lazy-load-needs-boundary', rules['lazy-load-needs-boundary'], {
+  valid: [
+    "import { lazyOptional } from '@/frontend/lazy';\nconst RiverWorld = lazyOptional(() => import('./RiverWorld'), { name: 'RiverWorld' });",
+    "import { lazyEssential } from '@/frontend/lazy';\nconst Navigation = lazyEssential(() => import('./Navigation'), { name: 'Navigation', loading: () => null });",
+    "import { use, Suspense } from 'react';\nconst value = use(promise);",
+    "import { lazy } from './lazyHelpers';\nlazy(load);",
+    'cache.lazy(load);',
+  ],
+  invalid: [
+    {
+      code: "import dynamic from 'next/dynamic';\nconst RiverWorld = dynamic(() => import('./RiverWorld'), { ssr: false, loading: () => null });",
+      errors: [{ messageId: 'bareLazyLoad', data: { name: 'next/dynamic' } }],
+    },
+    { code: "import dynamicImport from 'next/dynamic';", errors: [{ messageId: 'bareLazyLoad', data: { name: 'next/dynamic' } }] },
+    { code: "import { lazy } from 'react';\nconst Dock = lazy(() => import('./Dock'));", errors: [{ messageId: 'bareLazyLoad', data: { name: 'React.lazy' } }] },
+    { code: "import { lazy as later } from 'react';\nlater(() => import('./Dock'));", errors: [{ messageId: 'bareLazyLoad', data: { name: 'React.lazy' } }] },
+    { code: "import React from 'react';\nconst Dock = React.lazy(() => import('./Dock'));", errors: [{ messageId: 'bareLazyLoad', data: { name: 'React.lazy' } }] },
+    { code: "import * as R from 'react';\nR.lazy(() => import('./Dock'));", errors: [{ messageId: 'bareLazyLoad', data: { name: 'React.lazy' } }] },
+    { code: "const dynamic = require('next/dynamic');", errors: [{ messageId: 'bareLazyLoad', data: { name: 'next/dynamic' } }] },
+    { code: "const { default: dynamic } = await import('next/dynamic');", errors: [{ messageId: 'bareLazyLoad', data: { name: 'next/dynamic' } }] },
+  ],
+});
+
 tester.run('no-sync-fs', rules['no-sync-fs'], {
   valid: [
     "import fs from 'node:fs/promises';\nawait fs.readFile(p);",

@@ -10,7 +10,6 @@ jest.mock('next/navigation', () => ({
   usePathname: () => mockPathname,
   useRouter: () => ({ replace: mockReplace, refresh: mockRefresh }),
 }));
-jest.mock('next/dynamic', () => ({ __esModule: true, default: () => () => null }));
 jest.mock('@/frontend/components/WorkspaceBootstrap', () => ({
   __esModule: true, default: jest.fn(() => <div data-testid="workspace-bootstrap" />),
 }));

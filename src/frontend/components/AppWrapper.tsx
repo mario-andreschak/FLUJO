@@ -2,9 +2,9 @@
 
 import React, { Suspense, useEffect, useState } from 'react';
 import { usePathname } from 'next/navigation';
-import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import LivingWorldGate from './AmbientWorld/LivingWorldGate';
+import { HealAfterChunkFailure, isChunkLoadError, lazyEssential, lazyOptional } from '@/frontend/lazy';
 import RouteStage from './shared/RouteStage';
 import { createLogger } from '@/utils/logger';
 import { I18nProvider, useI18n } from '@/frontend/contexts/I18nContext';
@@ -46,81 +46,62 @@ function AppLoading({ message = 'shell.loading.preparing', compact = false }: { 
   );
 }
 
-// Dynamically import components with loading fallbacks
-const ThemeProvider = dynamic(() => import('../contexts/ThemeContext').then(mod => mod.ThemeProvider), {
-  ssr: false,
-  loading: () => <AppLoading message="shell.loading.theme" />
+const ThemeProvider = lazyEssential(() => import('../contexts/ThemeContext').then(mod => mod.ThemeProvider), {
+  name: 'ThemeProvider',
+  loading: () => <AppLoading message="shell.loading.theme" />,
 });
 
-const StorageProvider = dynamic(() => import('../contexts/StorageContext').then(mod => mod.StorageProvider), {
-  ssr: false,
-  loading: () => <AppLoading message="shell.loading.workspace" />
+const StorageProvider = lazyEssential(() => import('../contexts/StorageContext').then(mod => mod.StorageProvider), {
+  name: 'StorageProvider',
+  loading: () => <AppLoading message="shell.loading.workspace" />,
 });
 
-const Navigation = dynamic(() => import("./Navigation"), {
-  ssr: false,
-  loading: () => <AppLoading message="shell.loading.navigation" compact />
+const Navigation = lazyEssential(() => import('./Navigation'), {
+  name: 'Navigation',
+  loading: () => <AppLoading message="shell.loading.navigation" compact />,
 });
 
-const EncryptionAuthDialog = dynamic(() => import("./EncryptionAuthDialog"), {
-  ssr: false,
-  loading: () => null
-});
-
-const TourProvider = dynamic(() => import('../contexts/TourContext').then(mod => mod.TourProvider), {
-  ssr: false,
-  loading: () => null
-});
-
-const TourOverlay = dynamic(() => import('./Tour/TourOverlay'), {
-  ssr: false,
-  loading: () => null
-});
-
-const TelemetryNotice = dynamic(() => import('./TelemetryNotice'), {
-  ssr: false,
-  loading: () => null
-});
-
-const BigTutorialOverlay = dynamic(() => import('./Tour/BigTutorialOverlay'), {
-  ssr: false,
+const TourProvider = lazyEssential(() => import('../contexts/TourContext').then(mod => mod.TourProvider), {
+  name: 'TourProvider',
   loading: () => null,
 });
 
-const AskFlujoDock = dynamic(() => import('./AskFlujo/AskFlujoDock'), {
-  ssr: false,
-  loading: () => null,
-});
+const EncryptionAuthDialog = lazyOptional(() => import('./EncryptionAuthDialog'), { name: 'EncryptionAuthDialog' });
+const TourOverlay = lazyOptional(() => import('./Tour/TourOverlay'), { name: 'TourOverlay' });
+const TelemetryNotice = lazyOptional(() => import('./TelemetryNotice'), { name: 'TelemetryNotice' });
+const BigTutorialOverlay = lazyOptional(() => import('./Tour/BigTutorialOverlay'), { name: 'BigTutorialOverlay' });
+const AskFlujoDock = lazyOptional(() => import('./AskFlujo/AskFlujoDock'), { name: 'AskFlujoDock' });
+const GlobalMcpAppsHost = lazyOptional(() => import('./mcp/GlobalMcpAppsHost'), { name: 'GlobalMcpAppsHost' });
 
-const GlobalMcpAppsHost = dynamic(() => import('./mcp/GlobalMcpAppsHost'), {
-  ssr: false,
-  loading: () => null,
-});
+interface ErrorBoundaryState {
+  failure: { error: unknown } | null;
+}
 
-// Error boundary component to catch chunk loading errors
-class ErrorBoundary extends React.Component<
-  { children: React.ReactNode },
-  { hasError: boolean }
-> {
-  constructor(props: { children: React.ReactNode }) {
-    super(props);
-    this.state = { hasError: false };
-  }
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, ErrorBoundaryState> {
+  state: ErrorBoundaryState = { failure: null };
 
-  static getDerivedStateFromError() {
-    return { hasError: true };
+  static getDerivedStateFromError(error: unknown): ErrorBoundaryState {
+    return { failure: { error } };
   }
 
   componentDidCatch(error: unknown) {
     log.error('AppWrapper error boundary caught an error:', error);
   }
 
-  render() {
-    if (this.state.hasError) {
-      return <AppErrorFallback />;
-    }
+  private healed = () => {
+    log.info('The workspace loaded again after a chunk failed to load');
+    this.setState({ failure: null });
+  };
 
-    return this.props.children;
+  render() {
+    const { failure } = this.state;
+    if (!failure) return this.props.children;
+    return (
+      <>
+        <AppErrorFallback />
+        {isChunkLoadError(failure.error) && <HealAfterChunkFailure onHealed={this.healed} />}
+      </>
+    );
   }
 }
 

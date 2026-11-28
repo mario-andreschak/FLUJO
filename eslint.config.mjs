@@ -118,6 +118,7 @@ export default defineConfig([
       'flujo/no-sync-fs': 'error',
       'flujo/single-tool-approval-gate': 'error',
       'flujo/mcp-feature-defaults': 'error',
+      'flujo/lazy-load-needs-boundary': 'error',
       '@typescript-eslint/ban-ts-comment': ['error', {
         'ts-expect-error': 'allow-with-description',
         'ts-ignore': true,
