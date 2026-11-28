@@ -218,18 +218,14 @@ const DevCanvasDock: React.FC<DevCanvasDockProps> = ({
   const columns = Math.max(1, Math.ceil(Math.sqrt(visibleKeys.length)));
 
   // A closed tab must not leave stale capabilities behind. If a split/tab
-  // change makes the current fullscreen presentation invalid, exit promptly.
-  useEffect(() => {
-    setAppModesByKey((previous) => {
-      const next = Object.fromEntries(
-        Object.entries(previous).filter(([key]) => liveKeys.has(key)),
-      );
-      return Object.keys(next).length === Object.keys(previous).length ? previous : next;
-    });
-  }, [liveKeys]);
-  useEffect(() => {
-    if (fullscreen && !fullscreenAvailable) setFullscreen(false);
-  }, [fullscreen, fullscreenAvailable]);
+  // change makes the current fullscreen presentation invalid, exit at once.
+  // Both are settled while rendering, before anything paints.
+  if (Object.keys(appModesByKey).some((key) => !liveKeys.has(key))) {
+    setAppModesByKey((previous) => Object.fromEntries(
+      Object.entries(previous).filter(([key]) => liveKeys.has(key)),
+    ));
+  }
+  if (fullscreen && !fullscreenAvailable) setFullscreen(false);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;

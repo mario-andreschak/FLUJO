@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Box } from '@mui/material';
+import { useKeyedState } from './hooks/useKeyedState';
 
 export interface FloatingRect {
   x: number;
@@ -134,13 +135,10 @@ export function useFixedOriginOffset(
   ref: React.RefObject<HTMLElement | null>,
   active: boolean,
 ): { x: number; y: number } {
-  const [offset, setOffset] = useState<{ x: number; y: number }>(ZERO_OFFSET);
+  const [offset, setOffset] = useKeyedState<{ x: number; y: number }>(active, ZERO_OFFSET);
 
   useEffect(() => {
-    if (!active || typeof window === 'undefined') {
-      setOffset((current) => (current.x === 0 && current.y === 0 ? current : ZERO_OFFSET));
-      return undefined;
-    }
+    if (!active || typeof window === 'undefined') return undefined;
     const measure = () => {
       const next = fixedOriginOffset(ref.current);
       setOffset((current) => (current.x === next.x && current.y === next.y ? current : next));

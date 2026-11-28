@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Box, Typography, Button, Collapse, CircularProgress, Alert, Tooltip, useTheme } from '@mui/material';
 import WidgetsIcon from '@mui/icons-material/Widgets';
 import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined';
@@ -34,7 +34,7 @@ import type {
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import { mcpService } from '@/frontend/services/mcp';
-import { makeMcpAppClient } from './mcpAppClient';
+import { routeMcpAppRequests } from './mcpAppClient';
 import {
   MAX_UI_RESOURCE_BYTES,
   canonicalizeLoopbackCspOrigin,
@@ -54,10 +54,26 @@ import {
   resizeFloatingRect,
   useFixedOriginOffset,
   usePointerDrag,
+  type FloatingRect,
   type ResizeDirection,
 } from './floatingPanel';
+import { useKeyedState } from './hooks/useKeyedState';
+import { withDeadline } from './deadline';
+import { useTimeout } from '@/frontend/hooks/timing';
 
 const log = createLogger('frontend/components/Chat/McpAppFrame');
+
+/** The fullscreen app window before it is moved: centered, most of the viewport. */
+function centeredFloatingRect(viewportWidth: number, viewportHeight: number): FloatingRect {
+  const width = Math.min(Math.max(520, Math.round(viewportWidth * 0.86)), viewportWidth - 24);
+  const height = Math.min(Math.max(360, Math.round(viewportHeight * 0.84)), viewportHeight - 24);
+  return {
+    x: Math.round((viewportWidth - width) / 2),
+    y: Math.round((viewportHeight - height) / 2),
+    width,
+    height,
+  };
+}
 
 /** Must match backend/mcpApps/sandboxServer.ts. */
 const SANDBOX_PROXY_READY = 'ui/notifications/sandbox-proxy-ready';
@@ -881,31 +897,27 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [consentStatus, setConsentStatus] = useState<'loading' | 'internal' | 'granted' | 'prompt' | 'denied'>(
+  // Each app, conversation and policy answer asks for consent from scratch.
+  const consentKey = JSON.stringify([consentPolicyReady, consentRequired, conversationId ?? null, serverName, uri]);
+  const [consentStatus, setConsentStatus] = useKeyedState<'loading' | 'internal' | 'granted' | 'prompt' | 'denied'>(
+    consentKey,
     consentPolicyReady && !consentRequired ? 'granted' : 'loading',
   );
   const [consentSaving, setConsentSaving] = useState(false);
-  const [consentError, setConsentError] = useState<string | null>(null);
-  const reloadAllowedRef = useRef(false);
-  reloadAllowedRef.current = consentPolicyReady
+  const [consentError, setConsentError] = useKeyedState<string | null>(consentKey, null);
+  const reloadAllowed = consentPolicyReady
     && (consentStatus === 'internal' || consentStatus === 'granted')
     && (docked || expanded);
+  // Async continuations read the latest answer; it is copied after each commit, never while rendering.
+  const reloadAllowedRef = useRef(reloadAllowed);
+  useLayoutEffect(() => { reloadAllowedRef.current = reloadAllowed; });
   // #375: mirrors `error` without triggering re-renders, so async continuations
   // (handshake handoff) can cheaply check "did this frame already fail?".
   const errorRef = useRef<string | null>(null);
   useEffect(() => { errorRef.current = error; }, [error]);
   useEffect(() => {
-    if (!consentPolicyReady) {
-      setConsentStatus('loading');
-      return undefined;
-    }
-    if (!consentRequired) {
-      setConsentStatus('granted');
-      setConsentError(null);
-      return undefined;
-    }
+    if (!consentPolicyReady || !consentRequired) return undefined;
     let active = true;
-    setConsentStatus('loading');
     const params = new URLSearchParams({ serverName, uri });
     if (conversationId) params.set('conversationId', conversationId);
     void fetch(`/api/mcp/app-consent?${params}`)
@@ -917,7 +929,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       })
       .catch(() => { if (active) setConsentStatus('denied'); });
     return () => { active = false; };
-  }, [consentPolicyReady, consentRequired, conversationId, serverName, uri]);
+  }, [consentKey]);
   const decideConsent = useCallback(async (decision: 'allow-once' | 'allow-always' | 'deny-always') => {
     setConsentSaving(true);
     setConsentError(null);
@@ -950,13 +962,21 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
     }
   }, [serverName, t, uri]);
   const [displayMode, setDisplayMode] = useState<McpUiDisplayMode>(docked ? 'pip' : 'inline');
-  const [floatingRect, setFloatingRect] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  // Where the person moved or resized the fullscreen window; until then it is centered.
+  const [placedFloatingRect, setFloatingRect] = useState<FloatingRect | null>(null);
   const [appDisplayModes, setAppDisplayModes] = useState<McpUiDisplayMode[]>([]);
   // Apps that paint their own window chrome opt out of FLUJO's decorative frame.
   const [chromeless, setChromeless] = useState(false);
+  // Set by a bridge request that moves the View to the dock; the hand-off runs
+  // once that request has been answered.
+  const [dockHandoffRequested, setDockHandoffRequested] = useState(false);
   const previousDefaultExpandedRef = useRef(defaultExpanded);
   const { activeCursor, startPointerDrag } = usePointerDrag();
   const effectiveDisplayMode = hostDisplayMode ?? displayMode;
+  const floatingRect = placedFloatingRect
+    ?? (!docked && effectiveDisplayMode === 'fullscreen' && typeof window !== 'undefined'
+      ? centeredFloatingRect(window.innerWidth, window.innerHeight)
+      : null);
   const hostDisplayModes = useMemo<McpUiDisplayMode[]>(
     () => docked
       ? ['pip', 'fullscreen']
@@ -986,7 +1006,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   const previousToolNameRef = useRef(toolName);
   const ownerScopeRef = useRef(ownerScope);
   const previousOwnerScopeRef = useRef(ownerScope);
-  ownerScopeRef.current = ownerScope;
+  useLayoutEffect(() => { ownerScopeRef.current = ownerScope; });
   const toolDeliveryChainRef = useRef<Promise<void>>(Promise.resolve());
   const lastDeliveryRef = useRef<string | number | undefined>(undefined);
   const latestToolDeliveryRef = useRef({
@@ -997,21 +1017,6 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
     isError: toolIsError,
     updateId: toolUpdateId,
   });
-
-  useEffect(() => {
-    if (docked || effectiveDisplayMode !== 'fullscreen' || typeof window === 'undefined') return;
-    setFloatingRect((current) => {
-      if (current) return current;
-      const width = Math.min(Math.max(520, Math.round(window.innerWidth * 0.86)), window.innerWidth - 24);
-      const height = Math.min(Math.max(360, Math.round(window.innerHeight * 0.84)), window.innerHeight - 24);
-      return {
-        x: Math.round((window.innerWidth - width) / 2),
-        y: Math.round((window.innerHeight - height) / 2),
-        width,
-        height,
-      };
-    });
-  }, [docked, effectiveDisplayMode]);
 
   useEffect(() => {
     if (docked || effectiveDisplayMode !== 'fullscreen' || typeof window === 'undefined') return undefined;
@@ -1087,15 +1092,18 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   // lands exactly where the pointer is.
   const fixedOffset = useFixedOriginOffset(frameRootRef, displayMode === 'fullscreen' && !docked);
 
-  latestToolDeliveryRef.current = {
-    toolName,
-    args: toolArgs,
-    resultContent: toolResultContent,
-    cancelledReason: toolCancelledReason,
-    isError: toolIsError,
-    updateId: toolUpdateId,
-  };
-  toolNameRef.current = toolName;
+  // The bridge reads the newest tool delivery after its handshake settles.
+  useLayoutEffect(() => {
+    latestToolDeliveryRef.current = {
+      toolName,
+      args: toolArgs,
+      resultContent: toolResultContent,
+      cancelledReason: toolCancelledReason,
+      isError: toolIsError,
+      updateId: toolUpdateId,
+    };
+    toolNameRef.current = toolName;
+  });
   // Always call the latest callback without remounting the bridge on prop change.
   const onAppMessageRef = useRef(onAppMessage);
   useEffect(() => { onAppMessageRef.current = onAppMessage; }, [onAppMessage]);
@@ -1151,18 +1159,14 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
 
     const pending = (async () => {
       if (bridge && wasInitialized) {
-        let timeout: ReturnType<typeof setTimeout> | undefined;
         try {
-          await Promise.race([
+          await withDeadline<unknown>(
             bridge.teardownResource({}, { timeout: RESOURCE_TEARDOWN_TIMEOUT_MS }),
-            new Promise<void>((resolve) => {
-              timeout = setTimeout(resolve, RESOURCE_TEARDOWN_TIMEOUT_MS);
-            }),
-          ]);
+            RESOURCE_TEARDOWN_TIMEOUT_MS,
+            () => undefined,
+          );
         } catch (teardownError) {
           log.debug('MCP App did not acknowledge resource teardown', teardownError);
-        } finally {
-          if (timeout) clearTimeout(timeout);
         }
       }
 
@@ -1285,24 +1289,23 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       const sandboxUrl = new URL(sandboxBase.href);
       if (app.csp) sandboxUrl.searchParams.set('csp', JSON.stringify(app.csp));
       const expectedSandboxOrigin = sandboxUrl.origin;
-      const proxyReady = new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          window.removeEventListener('message', onMsg);
-          reject(new Error(t('chat.app.proxyTimeout')));
-        }, PROXY_READY_TIMEOUT_MS);
-        const onMsg = (ev: MessageEvent) => {
-          if (
-            ev.source === iframe.contentWindow
-            && ev.origin === expectedSandboxOrigin
-            && ev.data?.jsonrpc === '2.0'
-            && ev.data?.method === SANDBOX_PROXY_READY
-          ) {
-            clearTimeout(timer);
-            window.removeEventListener('message', onMsg);
-            resolve();
-          }
-        };
-        window.addEventListener('message', onMsg);
+      let onProxyMessage: ((ev: MessageEvent) => void) | undefined;
+      const proxyReady = withDeadline(
+        new Promise<void>((resolve) => {
+          onProxyMessage = (ev: MessageEvent) => {
+            if (
+              ev.source === iframe.contentWindow
+              && ev.origin === expectedSandboxOrigin
+              && ev.data?.jsonrpc === '2.0'
+              && ev.data?.method === SANDBOX_PROXY_READY
+            ) resolve();
+          };
+          window.addEventListener('message', onProxyMessage);
+        }),
+        PROXY_READY_TIMEOUT_MS,
+        () => { throw new Error(t('chat.app.proxyTimeout')); },
+      ).finally(() => {
+        if (onProxyMessage) window.removeEventListener('message', onProxyMessage);
       });
 
       iframe.src = sandboxUrl.href;
@@ -1329,8 +1332,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
         });
       };
       const bridge = new AppBridge(
-        makeMcpAppClient(serverName, ownerScopeRef.current, revokeAccess, mcpService,
-          tool => log.info(`MCP App tools/call: ${serverName}/${tool}`)),
+        null,
         HOST_INFO,
         {
           openLinks: {},
@@ -1372,6 +1374,8 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
           },
         },
       );
+      routeMcpAppRequests(bridge, serverName, ownerScopeRef.current, revokeAccess, mcpService,
+        tool => log.info(`MCP App tools/call: ${serverName}/${tool}`));
       bridgeRef.current = bridge;
       const isActiveBridge = () => (
         isCurrentMount()
@@ -1415,6 +1419,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
             document.body.appendChild(a);
             a.click();
             a.remove();
+            // eslint-disable-next-line flujo/no-raw-timers -- the browser needs the object URL until the download has started, it must outlive this View, and no event says when that is
             setTimeout(() => URL.revokeObjectURL(objUrl), 4000);
           }
           return {};
@@ -1483,7 +1488,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
           && !dockedRef.current
           && onRequestDockRef.current
         ) {
-          setTimeout(handoffToDock, 0);
+          setDockHandoffRequested(true);
           return { mode: current };
         }
         let actual = current;
@@ -1558,7 +1563,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
           && !dockedRef.current
           && onRequestDockRef.current
         ) {
-          setTimeout(handoffToDock, 0);
+          setDockHandoffRequested(true);
         }
 
         displayModeRef.current = verifiedDisplayMode;
@@ -1665,12 +1670,10 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
       void bridgeRef.current?.sendHostContextChange({ displayMode: 'inline' });
     }
     if (next) onUserOpen?.();
+    // Opening with consent mounts through the auto-mount below, once the
+    // Collapse has rendered its container.
     setExpanded(next);
-    if (next && (consentStatus === 'internal' || consentStatus === 'granted')) {
-      // Mount after the Collapse has rendered its container.
-      setTimeout(() => { void mount(); }, 0);
-    }
-  }, [consentStatus, expanded, mount, onUserOpen]);
+  }, [expanded, onUserOpen]);
 
   // Existing transcript launchers normally hydrate collapsed. When a newly
   // completed live result is later marked eligible for auto-launch, react to the
@@ -1688,16 +1691,20 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
     if (docked && (consentStatus === 'internal' || consentStatus === 'granted') && !mountedRef.current) void mount();
   }, [consentStatus, docked, mount]);
 
-  // An opted-in app should be visible without a second consent-like click.
-  // Wait for the expanded container to exist, then mount exactly as the manual
-  // toggle does. The docked path above remains independently auto-mounted.
-  useEffect(() => {
-    if (!docked && (consentStatus === 'internal' || consentStatus === 'granted') && expanded && !mountedRef.current) {
-      const timer = window.setTimeout(() => { void mount(); }, 0);
-      return () => window.clearTimeout(timer);
-    }
-    return undefined;
-  }, [consentStatus, defaultExpanded, docked, expanded, mount]);
+  // An opened app (by a click or because it opted in) should be visible
+  // without a second consent-like click. Mount right after the expanded
+  // container exists. The docked path above remains independently auto-mounted.
+  useTimeout(
+    () => { if (!mountedRef.current) void mount(); },
+    !docked && (consentStatus === 'internal' || consentStatus === 'granted') && expanded ? 0 : null,
+    mount,
+  );
+
+  // The bridge answers the View's request first; the hand-off to the dock follows.
+  useTimeout(() => {
+    setDockHandoffRequested(false);
+    handoffToDock();
+  }, dockHandoffRequested ? 0 : null);
 
   // The proxy iframe used to keep its original 200px inline height after the
   // host entered fullscreen, leaving a large blank panel around terminals and

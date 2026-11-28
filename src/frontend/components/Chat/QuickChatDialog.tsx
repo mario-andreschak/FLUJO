@@ -32,6 +32,7 @@ import type { Model } from '@/shared/types/model';
 import { materializeFallbackPolicy } from '@/shared/types/model/fallbackPolicy';
 import { createLogger } from '@/utils/logger';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useKeyChange } from './hooks/useKeyedState';
 
 const log = createLogger('frontend/components/Chat/QuickChatDialog');
 
@@ -97,14 +98,24 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
   const [models, setModels] = useState<Model[]>([]);
   const [needsToolModel, setNeedsToolModel] = useState(false);
   const [serverNames, setServerNames] = useState<string[]>([]);
-  const [loadingLists, setLoadingLists] = useState(false);
+  const [listAttempt, setListAttempt] = useState(0);
+  const listRequestKey = open
+    ? JSON.stringify([listAttempt, selectApps, connectedServersOnly, initialModelId ?? null])
+    : null;
+  const [loadingLists, setLoadingLists] = useState(listRequestKey !== null);
   const [listsLoaded, setListsLoaded] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
-  const [listAttempt, setListAttempt] = useState(0);
   const toolLoadGeneration = useRef(0);
+  // Every list request starts as loading; closing keeps the lists for the exit animation.
+  useKeyChange(listRequestKey, () => {
+    if (listRequestKey === null) return;
+    setLoadingLists(true);
+    setListsLoaded(false);
+    setListError(null);
+  });
 
-  const [modelId, setModelId] = useState<string>('');
-  const [flowName, setFlowName] = useState<string>('');
+  const [modelId, setModelId] = useState<string>(open ? initialModelId ?? '' : '');
+  const [flowName, setFlowName] = useState<string>(open ? initialFlowName ?? '' : '');
   const [systemPrompt, setSystemPrompt] = useState<string>('');
   const [picks, setPicks] = useState<Record<string, ServerPick>>({});
   const [starting, setStarting] = useState(false);
@@ -114,9 +125,6 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    setLoadingLists(true);
-    setListsLoaded(false);
-    setListError(null);
     (async () => {
       try {
         const [loadedModels, serverConfigs] = await Promise.all([
@@ -166,7 +174,7 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
   useEffect(() => () => { toolLoadGeneration.current += 1; }, [open]);
 
   // Initialize conversion defaults on open and reset transient state on close.
-  useEffect(() => {
+  useKeyChange(open ? JSON.stringify([initialModelId ?? null, initialFlowName ?? null]) : null, () => {
     if (open) {
       setModelId(initialModelId ?? '');
       setFlowName(initialFlowName ?? '');
@@ -177,7 +185,7 @@ const QuickChatDialog: React.FC<QuickChatDialogProps> = ({
     setPicks({});
     setStartError(null);
     setStarting(false);
-  }, [initialFlowName, initialModelId, open]);
+  });
 
   const toggleServer = useCallback((name: string) => {
     setPicks(prev => {

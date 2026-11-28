@@ -29,6 +29,21 @@ export type ChatMessage = FlujoChatMessage & {
   attachments?: Attachment[];
 };
 
+/**
+ * One part of a message as the chat sends it: OpenAI's text, image and audio
+ * parts, plus the audio, video and file parts (with their media type) that
+ * FLUJO's model adapters read.
+ */
+export type ApiContentPart =
+  | OpenAI.ChatCompletionContentPartText
+  | OpenAI.ChatCompletionContentPartImage
+  | OpenAI.ChatCompletionContentPartInputAudio
+  | { type: 'audio_url'; audio_url: { url: string; mime_type?: string } }
+  | { type: 'video_url'; video_url: { url: string; mime_type?: string } }
+  | { type: 'file'; file: { file_data: string; filename?: string; mime_type?: string } };
+
+export type ApiContent = string | ApiContentPart[];
+
 const UNIT_WORDS: Record<string, string> = { page: 'pages', slide: 'slides', sheet: 'sheets', file: 'files', character: 'characters' };
 
 function shortenedText(note: AttachmentNote): string {
@@ -87,9 +102,9 @@ function documentBlock(attachment: Attachment, note: AttachmentNote): string {
  */
 export function buildApiContent(
   msg: ChatMessage,
-): OpenAI.ChatCompletionUserMessageParam['content'] {
+): ApiContent {
   if (Array.isArray(msg.content)) {
-    return msg.content as OpenAI.ChatCompletionUserMessageParam['content'];
+    return msg.content as ApiContentPart[];
   }
 
   let text = typeof msg.content === 'string' ? msg.content : '';
@@ -111,7 +126,7 @@ export function buildApiContent(
     return text;
   }
 
-  const parts: Array<Record<string, unknown>> = [];
+  const parts: ApiContentPart[] = [];
   if (text.trim()) parts.push({ type: 'text', text });
 
   for (const attachment of media) {
@@ -163,5 +178,5 @@ export function buildApiContent(
     }
   }
 
-  return parts as unknown as OpenAI.ChatCompletionUserMessageParam['content'];
+  return parts;
 }

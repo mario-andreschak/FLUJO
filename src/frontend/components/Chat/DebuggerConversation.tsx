@@ -51,10 +51,10 @@ const DebuggerConversation: React.FC<DebuggerConversationProps> = ({
   const { systemMessage, wireMessages, provenance, counts, inputMode } = modelInput;
 
   // The system message gets its own prominent block; the chat render shows the
-  // conversation body only. wireMessages is FlujoChatMessage[] which is a
-  // superset of ChatMessage, so it feeds ChatMessages directly.
-  const wireBody = useMemo(
-    () => ((wireMessages || []).filter((m) => m.role !== 'system') as unknown as ChatMessage[]),
+  // conversation body only. A ChatMessage is a FlujoChatMessage that may also
+  // carry attachments, so wireMessages feed ChatMessages directly.
+  const wireBody = useMemo<ChatMessage[]>(
+    () => (wireMessages || []).filter((m) => m.role !== 'system'),
     [wireMessages],
   );
 

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Alert,
   Box,
@@ -16,6 +16,7 @@ import type { FlujoChatMessage } from '@/shared/types/chat';
 import type { ModelTurnSnapshot } from '@/shared/types/modelTurn';
 import { chatService } from '@/frontend/services/chat';
 import ModelTurnJsonPreview from './ModelTurnJsonPreview';
+import { useKeyedState } from './hooks/useKeyedState';
 import { ArchivedModelTurnValue, isModelTurnInspection, type ModelTurnView } from '@/frontend/services/chat/modelTurnInspection';
 
 export type ModelTurnInspectorTab = 'canonical' | 'wire' | 'request' | 'archive';
@@ -145,10 +146,7 @@ function CodeToken({
 
 function RequestCodeCanvas({ snapshot }: { snapshot: ModelTurnView }) {
   const invocation = useMemo(() => invocationView(snapshot), [snapshot]);
-  const [selectedName, setSelectedName] = useState(invocation.parameters[0]?.name ?? 'request');
-  useEffect(() => {
-    setSelectedName(invocation.parameters[0]?.name ?? 'request');
-  }, [invocation]);
+  const [selectedName, setSelectedName] = useKeyedState(invocation, invocation.parameters[0]?.name ?? 'request');
   const selected = invocation.parameters.find(parameter => parameter.name === selectedName)
     ?? invocation.parameters[0];
 
@@ -220,8 +218,7 @@ function MessageList({
   messages: ReadonlyArray<FlujoChatMessage | object>;
   provenance?: ModelTurnSnapshot['provenance'];
 }) {
-  const [page, setPage] = useState(0);
-  useEffect(() => { setPage(0); }, [messages]);
+  const [page, setPage] = useKeyedState(messages, 0);
   const visible = useMemo(() => messages.slice(page * 16, (page + 1) * 16), [messages, page]);
   const statusById = useMemo(() => {
     const ids = new Set(visible.map(message => (message as Record<string, unknown>).id));
@@ -233,9 +230,8 @@ function MessageList({
   return (
     <Box sx={{ display: 'grid', gap: 1.25 }}>
       {visible.map((message, index) => {
-        const record = message as unknown as Record<string, unknown>;
-        const id = typeof record.id === 'string' ? record.id : undefined;
-        const role = typeof record.role === 'string' ? record.role : 'unknown';
+        const id = 'id' in message && typeof message.id === 'string' ? message.id : undefined;
+        const role = 'role' in message && typeof message.role === 'string' ? message.role : 'unknown';
         const status = id ? statusById.get(id) : undefined;
         return (
           <Paper key={id ?? index} variant="outlined" sx={{ overflow: 'hidden' }}>
@@ -260,7 +256,7 @@ function MessageList({
               </Typography>
             </Box>
             <Divider />
-            <ModelTurnJsonPreview value={record} />
+            <ModelTurnJsonPreview value={message} />
           </Paper>
         );
       })}
