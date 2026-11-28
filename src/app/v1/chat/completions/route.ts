@@ -8,6 +8,7 @@ import { createLogger } from '@/utils/logger';
 import { processChatCompletion } from './chatCompletionService';
 import { beginExternalChatTurn, isExternalChatRequest, type ExternalChatTurn } from './externalChatContinuity';
 import {
+  InvalidApprovalMetadataError,
   InvalidPersonaChatMetadataError,
   parseRequestParameters,
   ChatCompletionRequest,
@@ -226,9 +227,10 @@ async function handleRequest(request: NextRequest, ingress: ChatIngressPermit) {
     const duration = Date.now() - startTime;
     const ingressError = isChatIngressError(error);
     const unsupportedTool = error instanceof UnsupportedOpenAIToolTypeError;
-    const invalidPersonaMetadata = error instanceof InvalidPersonaChatMetadataError;
+    const invalidMetadata = error instanceof InvalidPersonaChatMetadataError || error instanceof InvalidApprovalMetadataError ? error : undefined;
+    const invalidPersonaMetadata = invalidMetadata !== undefined;
     const errorCode = ingressError ? error.code : unsupportedTool ? 'unsupported_tool_type'
-      : invalidPersonaMetadata ? 'invalid_persona_metadata' : 'internal_error';
+      : invalidMetadata ? invalidMetadata.code : 'internal_error';
     log.error('Error handling request', {
       requestId,
       // Error messages/stacks can contain arbitrary wire values (including a

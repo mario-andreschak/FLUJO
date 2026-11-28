@@ -79,6 +79,12 @@ interface ChatInputProps {
   requireApproval?: boolean;
   onRequireApprovalChange?: (checked: boolean) => void;
   /**
+   * Whether "Require tool approvals" can be changed. Defaults to `disabled`.
+   * The chat keeps it usable while a card waits or the debugger pauses: a
+   * change then applies to the next batch (#1284).
+   */
+  approvalSettingDisabled?: boolean;
+  /**
    * THE debugger control (one button, not two).
    *
    * There used to be a "Run in debugger" checkbox here AND an "Attach debugger"
@@ -126,6 +132,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
   placeholder,
   requireApproval = false,
   onRequireApprovalChange,
+  approvalSettingDisabled,
   debuggerOpen = false,
   onToggleDebugger,
   availableNodes = [],
@@ -1400,7 +1407,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
                   checked={requireApproval}
                   onChange={(e) => onRequireApprovalChange(e.target.checked)}
                   size="small"
-                  disabled={disabled}
+                  disabled={approvalSettingDisabled ?? disabled}
                 />
               }
               label={<Typography variant="caption">{t('chat.input.requireApprovals')}</Typography>}
@@ -1490,7 +1497,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
               <Checkbox
                 checked={requireApproval}
                 onChange={(e) => onRequireApprovalChange(e.target.checked)}
-                disabled={disabled}
+                disabled={approvalSettingDisabled ?? disabled}
               />
             }
             label={t('chat.input.requireApprovals')}

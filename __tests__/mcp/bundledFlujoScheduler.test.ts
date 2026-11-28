@@ -1,16 +1,11 @@
 import { resolveBundledFlujoWorkloadRequest, withBundledFlujoWorkloadAuthorization } from '@/backend/services/security/bundledFlujoWorkload';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { getCurrentWorkspace, getWorkspaceDir } from '@/utils/workspace';
-import { createShippedServerConfig, SHIPPED_MCP_SERVERS } from '@/backend/services/mcp/shippedServers';
-import { ensureShippedWorkspacePackages } from '@/backend/services/mcp/shippedWorkspacePackages';
-import { saveConfig } from '@/backend/services/mcp/config';
-import { previewBundledHostConsent, approveBundledHostConsent } from '@/backend/services/security/bundledMcpConsent';
+import { getCurrentWorkspace } from '@/utils/workspace';
 import { attachTrustedHost } from '@/backend/services/mcp/trustedHost';
 import { prepareBundledFlujoWorkload, getPendingWorkloadEnvironment } from '@/backend/services/security/bundledFlujoWorkload';
-import { installBundledFixtureOwner } from './fixtures/bundledFixtureOwner';
+import { APPROVED_BUNDLED_FLUJO_SETUP_MS, installApprovedBundledFlujo, type ApprovedBundledFlujo } from './fixtures/approvedBundledFlujo';
 import { unlockPrivateFixtureInCurrentWorkspace } from '../utils/privateProfileFixture';
 
 import { SchedulerService } from '@/backend/services/scheduler';
@@ -52,7 +47,40 @@ jest.mock('@/backend/services/scheduler/triggers/schedule', () => ({
   },
 }));
 
-test.each(['unchanged', 'disabled', 'replaced', 'state-publication-disabled', 'retired-during-state-guard'] as const)('committed schedule outlives its real request token and honors durable %s admission', async mode => {
+// Each committed schedule re-checks fresh workload authority before every
+// durable write, and on Windows every check starts native permission checks:
+// 37-49 s per case on a busy PC on its own, and up to twice that beside
+// another worker. The limit leaves room for both.
+const SCHEDULER_CASE_MS = 240_000;
+// Cancel early enough that retirement and cleanup still finish in time.
+const SCHEDULER_CLEANUP_MS = 20_000;
+
+describe('committed schedule outlives its real request token', () => {
+let consent!: ApprovedBundledFlujo;
+const priorDek = global.__flujo_server_dek;
+const priorSessions = global.__flujo_encryption_sessions;
+beforeAll(async () => {
+  global.__flujo_server_dek = undefined;
+  global.__flujo_encryption_sessions = undefined;
+  const startedAt = performance.now();
+  consent = await installApprovedBundledFlujo({
+    prefix: 'flujo-workload-control-',
+    env: { FLUJO_ENCRYPTION_SECRET_FILE: undefined },
+    beforeProvision: () => unlockPrivateFixtureInCurrentWorkspace(),
+    timed: async (stage, operation) => {
+      console.info('[workload-scheduler]', 'setup', stage, 'start', Math.round(performance.now() - startedAt));
+      try { return await operation(); } finally { console.info('[workload-scheduler]', 'setup', stage, 'settled', Math.round(performance.now() - startedAt)); }
+    },
+  });
+}, APPROVED_BUNDLED_FLUJO_SETUP_MS);
+afterAll(async () => {
+  try { await consent?.remove(); } finally {
+    global.__flujo_server_dek = priorDek;
+    global.__flujo_encryption_sessions = priorSessions;
+  }
+});
+
+test.each(['unchanged', 'disabled', 'replaced', 'state-publication-disabled', 'retired-during-state-guard'] as const)('honors durable %s admission', async mode => {
   mockRunFlow.mockClear();
   const startedAt = performance.now();
   const timed = async <T,>(stage: string, operation: () => Promise<T>): Promise<T> => {
@@ -62,51 +90,17 @@ test.each(['unchanged', 'disabled', 'replaced', 'state-publication-disabled', 'r
     }
   };
   const cancellation = new AbortController();
-  const deadline = setTimeout(() => cancellation.abort(new Error('Workload scheduler fixture cancellation deadline.')), 55_000);
+  const deadline = setTimeout(() => cancellation.abort(new Error('Workload scheduler fixture cancellation deadline.')), SCHEDULER_CASE_MS - SCHEDULER_CLEANUP_MS);
   mockTimerCompleted = undefined;
   mockTimerGate = new Promise(resolve => { mockReleaseTimer = resolve; });
   mockTimerObserved = new Promise(resolve => { mockTimerEntered = resolve; });
-  const names = ['FLUJO_APP_ROOT', 'FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR', 'FLUJO_BASE_URL', 'FLUJO_WORKER_MODE', 'FLUJO_ENCRYPTION_SECRET_FILE'];
-  const saved = Object.fromEntries(names.map(name => [name, process.env[name]]));
-  const priorDek = global.__flujo_server_dek;
-  const priorSessions = global.__flujo_encryption_sessions;
-  const parent = path.resolve(process.platform === 'win32' ? process.env.LOCALAPPDATA ?? os.tmpdir() : os.tmpdir());
-  const fixture = fs.mkdtempSync(path.join(parent, 'flujo-workload-control-'));
-  const application = path.join(fixture, 'application');
-  const write = (relative: string, content: string) => {
-    const filename = path.join(application, relative); fs.mkdirSync(path.dirname(filename), { recursive: true }); fs.writeFileSync(filename, content);
-  };
-  let owner: ReturnType<typeof installBundledFixtureOwner> | undefined;
+  const approved = { config: consent.approved };
   let scheduler: SchedulerService | undefined;
   let executionId = '';
   let primaryError: unknown;
   let failed = false;
   let transport: { start(): Promise<void>; close(): Promise<void> } | undefined;
   try {
-    process.env.FLUJO_APP_ROOT = application; process.env.FLUJO_DATA_DIR = path.join(fixture, 'data');
-    process.env.FLUJO_BASE_URL = 'http://127.0.0.1:4200'; delete process.env.FLUJO_PARENT_DATA_DIR; delete process.env.FLUJO_WORKER_MODE;
-    const descriptor = SHIPPED_MCP_SERVERS.find(item => item.packageDirectory === 'flujo')!;
-    write('package.json', '{"name":"flujo-ai","version":"1.0.0"}');
-    write('node_modules/fixture-dependency/package.json', '{"name":"fixture-dependency","version":"1.0.0","type":"module","exports":"./index.js"}');
-    write('node_modules/fixture-dependency/index.js', 'export const value = 1;');
-    write('mcp-servers/flujo/package.json', JSON.stringify({ name: descriptor.packageId, version: '1.0.0', type: 'module', dependencies: { 'fixture-dependency': '1.0.0' } }));
-    write('mcp-servers/flujo/src/index.ts', '// genuine fixture source');
-    write('mcp-servers/flujo/dist/index.js', 'export { value } from "fixture-dependency";');
-    fs.mkdirSync(getWorkspaceDir(getCurrentWorkspace()), { recursive: true });
-    delete process.env.FLUJO_ENCRYPTION_SECRET_FILE;
-    global.__flujo_server_dek = undefined;
-    global.__flujo_encryption_sessions = undefined;
-    await timed('private-profile', () => unlockPrivateFixtureInCurrentWorkspace());
-    await timed('provision', () => ensureShippedWorkspacePackages(getWorkspaceDir(getCurrentWorkspace()), application, ['flujo']));
-    const proposed = createShippedServerConfig(descriptor);
-    expect((await saveConfig(new Map([[proposed.name, proposed]]))).success).toBe(true);
-    const fixtureOwner = installBundledFixtureOwner();
-    owner = fixtureOwner;
-    const preview = await timed('preview', () => previewBundledHostConsent(proposed.name, { runtimeHome: 'host' }));
-    const approvalRequest = new Request(fixtureOwner.request(proposed.name), { signal: cancellation.signal });
-    const approved = await timed('approve', () => approveBundledHostConsent(approvalRequest, proposed.name, {
-      runtimeHome: 'host', reviewedDigest: preview.policyDigest, expiresAt: fixtureOwner.expiresAt,
-    }));
     const capsule = prepareBundledFlujoWorkload(approved.config)!;
     const environment = getPendingWorkloadEnvironment(approved.config, capsule);
     const token = environment.FLUJO_MCP_WORKLOAD_TOKEN;
@@ -230,24 +224,9 @@ test.each(['unchanged', 'disabled', 'replaced', 'state-publication-disabled', 'r
       await flushStatisticsEvents();
     });
     await attempt(() => transport?.close());
-    await attempt(() => owner?.restore());
-    await attempt(() => {
-      global.__flujo_server_dek = priorDek;
-      global.__flujo_encryption_sessions = priorSessions;
-    });
-    await attempt(() => {
-      for (const [name, value] of Object.entries(saved)) {
-        if (value === undefined) delete process.env[name]; else process.env[name] = value;
-      }
-    });
-    // Uncertain cleanup preserves the owned root as evidence.
-    if (cleanupErrors.length === 0) await attempt(() => {
-      if (path.dirname(fixture) !== parent || !/^flujo-workload-control-[A-Za-z0-9]+$/.test(path.basename(fixture))
-          || fs.lstatSync(fixture).isSymbolicLink()) throw new Error('Unsafe workload fixture cleanup.');
-      fs.rmSync(fixture, { recursive: true, force: true });
-    });
     if (cleanupErrors.length) throw new AggregateError(failed ? [primaryError, ...cleanupErrors] : cleanupErrors,
       'Workload scheduler fixture cleanup failed');
     console.info('[workload-scheduler]', mode, 'cleanup', 'settled', Math.round(performance.now() - startedAt));
   }
-}, 60_000);
+}, SCHEDULER_CASE_MS);
+});

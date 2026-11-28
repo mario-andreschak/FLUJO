@@ -14,6 +14,7 @@ import type { FlowRunInput } from './runFlowContract';
 import { installPersonaActivitySnapshot } from './personaActivityState';
 import type { RunStateSource } from './runStateLoading';
 import type { PersonaInstructionContext } from '@/shared/types/enduringAgent';
+import { approvalSettingForRun } from './approvalSetting';
 
 const log = createLogger('backend/execution/flow/runStateSetup');
 
@@ -130,7 +131,8 @@ export type RunInputInstallation = {
   flujodebug: boolean;
   userTurn: boolean;
   ephemeral: boolean;
-  requireApproval: boolean;
+  /** What this run's request asked for; undefined keeps the conversation's saved setting. */
+  requireApproval: boolean | undefined;
   resumingPausedLogicalRun: boolean;
   resetPersonaPromptPrefix: boolean;
   personaInstructionContext: PersonaInstructionContext | undefined;
@@ -290,8 +292,9 @@ export async function installRunInputs(installation: RunInputInstallation): Prom
     sharedState.meetingTurn = undefined;
   }
 
-  // The conversation's approval setting (single source of truth).
-  sharedState.requireApproval = requireApproval;
+  // The conversation's approval setting (single source of truth, #1284 R2): a
+  // request that says nothing keeps the saved value, one that says on or off saves it.
+  sharedState.requireApproval = approvalSettingForRun(requireApproval, sharedState.requireApproval);
 
   // Tag the invocation origin and derive the run-local unattended flag from it
   // (issue #339).

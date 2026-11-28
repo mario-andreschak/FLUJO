@@ -20,6 +20,9 @@ import { issueOwnerCredential } from '@/backend/services/security/ownerCredentia
 import { callTool } from '@/backend/services/mcp/tools';
 import { resolveGlobalVars } from '@/backend/utils/resolveGlobalVars';
 import { getMcpAppRuntimeBrokerSnapshot, revokeMcpAppRuntimeBrokerForServer } from '@/backend/mcpApps/runtimeBroker';
+import { PRIVATE_READ_TEST_MS } from '../helpers/privateReadTime';
+
+jest.setTimeout(PRIVATE_READ_TEST_MS);
 
 jest.mock('@/backend/services/security/isolatedMcp', () => ({
   ...jest.requireActual('@/backend/services/security/isolatedMcp'), createIsolatedMcpLaunch: jest.fn(),

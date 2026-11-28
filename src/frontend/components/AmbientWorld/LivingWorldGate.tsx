@@ -1,13 +1,9 @@
 "use client";
 
-import dynamic from 'next/dynamic';
-
 import { useTheme } from '@/frontend/contexts/ThemeContext';
+import { lazyOptional } from '@/frontend/lazy';
 
-const RiverWorld = dynamic(() => import('./RiverWorld'), {
-  ssr: false,
-  loading: () => null,
-});
+const RiverWorld = lazyOptional(() => import('./RiverWorld'), { name: 'RiverWorld' });
 
 export default function LivingWorldGate() {
   const { livingWorldEnabled, themeHydrated, visualStyle } = useTheme();

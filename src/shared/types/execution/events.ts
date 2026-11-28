@@ -275,6 +275,11 @@ export interface PendingInputSnapshot {
   nextSeq: number;
   questions: Array<{ questionId: string; questions: QuestionPrompt[]; createdAt: number; node?: NodeRef }>;
   elicitations: PendingElicitationPrompt[];
+  /**
+   * Tool calls a running agent or sub-flow is waiting on a decision for (#1284).
+   * Present only while some wait, so the approval card comes back after a reload.
+   */
+  toolCalls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
 }
 /** A waiting MCP elicitation as a conversation snapshot shows it: a form or a link. */
 export type PendingElicitationPrompt = {

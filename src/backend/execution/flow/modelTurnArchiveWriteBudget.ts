@@ -84,6 +84,28 @@ function refuse(code: ModelTurnArchiveMemoryError['code'], diagnostic?: ModelTur
   throw new ModelTurnArchiveMemoryError(code, undefined, diagnostic);
 }
 
+// Printable ASCII that JSON writes unescaped: one native scan instead of a
+// JavaScript step per character, which made 80,000-message archives CPU-bound.
+const PLAIN_JSON_ASCII = /^[\x20\x21\x23-\x5b\x5d-\x7e]*$/;
+
+/** Escaped JSON, UTF-8 output and compression bytes reserved for one string. */
+function serializedStringBytes(item: string): number {
+  if (PLAIN_JSON_ASCII.test(item)) return item.length * 3;
+  let bytes = 0;
+  for (let index = 0; index < item.length; index++) {
+    const code = item.charCodeAt(index);
+    if (code === 34 || code === 92) bytes += 6;
+    else if (code < 32) bytes += (code === 8 || code === 9 || code === 10 || code === 12 || code === 13) ? 6 : 18;
+    else if (code < 128) bytes += 3;
+    else if (code < 2048) bytes += 4;
+    else if (code >= 0xd800 && code <= 0xdbff && item.charCodeAt(index + 1) >= 0xdc00 && item.charCodeAt(index + 1) <= 0xdfff) {
+      bytes += 8; index++;
+    } else if (code >= 0xd800 && code <= 0xdfff) bytes += 18;
+    else bytes += 5;
+  }
+  return bytes;
+}
+
 /** Bounded descriptor walk: no stringify, getters, JSON hooks, or full clones. */
 export function estimateArchivePayload(value: unknown, archiveProjection = false, unowned?: (schema: object) => void,
   allocation: 'serialized' | 'clone' = 'serialized'): number {
@@ -121,17 +143,7 @@ export function estimateArchivePayload(value: unknown, archiveProjection = false
       // structuredClone copies UTF-16; it does not also allocate escaped JSON,
       // UTF-8 output and compression buffers. Those belong to the write scope.
       if (allocation === 'clone') return;
-      for (let index = 0; index < item.length; index++) {
-        const code = item.charCodeAt(index);
-        if (code === 34 || code === 92) add(6);
-        else if (code < 32) add((code === 8 || code === 9 || code === 10 || code === 12 || code === 13) ? 6 : 18);
-        else if (code < 128) add(3);
-        else if (code < 2048) add(4);
-        else if (code >= 0xd800 && code <= 0xdbff && item.charCodeAt(index + 1) >= 0xdc00 && item.charCodeAt(index + 1) <= 0xdfff) {
-          add(8); index++;
-        } else if (code >= 0xd800 && code <= 0xdfff) add(18);
-        else add(5);
-      }
+      add(serializedStringBytes(item));
       return;
     }
     if (!item || typeof item !== 'object') { add(32); return; }
@@ -326,15 +338,20 @@ export async function withArchiveWriteMemory<T>(payload: unknown, task: () => Pr
   }
 }
 
-/** Recheck references after an ownership await, before clones or serialization. */
-export function recheckArchiveWriteMemory(payload: unknown, serializedData = false): void {
+/**
+ * Recheck references after an ownership await, before clones or serialization.
+ * `measuredBytes` is an estimate of archive-owned data written alongside
+ * `payload`; it was measured once and is not walked again for every page.
+ */
+export function recheckArchiveWriteMemory(payload: unknown, serializedData = false, measuredBytes = 0): void {
   const scope = scopes.getStore();
   if (!scope || scope.settled) refuse('MODEL_TURN_ARCHIVE_MEMORY_BUSY');
+  if (!Number.isSafeInteger(measuredBytes) || measuredBytes < 0) refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
   let legacy = false;
-  const estimate = estimateArchivePayload(payload, !serializedData, () => {
+  const estimate = (estimateArchivePayload(payload, !serializedData, () => {
     if (scope.schemaProjectionPolicy === 'owned-only') refuse('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
     legacy = true;
-  }) * 4;
+  }) + measuredBytes) * 4;
   const combined = estimate + scope.scratchBytes;
   const required = legacy ? Math.max(combined, MODEL_TURN_ARCHIVE_WRITE_LIMITS.writeBytes) : combined;
   if (required > scope.reservedEstimate) {

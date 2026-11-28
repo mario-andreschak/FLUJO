@@ -120,18 +120,20 @@ it('answers a live wait (agent SDK or sub-flow) without running or resuming anyt
   expect(processChatCompletionMock).not.toHaveBeenCalled();
 });
 
-it('does not run a call whose approval was cut off by a restart', async () => {
+it('does not run a call again whose approved attempt failed half way', async () => {
   saveWaiting('conv-crash', ['c1'], true);
-  // The first approval saved its claim, then FLUJO stopped while the tool ran.
+  // The first approval saved its claim, then the attempt broke off while the tool ran.
   processToolCallsMock.mockImplementationOnce(async () => {
     throw new Error('process stopped');
   });
   expect((await respond('conv-crash', { action: 'approve', toolCallId: 'c1' })).status).toBe(500);
 
-  expect((await respond('conv-crash', { action: 'approve', toolCallId: 'c1' })).status).toBe(200);
+  // A second click finds nothing to approve: the call is settled, the run shows the error.
+  expect((await respond('conv-crash', { action: 'approve', toolCallId: 'c1' })).status).toBe(400);
 
   expect(processToolCallsMock).toHaveBeenCalledTimes(1);
-  const last = disk.get('conv-crash')!.messages.at(-1);
-  expect(last).toMatchObject({ role: 'tool', tool_call_id: 'c1' });
-  expect(String(last?.content)).toContain('did not run it again');
+  const saved = disk.get('conv-crash')!;
+  expect(saved.status).toBe('error');
+  expect(saved.messages.at(-1)).toMatchObject({ role: 'tool', tool_call_id: 'c1' });
+  expect(String(saved.messages.at(-1)?.content)).toContain('did not run it again');
 });

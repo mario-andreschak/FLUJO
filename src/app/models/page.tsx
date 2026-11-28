@@ -1,15 +1,10 @@
 import { Suspense } from 'react';
-import dynamicImport from 'next/dynamic';
 import { Box } from '@mui/material';
 import MemoryRoundedIcon from '@mui/icons-material/MemoryRounded';
 import Spinner from '@/frontend/components/shared/Spinner';
 import ScrollArea from '@/frontend/components/shared/ScrollArea';
 import PageHeader from '@/frontend/components/shared/PageHeader';
-
-// Use dynamic import to prevent SSR issues with client-side code
-const ModelClient = dynamicImport(() => import('./ModelClient'), {
-  loading: () => <Spinner />
-});
+import ModelClient from './ModelClient';
 
 export const dynamic = 'force-dynamic'; // Ensure dynamic rendering
 

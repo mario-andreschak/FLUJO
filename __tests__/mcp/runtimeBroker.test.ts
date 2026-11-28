@@ -17,7 +17,10 @@ import {
 import { createStdioTransport } from '@/backend/services/mcp/connection';
 import { runWithWorkspace } from '@/utils/workspace';
 import { installTrustedHostProfile } from './fixtures/trustedHostProfile';
+import { PRIVATE_READ_TEST_MS } from '../helpers/privateReadTime';
 import { trustedHostMcpPolicySchema } from '@/backend/services/security/trustedHostMcp';
+
+jest.setTimeout(PRIVATE_READ_TEST_MS);
 
 const PROOF_PREFIX = 'flujo-mcp-app-runtime-proof-v1:';
 const IDE_TOKEN = 'A'.repeat(32);

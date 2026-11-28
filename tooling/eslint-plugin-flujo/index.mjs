@@ -1,6 +1,7 @@
 // FLUJO's own lint rules. Each one exists because agents (or people) made the
 // same mistake more than once. See "Corrections become checks" in AGENTS.md.
 import disableNeedsReason from './rules/disable-needs-reason.mjs';
+import lazyLoadNeedsBoundary from './rules/lazy-load-needs-boundary.mjs';
 import mcpFeatureDefaults from './rules/mcp-feature-defaults.mjs';
 import noAdhocStartupErrorMatch from './rules/no-adhoc-startup-error-match.mjs';
 import noDoubleCast from './rules/no-double-cast.mjs';
@@ -16,6 +17,7 @@ export default {
   meta: { name: 'eslint-plugin-flujo' },
   rules: {
     'disable-needs-reason': disableNeedsReason,
+    'lazy-load-needs-boundary': lazyLoadNeedsBoundary,
     'mcp-feature-defaults': mcpFeatureDefaults,
     'no-adhoc-startup-error-match': noAdhocStartupErrorMatch,
     'no-double-cast': noDoubleCast,

@@ -243,16 +243,24 @@ export async function killProcessTreeAndWait(
   // grace interval before killProcessTree escalates from SIGTERM to SIGKILL.
   const observationMs = Math.max(0, finalWaitMs)
     + (process.platform === 'win32' ? 0 : Math.max(0, graceMs));
-  let timeout: NodeJS.Timeout | undefined;
-  if (!closeObserved) {
+  // On a busy Windows PC the close event can arrive after one observation
+  // window, and a descendant started while taskkill walked the tree survives
+  // it. Ask again and keep waiting a bounded number of windows instead of
+  // reporting a live session after the first one.
+  const windows = process.platform === 'win32' ? 3 : 1;
+  for (let window = 0; window < windows && !closeObserved; window++) {
+    if (window > 0) {
+      try { killProcessTree(child, graceMs); } catch { /* Keep observing the original request. */ }
+    }
+    let timeout: NodeJS.Timeout | undefined;
     await Promise.race([
       closed,
       new Promise<void>((resolve) => {
         timeout = setTimeout(resolve, observationMs);
       }),
     ]);
+    if (timeout) clearTimeout(timeout);
   }
-  if (timeout) clearTimeout(timeout);
   if (!closeObserved) child.removeListener('close', onClose);
   cancelEscalation();
 
