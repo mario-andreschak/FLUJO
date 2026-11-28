@@ -369,6 +369,30 @@ it('reclaims a recent intent whose writer process has exited', async () => {
   expect((await events(value)).map(event => event.type === 'message' && event.message.id)).toEqual(['after-crash']);
 });
 
+it('does not block the conversation when a full disk tears this process\'s own intent', async () => {
+  const value = state();
+  await appendRawForState(value, [{ type: 'message', message: value.messages[0] }]);
+  const intent = path.join(directory, 'db', 'conversation-publications', `${value.conversationId}.json`);
+  const open = fs.open.bind(fs);
+  let torn = false;
+  jest.spyOn(fs, 'open').mockImplementation((async (...args: Parameters<typeof fs.open>) => {
+    const handle = await open(...args);
+    if (!torn && String(args[0]) === intent && args[1] === 'wx') {
+      torn = true;
+      // The file exists, but a full disk refuses its owner record, as a real ENOSPC does.
+      handle.writeFile = async () => { throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' }); };
+    }
+    return handle;
+  }) as typeof fs.open);
+  const started = Date.now();
+  await appendRawForState(value, [{ type: 'message', message: message('during-full-disk') }]).catch(() => undefined);
+  await appendRawForState(value, [{ type: 'message', message: message('after-full-disk') }]);
+  expect(torn).toBe(true);
+  expect(Date.now() - started).toBeLessThan(10_000);
+  expect((await events(value)).map(event => event.type === 'message' && event.message.id)).toContain('after-full-disk');
+  await expect(fs.access(intent)).rejects.toMatchObject({ code: 'ENOENT' });
+}, 60_000);
+
 it('never removes a fresh intent that replaced the abandoned one it inspected', async () => {
   const value = state();
   const intent = await leaveCrashedIntent(value, { version: 2, token: 'dead', startedAt: Date.now(), pid: 2_147_483_646, process: 'gone' });

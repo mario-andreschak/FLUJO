@@ -85,6 +85,8 @@ LeaseUsers(p) == Cardinality({c \in Conv : cover[p][c] = "lease"})
 \* The intent's writer is inside its transaction (intentProcess.live).
 IntentLive(c) == Alive(intent[c]) /\ phase[intent[c][1]][c] = "write"
 \* abandonedIntent(): our own instance's leftover, a dead instance's, or an old one.
+\* "Our own" includes an intent whose owner record a full disk refused: the
+\* process keeps its file identity (tornIntents), so intent[c] = Me(p) holds.
 Reclaimable(p, c) == intent[c] # NoOwner /\ ~IntentLive(c)
                      /\ (intent[c] = Me(p) \/ ~Alive(intent[c]) \/ aged[c])
                      /\ "intentNeverReclaimed" \notin Legacy

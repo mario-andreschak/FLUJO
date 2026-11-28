@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import YAML from 'yaml';
-import { assertContributorGuideJob, assertFullWorkflowContract, assertReleaseSweepReportsOnly, assertReleaseSweepRunsByDefault, assertWorkflowContract } from './workflow-contract.mjs';
+import { PACKAGED_ACCEPTANCE_TESTS, assertContributorGuideJob, assertFullWorkflowContract, assertReleaseSweepReportsOnly, assertReleaseSweepRunsByDefault, assertWorkflowContract } from './workflow-contract.mjs';
 
 const directory = new URL('../.github/workflows/', import.meta.url);
 const readWorkflows = () => Object.fromEntries(readdirSync(directory).filter((file) => /\.ya?ml$/.test(file) && file !== 'verify.yml')
@@ -97,7 +97,24 @@ for (const [label, change] of [
   ['tolerated image acceptance', files => { files['publish-image.yml'].jobs.candidate.steps.find(step => step.run?.includes('packaged-acceptance.mjs'))['continue-on-error'] = true; }],
   ['image acceptance after push', files => { const steps = files['publish-image.yml'].jobs.candidate.steps; const index = steps.findIndex(step => step.run?.includes('packaged-acceptance.mjs')); steps.push(...steps.splice(index, 1)); }],
   ['installer acceptance on the wrong form', files => { const step = files['installer.yml'].jobs['installer-acceptance'].steps.find(step => step.run?.includes('packaged-acceptance.mjs')); step.run = step.run.replace('--form checkout', '--form npm'); }],
-  ['omitted harness tests', files => { files['verify.yml'].jobs['release-safety'].steps = files['verify.yml'].jobs['release-safety'].steps.filter(step => step.run !== 'node --test scripts/packaged-acceptance.test.mjs'); }],
+  ['omitted harness tests', files => { files['verify.yml'].jobs['release-safety'].steps = files['verify.yml'].jobs['release-safety'].steps.filter(step => step.run !== PACKAGED_ACCEPTANCE_TESTS); }],
+  ['harness tests without the operator runbook tests', files => { const step = files['verify.yml'].jobs['release-safety'].steps.find(step => step.run === PACKAGED_ACCEPTANCE_TESTS); step.run = step.run.replace(' scripts/operator-runbook.test.mjs', ''); }],
+  ['omitted operator runbook in the broad run', files => { files['verify.yml'].jobs['production-build'].steps = files['verify.yml'].jobs['production-build'].steps.filter(step => !step.run?.includes('operator-runbook.mjs')); }],
+  ['skipped operator runbook', files => { files['verify.yml'].jobs['production-build'].steps.find(step => step.run?.includes('operator-runbook.mjs')).if = 'false'; }],
+  ['operator runbook after its report is kept', files => { const steps = files['verify.yml'].jobs['production-build'].steps; const index = steps.findIndex(step => step.run?.includes('operator-runbook.mjs')); steps.push(...steps.splice(index, 1)); }],
+  ['release packages published without the operator runbook', files => { files['publish-npm.yml'].jobs.prepare.steps = files['publish-npm.yml'].jobs.prepare.steps.filter(step => !step.run?.includes('operator-runbook.mjs')); }],
+  ['tolerated release operator runbook', files => { files['publish-npm.yml'].jobs.prepare.steps.find(step => step.run?.includes('operator-runbook.mjs'))['continue-on-error'] = true; }],
+  ['omitted installed Windows build check', files => { delete files['verify.yml'].jobs['installed-windows-acceptance']; }],
+  ['installed Windows build check on Linux', files => { files['verify.yml'].jobs['installed-windows-acceptance']['runs-on'] = 'ubuntu-24.04'; }],
+  ['conditional installed Windows build check', files => { files['verify.yml'].jobs['installed-windows-acceptance'].if = 'false'; }],
+  ['installed Windows build without compiling the installer', files => { files['verify.yml'].jobs['installed-windows-acceptance'].steps = files['verify.yml'].jobs['installed-windows-acceptance'].steps.filter(step => !step.run?.includes('flujo-setup.iss')); }],
+  ['installed Windows build checked as an npm package', files => { const step = files['verify.yml'].jobs['installed-windows-acceptance'].steps.find(step => step.run?.includes('packaged-acceptance.mjs')); step.run = step.run.replace('--form checkout', '--form npm'); }],
+  ['installed Windows build report not kept on failure', files => { delete files['verify.yml'].jobs['installed-windows-acceptance'].steps.find(step => step.uses?.startsWith('actions/upload-artifact@')).if; }],
+  ['omitted Docker image check', files => { delete files['verify.yml'].jobs['image-acceptance']; }],
+  ['tolerated Docker image check', files => { files['verify.yml'].jobs['image-acceptance'].steps.find(step => step.run?.includes('packaged-acceptance.mjs'))['continue-on-error'] = true; }],
+  ['Docker image check without an upgrade', files => { const step = files['verify.yml'].jobs['image-acceptance'].steps.find(step => step.run?.includes('packaged-acceptance.mjs')); step.run = step.run.replace(/ --from \S+/, ''); }],
+  ['Docker image check before the image is built', files => { const steps = files['verify.yml'].jobs['image-acceptance'].steps; const index = steps.findIndex(step => step.run?.includes('packaged-acceptance.mjs')); steps.unshift(...steps.splice(index, 1)); }],
+  ['Docker image pushed instead of checked locally', files => { files['verify.yml'].jobs['image-acceptance'].steps.find(step => step.uses?.startsWith('docker/build-push-action@')).with.push = true; }],
   ['omitted Docs workflow', files => { delete files['scorecard-source.yml']; }],
   ['YAML boolean-false Docs job', files => { files['scorecard-source.yml'].jobs['scorecard-source'].if = YAML.parse('if: false').if; }],
   ['omitted Docs capture', files => { files['scorecard-source.yml'].jobs['scorecard-source'].steps = files['scorecard-source.yml'].jobs['scorecard-source'].steps.filter(step => !step.run?.includes('check-scorecard-ci.mjs')); }],
@@ -429,9 +446,9 @@ for (const [label, change, expected] of [
   ['an Antigravity job without the verified Node runtime', files => {
     antigravityJob(files).steps = antigravityJob(files).steps.filter(step => !step.run?.startsWith('node scripts/verify-ci-node.mjs'));
   }, /verify official binary identity/],
-  ['a verification gate that ignores the Antigravity job', files => {
-    files['verify.yml'].jobs.verification.needs = files['verify.yml'].jobs.verification.needs.filter(id => id !== 'antigravity-cli');
-  }, /evaluate every prerequisite/],
+  ['a verification gate that ignores the Antigravity job', files => { const gate = files['verify.yml'].jobs.verification; gate.needs = gate.needs.filter(id => id !== 'antigravity-cli'); }, /evaluate every prerequisite/],
+  ['a verification gate that ignores the installed Windows build check', files => { const gate = files['verify.yml'].jobs.verification; gate.needs = gate.needs.filter(id => id !== 'installed-windows-acceptance'); }, /evaluate every prerequisite/],
+  ['a verification gate that ignores the Docker image check', files => { const gate = files['verify.yml'].jobs.verification; gate.needs = gate.needs.filter(id => id !== 'image-acceptance'); }, /evaluate every prerequisite/],
 ]) {
   test(`broad qualification refuses ${label}`, () => {
     const files = readWorkflows();
@@ -475,10 +492,10 @@ for (const [label, change, expected] of [
   });
 }
 
-test('the main pull-request bridge does not need the broad-only Antigravity and contributor guide jobs', () => {
+test('the main pull-request bridge does not need the broad-only jobs, and the broad gate waits for them', () => {
   const files = Object.fromEntries(readdirSync(directory).filter(file => /\.ya?ml$/.test(file))
     .map(file => [file, YAML.parse(readFileSync(new URL(file, directory), 'utf8'))]));
-  assert.equal(files['verify.yml'].jobs['antigravity-cli'], undefined);
-  assert.equal(files['verify.yml'].jobs['contributor-guide'], undefined);
-  assert.deepEqual(files['verify-full.yml'].jobs.verification.needs.slice(-2), ['antigravity-cli', 'contributor-guide']);
+  const broadOnly = ['antigravity-cli', 'installed-windows-acceptance', 'image-acceptance', 'contributor-guide'];
+  for (const id of broadOnly) assert.equal(files['verify.yml'].jobs[id], undefined, id);
+  assert.deepEqual(files['verify-full.yml'].jobs.verification.needs.slice(-broadOnly.length), broadOnly);
 });

@@ -19,6 +19,7 @@ import { getWorkspaceDataDir } from '@/utils/workspace';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 import { v4 as uuidv4 } from 'uuid';
 import { restoreFolderFromZipLinkSafe } from '@/backend/services/workspace/backupRestoreFs';
+import { mergeRestoredVariables } from '@/backend/services/workspace/backupExport';
 import { withModelCatalogWriteLease } from '@/backend/services/model/catalogAdmission';
 import { ModelCatalogBusyError } from '@/backend/services/enduringAgents/runtimeLock';
 
@@ -301,6 +302,9 @@ async function POST_handler(request: NextRequest) {
           }
         } else if (storageKey === StorageKey.MODELS) {
           await withModelCatalogWriteLease(() => saveItem(storageKey, data));
+          selectionResults[selection].restored++;
+        } else if (storageKey === StorageKey.GLOBAL_ENV_VARS) {
+          await saveItem(storageKey, mergeRestoredVariables(await loadItem(storageKey, {}), data));
           selectionResults[selection].restored++;
         } else {
           await saveItem(storageKey, data);

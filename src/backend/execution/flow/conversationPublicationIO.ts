@@ -12,13 +12,16 @@ import { conversationJsonChunks, fenceConversationPublication, ConversationPubli
   isConversationPublicationError } from './conversationPublication';
 
 type Intent = { filename: string; live: boolean };
-type IntentProcess = { token: string; startedAt: number; live: Set<string> };
+type IntentProcess = { token: string; startedAt: number; live: Set<string>; torn?: Map<string, BigIntStats> };
 const intentHost = globalThis as typeof globalThis & { __flujoPublicationIntentContextV1?: AsyncLocalStorage<Intent>;
   __flujoPublicationIntentProcessV1?: IntentProcess };
 const intentContext = intentHost.__flujoPublicationIntentContextV1 ??= new AsyncLocalStorage<Intent>();
 // One identity per process (shared by every Next bundle) and the intents it holds right now.
 const intentProcess = intentHost.__flujoPublicationIntentProcessV1 ??= {
   token: randomUUID(), startedAt: Date.now() - Math.round(process.uptime() * 1000), live: new Set() };
+// Intents this process created but could not write its owner into (a full disk,
+// for example). No reader can tell from the file that they are ours.
+const tornIntents = intentProcess.torn ??= new Map();
 
 /** No publication transaction lasts this long; an older intent is abandoned. */
 export const ABANDONED_INTENT_AGE_MS = 10 * 60_000;
@@ -51,6 +54,8 @@ async function abandonedIntent(filename: string): Promise<BigIntStats | 'gone' |
   finally { await handle.close().catch(() => undefined); }
   if (!identity.isFile()) return undefined;
   if (record.process === intentProcess.token) return identity;
+  const torn = tornIntents.get(filename);
+  if (torn && sameFile(identity, torn)) return identity;
   const startedAt = typeof record.startedAt === 'number' ? record.startedAt : Number(identity.mtimeMs);
   if (Date.now() - startedAt > ABANDONED_INTENT_AGE_MS) return identity;
   // A different token with our pid is a previous instance (containers reuse pids).
@@ -64,7 +69,10 @@ async function abandonedIntent(filename: string): Promise<BigIntStats | 'gone' |
 async function reclaimIntent(filename: string, abandoned: BigIntStats): Promise<void> {
   try {
     const current = await fs.lstat(filename, { bigint: true });
-    if (sameVersion(current, abandoned)) await fs.unlink(filename);
+    if (sameVersion(current, abandoned)) {
+      await fs.unlink(filename);
+      tornIntents.delete(filename);
+    }
   } catch { /* already reclaimed, or changed: the next attempt re-inspects it */ }
 }
 
@@ -100,6 +108,7 @@ export async function withConversationPublicationIntent<T>(conversationId: strin
     }
   }
   intentProcess.live.add(filename);
+  tornIntents.delete(filename);
   try { return await underIntent(handle, filename, parent, conversationId, task); }
   finally { intentProcess.live.delete(filename); }
 }
@@ -116,6 +125,8 @@ async function underIntent<T>(handle: FileHandle, filename: string, parent: BigI
     await handle.writeFile(JSON.stringify({ version: 2, conversationId, token: randomUUID(), startedAt: Date.now(),
       pid: process.pid, process: intentProcess.token }));
   } catch (error) {
+    // The next writer here reclaims it as our own leftover instead of waiting for its age.
+    if (owned) tornIntents.set(filename, owned);
     try { await handle.close(); } catch { fenceConversationPublication('intent descriptor closure is uncertain', undefined, true, { intent: filename }); }
     throw fenceConversationPublication('publication intent did not finish', error, false, { intent: filename });
   }
