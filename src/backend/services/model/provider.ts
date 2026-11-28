@@ -247,9 +247,15 @@ export async function fetchOpenRouterModels(): Promise<NormalizedModel[]> {
 /**
  * Fetch models from OpenAI
  */
-export async function fetchOpenAIModels(apiKey: string | null, baseUrl: string): Promise<NormalizedModel[]> {
+/**
+ * `configured` is the connection as saved. An "Anthropic (Native)" connection
+ * behind a custom base URL (a gateway, Microsoft Foundry) signs in like the
+ * Messages API does, with X-Api-Key and the API version, whatever its address.
+ */
+export async function fetchOpenAIModels(apiKey: string | null, baseUrl: string,
+  configured: { provider?: ModelProvider; adapter?: ModelAdapter } = {}): Promise<NormalizedModel[]> {
   log.debug('fetchOpenAIModels: Entering method');
-  const provider = getProviderFromBaseUrl(baseUrl);
+  const provider = configured.provider === 'anthropic' && configured.adapter === 'anthropic' ? 'anthropic' : getProviderFromBaseUrl(baseUrl);
   
   // Ensure baseUrl ends with /v1 but avoid duplicate /v1/v1
   let modelsUrl = baseUrl;
@@ -371,7 +377,7 @@ export async function fetchModelsFromProvider(
     }
 
     // For all other providers (including Ollama), use the OpenAI-compatible API.
-    return await fetchOpenAIModels(apiKey, baseUrl);
+    return await fetchOpenAIModels(apiKey, baseUrl, { provider, adapter });
   } catch {
     log.warn('Provider model catalogue request failed', { provider, adapter });
     // Return empty array instead of throwing to preserve picker fallbacks.

@@ -5,15 +5,17 @@
  *
  * Proves that cancelling while a FLUJO tool works, or while its approval is
  * open, ends the Codex turn, every process Codex started and the pending
- * approval; and that Codex's own compaction gets FLUJO's standing user
- * instructions and receipts right after its summary.
+ * approval; that Codex's own compaction gets FLUJO's standing user
+ * instructions and receipts right after its summary; and that the allowance
+ * bar shows the plan numbers Codex itself received (#756).
  */
 import type { CompletionInput } from '@/backend/services/model/adapters/types';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import { CodexAdapter } from '@/backend/services/model/adapters/codexAdapter';
 import { registerPendingApproval, listPendingToolCalls, clearPendingApprovals } from '@/backend/execution/flow/toolApprovalRegistry';
 import { NATIVE_COMPACTION_CARRY_HEADING } from '@/backend/execution/flow/compaction/nativeCompactionCarry';
-import { bundledCodex, descendantProcessIds, listProcesses, offeredTool, prepareStandInHome, startStandInModel, STAND_IN_MODEL } from '../../scripts/codex-stand-in.mjs';
+import { readAllowanceSnapshot } from '@/backend/services/model/allowance/store';
+import { bundledCodex, descendantProcessIds, listProcesses, offeredTool, prepareStandInHome, RESET_AT, startStandInModel, STAND_IN_MODEL } from '../../scripts/codex-stand-in.mjs';
 
 const mockRuntime: { executable?: string; home?: string; workspace?: string; env?: Record<string, string> } = {};
 jest.mock('@/backend/services/model/adapters/codexRuntimeUpdate', () => ({
@@ -26,7 +28,8 @@ jest.mock('@/backend/services/model/adapters/codexRuntimeHome', () => ({
   prepareCodexRuntimeEnvironment: async () => ({ home: mockRuntime.home, workingDirectory: mockRuntime.workspace, env: mockRuntime.env }),
 }));
 jest.mock('@/backend/services/model/allowance/codex', () => ({
-  readCodexAllowanceAccountKey: async () => undefined, recordCodexRateLimitUpdate: () => {},
+  ...jest.requireActual('@/backend/services/model/allowance/codex'),
+  readCodexAllowanceAccountKey: async () => 'codex-stand-in-account',
 }));
 const mockCallTool = jest.fn();
 jest.mock('@/backend/services/mcp', () => ({
@@ -177,4 +180,17 @@ it('when Codex compacts on its own, FLUJO\'s standing instructions and receipts 
   // Receipts: the earlier call and the one made in this turn, with their exact ids.
   expect(texts[carry]).toContain('"call_id":"call-earlier","tool":"files__read","state":"result-observed"');
   expect(texts[carry]).toMatch(/"tool":"files__write","state":"result-observed"/);
+});
+
+it('shows on the allowance bar the plan numbers Codex itself received, as its own /status shows them (#756)', async () => {
+  await useStandIn();
+  const result = await new CodexAdapter().createCompletion(input({ tools: undefined, toolNameMap: undefined,
+    messages: [{ role: 'user', content: 'Say hello.' }] }));
+  expect(result.completion.choices[0].message.content).toBeTruthy();
+  await waitUntil(() => Boolean(readAllowanceSnapshot('codex-stand-in-account')), 'the plan numbers to reach the allowance bar', 10_000);
+  // The stand-in's plan headers: 42% of the five hours and 12% of the week used.
+  expect(readAllowanceSnapshot('codex-stand-in-account')!.windows.map(window => [window.label, window.remainingPercent, window.resetAt])).toEqual([
+    [expect.stringContaining('300 minutes'), 58, new Date(RESET_AT * 1000).toISOString()],
+    [expect.stringContaining('10080 minutes'), 88, new Date((RESET_AT + 86400) * 1000).toISOString()],
+  ]);
 });

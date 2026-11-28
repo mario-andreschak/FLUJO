@@ -434,6 +434,7 @@ sleep() { :; }
 const antigravityJob = files => files['verify.yml'].jobs['antigravity-cli'];
 const antigravityStep = (files, prefix) => antigravityJob(files).steps.find(step => step.run?.startsWith(prefix));
 const journeyJob = files => files['verify.yml'].jobs['first-use-journey'];
+const claudeCodeJob = files => files['verify.yml'].jobs['claude-code'];
 const journeyStep = (files, prefix) => journeyJob(files).steps.find(step => step.run?.startsWith(prefix));
 for (const [label, change, expected] of [
   ['a missing official Antigravity CLI job', files => { delete files['verify.yml'].jobs['antigravity-cli']; }, /official Antigravity CLI suite on macOS and Windows/],
@@ -480,6 +481,19 @@ for (const [label, change, expected] of [
   ['a first-use journey that drops its evidence after a failure', files => {
     journeyJob(files).steps.find(step => step.uses?.startsWith('actions/upload-artifact@')).if = 'success()';
   }, /first-use journey/],
+  ['a missing bundled Claude Code job', files => { delete files['verify.yml'].jobs['claude-code']; }, /bundled Claude Code suites/],
+  ['a Claude Code job without macOS', files => { claudeCodeJob(files).strategy.matrix.os = ['windows-latest']; }, /bundled Claude Code suites/],
+  ['a skipped Claude Code job', files => { claudeCodeJob(files).if = 'false'; }, /bundled Claude Code suites/],
+  ['an optional Claude Code suite', files => { claudeCodeJob(files).steps.at(-1)['continue-on-error'] = true; }, /bundled Claude Code suites/],
+  ['a Claude Code suite filtered to fewer cases', files => { claudeCodeJob(files).steps.at(-1).run += ' -t approvals'; }, /bundled Claude Code suites/],
+  ['a Claude Code suite without the product check', files => {
+    const step = claudeCodeJob(files).steps.at(-1);
+    step.run = step.run.replace(' __tests__/chat/claudeFlowStandIn.test.ts', '');
+  }, /bundled Claude Code suites/],
+  ['a verification gate that ignores the Claude Code job', files => {
+    const gate = files['verify.yml'].jobs.verification;
+    gate.needs = gate.needs.filter(id => id !== 'claude-code');
+  }, /evaluate every prerequisite/],
 ]) {
   test(`broad qualification refuses ${label}`, () => {
     const files = readWorkflows();
@@ -526,7 +540,7 @@ for (const [label, change, expected] of [
 test('the main pull-request bridge does not need the broad-only jobs, and the broad gate waits for them', () => {
   const files = Object.fromEntries(readdirSync(directory).filter(file => /\.ya?ml$/.test(file))
     .map(file => [file, YAML.parse(readFileSync(new URL(file, directory), 'utf8'))]));
-  const broadOnly = ['antigravity-cli', 'installed-windows-acceptance', 'image-acceptance', 'system-key-store', 'system-key-store-linux', 'contributor-guide', 'first-use-journey', 'scripted-pilot'];
+  const broadOnly = ['antigravity-cli', 'installed-windows-acceptance', 'image-acceptance', 'system-key-store', 'system-key-store-linux', 'contributor-guide', 'first-use-journey', 'scripted-pilot', 'claude-code'];
   for (const id of broadOnly) assert.equal(files['verify.yml'].jobs[id], undefined, id);
   assert.deepEqual(files['verify-full.yml'].jobs.verification.needs.slice(-broadOnly.length), broadOnly);
 });

@@ -678,6 +678,34 @@ jobs:
       - name: Run the official Antigravity CLI against the local stand-in model
         run: node scripts/run-local-jest.cjs --ci --selectProjects node --runInBand --runTestsByPath __tests__/model/antigravityCliIntegration.test.ts
 
+  # The Claude Code bundled with the Agent SDK for each desktop system, run by
+  # FLUJO's Claude adapter and flow engine against a local stand-in of
+  # Anthropic's service (#1092, #1096, #756): approvals, resumed sessions,
+  # instructions per turn, compaction, steering, usage, the subscription numbers
+  # and that no Claude Code process outlives its turn. Linux runs the same
+  # suites in test-isolated. No account or key is needed.
+  claude-code:
+    name: Claude Code (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '22.23.4'
+          cache: npm
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
+      - run: npm ci --include=dev
+      - name: Run the bundled Claude Code against the local stand-in of Anthropic's service
+        run: node scripts/run-local-jest.cjs --ci --selectProjects node --runInBand --runTestsByPath __tests__/model/claudeCodeStandIn.test.ts __tests__/chat/claudeFlowStandIn.test.ts
+
   # FLUJO's system key (#1443) against the real key store of each desktop
   # system: Windows data protection and the macOS login Keychain. Store and
   # read back, restart, replace the data key, move an existing install, recover
@@ -872,7 +900,7 @@ jobs:
   verification:
     name: verification
     if: always()
-    needs: [production-build, release-safety, typecheck, lint, test, test-isolated, workflow-contract, dependency-security, codeql, antigravity-cli, installed-windows-acceptance, image-acceptance, system-key-store, system-key-store-linux, contributor-guide, first-use-journey, scripted-pilot]
+    needs: [production-build, release-safety, typecheck, lint, test, test-isolated, workflow-contract, dependency-security, codeql, antigravity-cli, installed-windows-acceptance, image-acceptance, system-key-store, system-key-store-linux, contributor-guide, first-use-journey, scripted-pilot, claude-code]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

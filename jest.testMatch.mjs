@@ -92,6 +92,10 @@ export const ISOLATED_TEST_FILES = [
   '__tests__/snapshot/ShadowRepoService.test.ts',
   // Real bundled Codex processes; the cancellation checks count processes.
   '__tests__/model/codexStandIn.test.ts',
+  // Real bundled Claude Code processes against the Anthropic stand-in; every
+  // check counts the Claude Code processes left after its turn.
+  '__tests__/model/claudeCodeStandIn.test.ts',
+  '__tests__/chat/claudeFlowStandIn.test.ts',
 ];
 
 // Environment switch consulted by jest.config.mjs. scripts/run-local-jest.cjs

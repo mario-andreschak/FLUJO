@@ -1,5 +1,5 @@
 import { readClaudeOAuthAllowance, ClaudeAllowanceError } from '@/backend/services/model/allowance/claudeAccount';
-import { claudeOAuthUsageResult, claudeRateLimitSignal, normalizeClaudeAllowance } from '@/backend/services/model/allowance/claude';
+import { claudeOAuthUsageResult, claudeRateLimitSignals, normalizeClaudeAllowance } from '@/backend/services/model/allowance/claude';
 import { allowanceAccountKey } from '@/backend/services/model/allowance/store';
 import { claudeAllowanceFixtures, usagePageText, type ClaudeAllowanceStep } from './fixtures/claudeAllowanceFixtures';
 
@@ -41,24 +41,39 @@ test('a usage page larger than 64 KiB is a failed check, not a partial balance',
 
 describe('Claude rate-limit events', () => {
   test('utilization is a 0-1 fraction and the reset time is in epoch seconds', () => {
-    const signal = claudeRateLimitSignal({ status: 'allowed_warning', rateLimitType: 'seven_day', utilization: 0.905, resetsAt: 1_900_000_000 }, '2026-11-25T00:00:00.000Z');
-    expect(signal).toEqual({ provider: 'claude', source: 'claude-rate-limit-event', observedAt: '2026-11-25T00:00:00.000Z',
-      windows: [{ id: 'seven_day', label: 'Weekly', remainingPercent: expect.closeTo(9.5, 5), resetAt: new Date(1_900_000_000_000).toISOString() }] });
+    const signals = claudeRateLimitSignals({ status: 'allowed_warning', rateLimitType: 'seven_day', utilization: 0.905, resetsAt: 1_900_000_000 }, '2026-11-25T00:00:00.000Z');
+    expect(signals).toEqual([{ provider: 'claude', source: 'claude-rate-limit-event', observedAt: '2026-11-25T00:00:00.000Z',
+      windows: [{ id: 'seven_day', label: 'Weekly', remainingPercent: expect.closeTo(9.5, 5), resetAt: new Date(1_900_000_000_000).toISOString() }] }]);
   });
 
   test('a rejection is a used-up window and "allowed" clears earlier signals', () => {
-    expect(claudeRateLimitSignal({ status: 'rejected', rateLimitType: 'seven_day_sonnet' })).toMatchObject({
-      windows: [{ id: 'seven_day_sonnet', remainingPercent: 0, modelFamily: 'sonnet', resetAt: null }] });
-    expect(claudeRateLimitSignal({ status: 'allowed' })).toBe('clear');
+    expect(claudeRateLimitSignals({ status: 'rejected', rateLimitType: 'seven_day_sonnet' })).toEqual([expect.objectContaining({
+      windows: [{ id: 'seven_day_sonnet', label: 'Weekly Sonnet', remainingPercent: 0, modelFamily: 'sonnet', resetAt: null }] })]);
+    expect(claudeRateLimitSignals({ status: 'allowed' })).toEqual(['clear']);
+  });
+
+  test('every window Claude Code reports is read, near a limit or not, and "allowed" replaces older signals', () => {
+    const unifiedWindows = { five_hour: { utilization: 0.12, resetsAt: 1_900_000_000, status: 'allowed' },
+      seven_day: { utilization: 0.31, resetsAt: 1_900_100_000, status: 'allowed' }, seven_day_overage_included: { utilization: 0.5, resetsAt: 1_900_100_000 } };
+    const [clear, snapshot] = claudeRateLimitSignals({ status: 'allowed', rateLimitType: 'five_hour', unifiedWindows }, '2026-11-25T00:00:00.000Z');
+    expect(clear).toBe('clear');
+    expect(snapshot).toMatchObject({ source: 'claude-rate-limit-event', windows: [
+      { id: 'five_hour', remainingPercent: 88, resetAt: new Date(1_900_000_000_000).toISOString() },
+      { id: 'seven_day', remainingPercent: 69 }, { id: 'seven_day_overage_included', remainingPercent: 50, modelFamily: 'fable' }] });
+    // A rejected window is used up even when its reported share is lower.
+    expect(claudeRateLimitSignals({ status: 'rejected', rateLimitType: 'five_hour', unifiedWindows: {
+      five_hour: { utilization: 0.97, resetsAt: 1_900_000_000, status: 'rejected' } } })).toEqual([expect.objectContaining({
+      windows: [expect.objectContaining({ id: 'five_hour', remainingPercent: 0 })] })]);
   });
 
   test.each([
     ['extra-usage credits are not the plan allowance', { status: 'rejected', rateLimitType: 'overage' }],
     ['a window type FLUJO does not know', { status: 'rejected', rateLimitType: 'monthly_mystery' }],
     ['a warning without a number', { status: 'allowed_warning', rateLimitType: 'five_hour', surpassedThreshold: 0.9 }],
+    ['a reported window without a number', { status: 'allowed_warning', unifiedWindows: { five_hour: { resetsAt: 1 }, monthly: { utilization: 0.4 } } }],
     ['no information at all', null],
   ])('ignores %s', (_name, info) => {
-    expect(claudeRateLimitSignal(info)).toBeUndefined();
+    expect(claudeRateLimitSignals(info)).toEqual([]);
   });
 });
 

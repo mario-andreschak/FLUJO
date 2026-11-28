@@ -15,7 +15,7 @@ import { assertNativeOriginalProcessHost } from '@/backend/execution/flow/handle
 import { createClaudeOwnedProcessSpawner } from './claudeOwnedProcess';
 import { assertToolIdentityFresh } from '@/backend/execution/flow/handlers/toolNamespace';
 import { mcpService } from '@/backend/services/mcp';
-import { collectClaudeAllowance, claudeAllowanceSnapshot, claudeRateLimitSignal } from '@/backend/services/model/allowance/claude';
+import { collectClaudeAllowance, claudeAllowanceSnapshot, claudeRateLimitSignals } from '@/backend/services/model/allowance/claude';
 import { allowanceAccountKey, recordAllowanceSnapshot, recordAllowanceSignal } from '@/backend/services/model/allowance/store';
 import { ownerScopeForRun } from '@/backend/services/mcp/ownerScope';
 import { getRunResourceSettings } from '@/backend/services/runResources';
@@ -101,6 +101,21 @@ const HANDOFF_STOP_WAIT_MS = 3_000;
  * `return()`, and the SDK's clean-up there waits up to two seconds for Claude
  * Code to exit. This wrapper starts that same clean-up and returns at once.
  */
+/**
+ * The error of a run Claude Code ended itself. It keeps the service's status,
+ * so a used-up plan window (429) reads as a rate limit to fallback policies,
+ * with the window's reset as its Retry-After.
+ */
+function claudeTerminalError(text: string, result: unknown, limitResetsAt: number | undefined): Error {
+  const { api_error_status: status, api_error: code } = (result ?? {}) as { api_error_status?: unknown; api_error?: unknown };
+  const waitSeconds = limitResetsAt === undefined ? undefined : Math.max(1, Math.ceil(limitResetsAt - Date.now() / 1000));
+  return Object.assign(new Error(text), {
+    ...(typeof status === 'number' ? { status } : {}),
+    ...(typeof code === 'string' ? { code } : {}),
+    ...(status === 429 && waitSeconds !== undefined ? { headers: { 'retry-after': String(waitSeconds) } } : {}),
+  });
+}
+
 function withoutExitWait<T>(source: AsyncIterable<T>): AsyncIterable<T> {
   return {
     [Symbol.asyncIterator]: () => {
@@ -563,7 +578,16 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // that owns the whole agentic loop — this is the largest otherwise
     // un-interruptible window (the SDK can run tools/turns for a long time).
     // A handoff abort is intentional and handled separately (handoffCalls set).
-    const onExternalAbort = () => abortController.abort();
+    // Stopping a running turn asks Claude Code to end it first. Aborting or
+    // closing its input alone makes it answer the open tool call or approval
+    // itself and ask the model once more: a turn the subscription pays for and
+    // nobody reads (#1092, measured with the bundled Claude Code).
+    let interruptClaudeTurn: (() => void) | undefined;
+    const stopClaude = (): void => {
+      if (!abortController.signal.aborted) interruptClaudeTurn?.();
+      abortController.abort();
+    };
+    const onExternalAbort = () => stopClaude();
     if (signal?.aborted) {
       abortController.abort();
     } else {
@@ -660,7 +684,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         // on. A failed approval service must end the invocation instead.
         if (!abortController.signal.aborted) {
           toolAuthorityFailure ??= error;
-          abortController.abort();
+          stopClaude();
         }
         throw error;
       }
@@ -1017,7 +1041,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
                 return dispatched.result;
               } catch (error) {
                 nativeToolPort.cancel();
-                abortController.abort();
+                stopClaude();
                 throw error;
               }
             });
@@ -1115,7 +1139,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         } catch (error) {
           delivery.requeue();
           steeringFailure = error;
-          abortController.abort();
+          stopClaude();
           throw error;
         } finally {
           activeDelivery = undefined;
@@ -1246,7 +1270,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
               } };
             } catch (error) {
               toolAuthorityFailure = error;
-              abortController.abort();
+              stopClaude();
               return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'FLUJO tool authority is no longer current.' } };
             }
           }] }],
@@ -1329,7 +1353,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             // denials. Keep host authority/approval failures at the invocation
             // boundary, as the mandatory PreToolUse hook already does.
             toolAuthorityFailure = error;
-            abortController.abort();
+            stopClaude();
             return { behavior: 'deny', message: 'FLUJO tool authority is no longer current.' };
           }
         },
@@ -1394,7 +1418,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         await nativeOriginalProcessHost.assertTurnBudget(queryOptions.maxTurns!);
         ownedSpawner = createClaudeOwnedProcessSpawner({
           owner: nativeOriginalProcessHost,
-          requestSdkStop: () => abortController.abort(),
+          requestSdkStop: () => stopClaude(),
           register: process => nativeOriginalProcessHost.register(process),
           stderr: queryOptions.stderr,
         });
@@ -1423,6 +1447,10 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         traceMark('claude.claimed');
       }
       response = warmResponse ?? query({ prompt: promptStream(), options: queryOptions });
+      const running = response as { interrupt?: () => Promise<unknown> };
+      interruptClaudeTurn = () => {
+        try { void running.interrupt?.()?.catch?.(() => undefined); } catch { /* The process is already gone. */ }
+      };
     } catch (error) {
       closeInput();
       abortController.abort();
@@ -1450,7 +1478,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         queuedDelivery = delivery;
         wakeInput?.();
       },
-      onError: error => { steeringFailure = error; closeInput(); abortController.abort(); },
+      onError: error => { steeringFailure = error; stopClaude(); closeInput(); },
     });
 
     let resultText = '';
@@ -1553,7 +1581,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       if (!endOfHandoffTurn) return false;
       handoffStopTimer ??= setTimeout(() => {
         handoffStopWaitOver = true;
-        abortController.abort();
+        stopClaude();
       }, HANDOFF_STOP_WAIT_MS);
       return true;
     };
@@ -1567,6 +1595,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // waiting out the subprocess teardown.
     let allowanceObservation: ReturnType<typeof collectClaudeAllowance> | undefined;
     const allowanceKey = allowanceAccountKey('claude', apiKey);
+    let limitResetsAt: number | undefined;
     let tracedFirstMessage = false;
     let tracedFirstDelta = false;
     const messageLoop = async (): Promise<void> => {
@@ -1599,7 +1628,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         // or allowing the SDK to begin another model/tool turn.
         if (shouldEndAgenticTurn?.()) {
           endedByCaller = true;
-          abortController.abort();
+          stopClaude();
           break;
         }
         // This also runs for partial stream events, so a correction does not
@@ -1626,7 +1655,10 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             attempt: lifecycle.attempt, retryDelayMs: lifecycle.retry_delay_ms, terminalReason: lifecycle.terminal_reason,
             runtimeVersion: lifecycle.claude_code_version });
         }
-        if (message.type === 'rate_limit_event') recordAllowanceSignal(allowanceKey, claudeRateLimitSignal(message.rate_limit_info));
+        if (message.type === 'rate_limit_event') {
+          for (const allowanceSignal of claudeRateLimitSignals(message.rate_limit_info)) recordAllowanceSignal(allowanceKey, allowanceSignal);
+          if (message.rate_limit_info.status === 'rejected') limitResetsAt = message.rate_limit_info.resetsAt;
+        }
         // Once cancelled, stop recording/streaming anything the detached loop
         // may still drain out of the dying subprocess.
         if (signal?.aborted) break;
@@ -1651,7 +1683,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           readingHandoffTurn = handoffTurnUnread(message);
           if (!readingHandoffTurn) {
             if (awaitingHandoffStop(message)) continue;
-            abortController.abort();
+            stopClaude();
             break;
           }
         }
@@ -1738,7 +1770,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           // call after spawning at least one worker. Stop BEFORE accumulating
           // it so the model can't narrate post-handoff.
           if (handoffCalls.length > 0 && turnHandoffUses === 0 && !readingHandoffTurn) {
-            abortController.abort();
+            stopClaude();
             break;
           }
           // Mid-spawn narration (between successive spawn calls) is mid-action
@@ -1803,7 +1835,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             const reported = Array.isArray(errs) && errs.length ? errs.join('; ')
               : (message as { result?: string }).result?.trim();
             const detail = reported && apiKey ? reported.split(apiKey).join('[credential redacted]') : reported;
-            throw new Error(`Claude invocation incomplete: ${terminalReason}${detail ? ` (${detail.slice(0, 500)})` : ''}`);
+            throw claudeTerminalError(`Claude invocation incomplete: ${terminalReason}${detail ? ` (${detail.slice(0, 500)})` : ''}`,
+              message, limitResetsAt);
           }
           await nativeOriginalProcessHost?.observeSdkUsage(message);
           for (const denial of message.permission_denials ?? []) {
@@ -1819,7 +1852,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             const rawDetail = Array.isArray(errs) && errs.length ? errs.join('; ')
               : errorResult?.trim() || (message.is_error ? 'SDK reported an error result' : message.subtype);
             const detail = apiKey ? rawDetail.split(apiKey).join('[credential redacted]') : rawDetail;
-            throw new Error(`Claude subscription run failed: ${detail}`);
+            throw claudeTerminalError(`Claude subscription run failed: ${detail}`, message, limitResetsAt);
           }
           await watcher.poll();
           if (attribution.settled && (queuedDelivery || activeDelivery)) await deliverySettled;
