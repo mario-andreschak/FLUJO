@@ -7,7 +7,8 @@ reads is listed with a reason in `src/shared/environmentAllowlist.ts`; only
 where FLUJO runs, security limits and values FLUJO hands its own processes
 belong there. Values tests need go through `testSetting()`, which ignores them
 outside tests. On/off settings are only for privacy, security and real user
-choices.
+choices. A switch goes together with every read of it: neither list has a
+"pending" entry, and the type check or the test fails if one comes back.
 
 Enforced by:
 - `__tests__/architecture/noFeatureSwitches.test.ts`

@@ -28,7 +28,7 @@ import {
   assertMcpRuntimeAuthorityRetired,
 } from "./connection";
 import {
-  isMcpBetaProtocolEnabled,
+  usesNegotiatingClient,
   createNewBetaClient,
   createBetaTransport,
   activateStdioOAuthMrtrController,
@@ -157,11 +157,9 @@ async function testConnectionAttempt(
     assertMcpRuntimeAuthorityRetired(connectConfig.name);
     diagnosticRedactor = createMcpDiagnosticRedactor(collectMcpDiagnosticSecrets(toTest, connectConfig));
     stderrRedactor = diagnosticRedactor.stream();
-    // Same experimental v2-beta routing as the live connection, so Test Run
-    // probes exactly what connectServer would build.
-    const useBeta =
-      !isProtectedExecutionServer(connectConfig.name) && (await isMcpBetaProtocolEnabled()) &&
-      connectConfig.transport !== "websocket";
+    // Same SDK as the live connection, so Test Run probes exactly what
+    // connectServer would build.
+    const useBeta = usesNegotiatingClient(connectConfig, isProtectedExecutionServer(connectConfig.name));
     const isolateRuntimeHome = await resolveRuntimeHomeIsolation(connectConfig);
     const transportOptions = { isolateRuntimeHome };
     client = useBeta

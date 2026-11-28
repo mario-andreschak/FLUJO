@@ -126,7 +126,7 @@ import { registerResourceNotificationHandlers, registerToolListChangedHandler } 
 import { CLAUDE_CHANNEL_METHOD, receiveClaudeChannelNotification, registerClaudeChannelHandler } from "./inboundEvents";
 import { cachedMcpList, invalidateMcpLists } from "./listCache";
 import {
-  isMcpBetaProtocolEnabled,
+  usesNegotiatingClient,
   createNewBetaClient,
   createBetaTransport,
   activateStdioOAuthMrtrController,
@@ -733,11 +733,8 @@ export class MCPService {
       if (protectedServer) assertExecutionServerConfig(config);
       if (executionExtensionContext) await this.assertProtectedConnectionIntent(executionExtensionContext, config);
 
-      // Experimental v2-beta protocol (betaClient.ts). Resolved once per attempt so
-      // shouldRecreateClient and the factories below agree; websocket configs always
-      // stay on the v1 SDK (the v2 SDK has no websocket transport).
-      const useBeta =
-        !protectedServer && (await isMcpBetaProtocolEnabled()) && config.transport !== "websocket";
+      // Resolved once per attempt so shouldRecreateClient and the factories below agree.
+      const useBeta = usesNegotiatingClient(config, protectedServer);
       const isolateRuntimeHome = await resolveRuntimeHomeIsolation(config);
       if (executionExtensionContext) await this.assertProtectedConnectionIntent(executionExtensionContext, config);
       const transportOptions = {
@@ -802,9 +799,8 @@ export class MCPService {
       }
 
       if (executionExtensionContext) await this.assertProtectedConnectionIntent(executionExtensionContext, config);
-      // Create a new client (v2-beta when the experimental toggle is on — the beta
-      // client negotiates per server and falls back to the classic handshake, so
-      // existing servers keep working either way).
+      // Create a new client. The negotiating client falls back to the classic
+      // handshake per server, so existing servers keep working.
       await assertBundledFlujoWorkloadEffectCurrent();
       assertMcpRuntimeAuthorityRetired(config.name);
       client = useBeta ? createNewBetaClient(config, bindToCurrentWorkspace(() => {

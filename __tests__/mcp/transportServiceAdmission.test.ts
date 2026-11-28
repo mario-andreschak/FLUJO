@@ -17,7 +17,7 @@ jest.mock('@/backend/services/mcp/connection', () => ({
   safelyCloseClient: jest.fn(),
 }));
 jest.mock('@/backend/services/mcp/betaClient', () => ({
-  isMcpBetaProtocolEnabled: (...args: unknown[]) => mockFactory(...args),
+  usesNegotiatingClient: (...args: unknown[]) => mockFactory(...args),
   createBetaTransport: (...args: unknown[]) => mockFactory(...args),
   createNewBetaClient: (...args: unknown[]) => mockFactory(...args),
 }));

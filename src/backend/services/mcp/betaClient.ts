@@ -85,12 +85,13 @@ import {
 const log = createLogger("backend/services/mcp/betaClient");
 
 /**
- * Connections always negotiate the 2026-07-28 protocol; negotiation falls back
- * to the classic handshake for older servers by itself (#1449). Still called
- * by services/mcp/index.ts until the second #1449 pass removes the calls.
+ * Whether a connection is built by the negotiating SDK. Every server is,
+ * except protected execution servers and websocket ones (the newer SDK has no
+ * websocket transport). Negotiation falls back to the classic handshake for
+ * older servers by itself (#1449).
  */
-export async function isMcpBetaProtocolEnabled(): Promise<boolean> {
-  return true;
+export function usesNegotiatingClient(config: Pick<MCPServerConfig, 'transport'>, protectedServer: boolean): boolean {
+  return !protectedServer && config.transport !== "websocket";
 }
 
 /** Whether a client (as stored in the connection map) was built by the beta path. */

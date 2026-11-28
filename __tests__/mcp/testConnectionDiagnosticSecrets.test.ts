@@ -5,7 +5,7 @@ import type { CommandStreamEvent } from '@/shared/types/streaming';
 // These tests fake the classic SDK client factories, so they pin the classic handshake.
 jest.mock('@/backend/services/mcp/betaClient', () => ({
   ...jest.requireActual('@/backend/services/mcp/betaClient'),
-  isMcpBetaProtocolEnabled: jest.fn(async () => false),
+  usesNegotiatingClient: jest.fn(() => false),
 }));
 jest.mock('@modelcontextprotocol/sdk/client/stdio.js', () => ({
   StdioClientTransport: class { stderr = new EventEmitter(); onerror?: (error: Error) => void; },
