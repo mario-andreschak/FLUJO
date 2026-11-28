@@ -219,10 +219,10 @@ export const ContextCompactionPanel: React.FC<{
 };
 
 const DebuggerModelInput: React.FC<{ modelInput: ModelInputSnapshot }> = ({ modelInput }) => {
-  const { t, tp, formatNumber } = useI18n();
+  const { t, tp } = useI18n();
   const [view, setView] = useState<'wire' | 'annotated'>('wire');
 
-  const { systemMessage, wireMessages, provenance, counts, inputMode, visualCompaction, contextCompaction } = modelInput;
+  const { systemMessage, wireMessages, provenance, counts, inputMode, contextCompaction } = modelInput;
 
   // The wire view shows non-system messages (the system message gets its own
   // prominent block above).
@@ -244,36 +244,6 @@ const DebuggerModelInput: React.FC<{ modelInput: ModelInputSnapshot }> = ({ mode
       </Box>
 
       <ContextCompactionPanel diagnostic={contextCompaction} />
-
-      {visualCompaction && (
-        <Paper variant="outlined" sx={{ p: 1, mb: 1 }}>
-          <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
-            <Chip size="small" color={visualCompaction.route === 'image' ? 'success' : 'default'} label={t('chat.debug.visualRoute', { route: visualCompaction.route })} />
-            <Chip size="small" variant="outlined" label={t('chat.debug.vision', { capability: visualCompaction.capability })} />
-            {visualCompaction.evaluationOnly && <Chip size="small" variant="outlined" label={t('chat.debug.evaluationOnly')} />}
-            {visualCompaction.fallbackReason && <Chip size="small" variant="outlined" label={visualCompaction.fallbackReason} />}
-          </Box>
-          {visualCompaction.estimates && (
-            <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mt: 0.5 }}>
-              {t('chat.debug.visualEstimates', {
-                raw: formatNumber(visualCompaction.estimates.rawTextTokens),
-                image: formatNumber(visualCompaction.estimates.imageTokens),
-                sidecar: formatNumber(visualCompaction.estimates.sidecarTokens),
-                savings: formatNumber(visualCompaction.estimates.netSavings),
-                percent: formatNumber(visualCompaction.estimates.savingsPercent, { maximumFractionDigits: 1 }),
-                pages: tp('chat.debug.pages', visualCompaction.pages.length),
-                bytes: formatNumber(visualCompaction.renderedBytes),
-                latency: formatNumber(visualCompaction.latencyMs),
-              })}
-            </Typography>
-          )}
-          {visualCompaction.sourceResourceUri && (
-            <Typography variant="caption" sx={{ display: 'block', mt: 0.5, overflowWrap: 'anywhere' }}>
-              {t('chat.debug.exactSource', { uri: visualCompaction.sourceResourceUri, hash: visualCompaction.sourceSha256 ?? '—' })}
-            </Typography>
-          )}
-        </Paper>
-      )}
 
       {/* Resolved system message — prominent, collapsible. */}
       <Accordion defaultExpanded sx={{ boxShadow: 'none', '&:before': { display: 'none' } }}>

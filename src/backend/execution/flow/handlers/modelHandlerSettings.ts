@@ -2,38 +2,27 @@
 import { loadItem } from '@/utils/storage/backend';
 import { StorageKey, type Settings } from '@/shared/types/storage/storage';
 import { createLogger } from '@/utils/logger';
+import type { CompactionGlobalSettings } from './resolveEffectiveCompaction';
 
 const log = createLogger('backend/flow/execution/handlers/modelHandlerSettings');
 
 /**
- * Read the experimental summarizing-compaction settings (issue #248) from the
- * persisted Settings blob. Best-effort: any failure reads as disabled, so the
- * completion path keeps its existing (wire-only) behaviour.
+ * Read the summarizing-compaction sizes (issue #248) from the persisted
+ * Settings blob. Best-effort: a failed read returns no values, so the
+ * documented defaults apply.
  */
-export async function getCompactionGlobalSettings(): Promise<{
-  compactionEnabled?: boolean;
-  compactionBufferTokens?: number;
-  compactionKeepTokens?: number;
-  compactionThresholdPercent?: number;
-  visualCompactionEnabled?: boolean;
-  visualCompactionToolResultsOnly?: boolean;
-  visualCompactionEvaluationMode?: boolean;
-}> {
+export async function getCompactionGlobalSettings(): Promise<CompactionGlobalSettings> {
   try {
     const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
     const exp = settings?.experimental;
     return {
-      compactionEnabled: exp?.compactionEnabled,
       compactionBufferTokens: exp?.compactionBufferTokens,
       compactionKeepTokens: exp?.compactionKeepTokens,
       compactionThresholdPercent: exp?.compactionThresholdPercent,
-      visualCompactionEnabled: exp?.visualCompactionEnabled,
-      visualCompactionToolResultsOnly: exp?.visualCompactionToolResultsOnly,
-      visualCompactionEvaluationMode: exp?.visualCompactionEvaluationMode,
     };
   } catch (err) {
-    log.warn('Failed to read compaction settings; defaulting to disabled', { err });
-    return { compactionEnabled: false, visualCompactionEnabled: false };
+    log.warn('Failed to read compaction settings; using the defaults', { err });
+    return {};
   }
 }
 

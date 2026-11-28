@@ -43,21 +43,6 @@ export interface CompactionModelSettings {
   contextWindow?: number;
 }
 
-export interface EffectiveVisualCompactionSettings {
-  enabled: boolean;
-  toolResultsOnly: boolean;
-  evaluationOnly: boolean;
-}
-
-/**
- * Visual compaction is retired (#1449): it cannot tell when a model misreads
- * the pictures, so it cannot be on by default. ModelHandler.ts still calls
- * this until the second #1449 pass deletes visualCompaction.ts.
- */
-export function resolveEffectiveVisualCompaction(_global?: unknown): EffectiveVisualCompactionSettings {
-  return { enabled: false, toolResultsOnly: true, evaluationOnly: false };
-}
-
 function posInt(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
     ? Math.floor(value)

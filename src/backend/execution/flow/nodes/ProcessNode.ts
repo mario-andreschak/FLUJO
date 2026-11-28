@@ -1443,7 +1443,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
             compactionMode: node_params?.properties?.compactionMode,
             compactionKeepTokens: node_params?.properties?.compactionKeepTokens,
             onFinalWire: prepResult.modelInput
-              ? (finalWire, visualCompaction, finalModelInput) => {
+              ? (finalWire, finalModelInput) => {
                   if (finalModelInput) {
                     prepResult.modelInput = finalModelInput;
                     prepResult.modelInputForArchive = finalModelInput;
@@ -1463,10 +1463,6 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
                       : message.content,
                   })) as FlujoChatMessage[];
                   prepResult.modelInput!.wireMessages = captured;
-                  if (visualCompaction) {
-                    visualCompaction.finalWireCaptured = true;
-                    prepResult.modelInput!.visualCompaction = visualCompaction;
-                  }
                   prepResult.modelInputs = [prepResult.modelInput!];
                 }
               : undefined,

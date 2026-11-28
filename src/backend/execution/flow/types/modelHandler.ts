@@ -11,7 +11,6 @@ import {
 import { FlujoChatMessage } from '@/shared/types/chat'; // Correct import path
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
 import type { ModelMediaPart } from '@/shared/types/model/media';
-import type { VisualCompactionDiagnostic } from '@/shared/types/visualArchive';
 import type { PersonaAttribution } from '@/shared/types/enduringAgent';
 import type { ModelInputSnapshot } from '../types';
 import type { ResponsesSessionState } from '@/backend/services/model/adapters/responsesSessionState';
@@ -52,10 +51,9 @@ export interface ModelCallInput {
   /** Existing Process-node summarizing-compaction overrides (#248). */
   compactionMode?: 'auto' | 'off';
   compactionKeepTokens?: number;
-  /** Debug-only observer for the final generic provider wire and visual route. */
+  /** Debug-only observer for the final generic provider wire. */
   onFinalWire?: (
     messages: OpenAI.ChatCompletionMessageParam[],
-    diagnostic?: VisualCompactionDiagnostic,
     modelInput?: ModelInputSnapshot,
   ) => void;
   /** Persist actual provider dispatches for ordinary, durable Chat conversations. */

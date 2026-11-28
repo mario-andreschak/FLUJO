@@ -348,16 +348,6 @@ export default function ModelTurnInspector({
         </Alert>
       ))}
 
-      {snapshot.visualCompaction && (
-        <Alert severity={snapshot.visualCompaction.route === 'image' ? 'warning' : 'info'} variant="outlined" sx={{ mb: 1 }}>
-          Visual context route: {snapshot.visualCompaction.route}
-          {snapshot.visualCompaction.candidate
-            ? ` · ${snapshot.visualCompaction.candidate.messageCount} old messages evaluated`
-            : ''}
-          {snapshot.visualCompaction.fallbackReason ? ` · ${snapshot.visualCompaction.fallbackReason}` : ''}
-        </Alert>
-      )}
-
       {tab === 'canonical' && (
         <>
           <Alert severity="info" variant="outlined" sx={{ mb: 1.25 }}>

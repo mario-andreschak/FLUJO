@@ -36,7 +36,7 @@ Saved global/model percentage thresholds reach the runtime, with the existing
 absolute-model override taking precedence. The trigger estimates the current
 provider projection and tool schemas, rather than a previous prompt count.
 These remain conservative estimates, not measured provider token counts.
-Settings-read failure disables optional summarization and visual compaction.
+A failed settings read uses the default sizes; summarization stays on.
 
 At large history sizes, summaries form a persistent hierarchy of bounded original
 message ranges. Parent nodes summarize child summaries and retain their exact
@@ -122,8 +122,7 @@ quoted phrase also receives bounded automatic excerpts from the admitted archive
 prefix. This reduces reliance on a model deciding to search; it does not implement
 general semantic retrieval or make lossy summaries sufficient for exact recall.
 
-Native image preparation is independent of optional visual compaction. Large
-attachments become budgeted image overviews with durable originals and a crop
+Large image attachments become budgeted image overviews with durable originals and a crop
 reader. Older views can be paged out after preservation when multiple image
 encoders cannot fit; the newest requested view remains. Crop responses retain
 the original URI, hash and coordinates without repeating storage metadata. Image
@@ -163,11 +162,9 @@ Only one owner rewrites a given request: FLUJO's summary replaces history on
 the wire it sends, and native windows are reused only while their recorded
 prefix still matches that wire.
 
-Visual compaction remains experimental and disabled by default. It preserves
-trusted instructions and complete pairing and must beat the estimated shortened
-text route. Its existing image carrier uses a user-role message; source-authority
-acceptance and measured quality/cost remain open before treating this experiment
-as a qualified native compaction route.
+Visual compaction was removed (#1449): it could not tell when a model misread
+the rendered pages, so it could not be on for everyone. Run resources it saved
+in older conversations stay listed and readable.
 
 Complete projection fingerprints stream the existing canonical JSON bytes into
 SHA-256 instead of cloning the whole graph and materializing its JSON string.

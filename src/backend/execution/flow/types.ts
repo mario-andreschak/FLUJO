@@ -252,10 +252,9 @@ export interface ProcessNodeProperties {
      */
     maxTokens?: number;
     /**
-     * Per-node summarizing-compaction control (issue #248). `'off'` opts this
-     * node OUT of compaction even when the global experimental flag is on;
-     * `'auto'` (or unset) inherits the global setting. A node cannot turn
-     * compaction ON by itself — it stays gated behind `compactionEnabled`.
+     * Per-node summarizing-compaction control (issue #248). Compaction is on
+     * for every node (#1449); `'off'` opts this node OUT, `'auto'` (or unset)
+     * keeps it.
      */
     compactionMode?: 'auto' | 'off';
     /**

@@ -285,8 +285,6 @@ export interface ExperimentalSettings {
    * point; a missing value keeps every description intact.
    */
   toolDescriptionMaxChars?: number;
-  /** @deprecated Retired by #1449: summarizing compaction is always on; a Process node can still turn it off. */
-  compactionEnabled?: boolean;
   /**
    * Head-room, in tokens, kept free below the model's context window when
    * deciding whether to compact pre-flight (compact when the estimated request
@@ -302,12 +300,6 @@ export interface ExperimentalSettings {
   compactionKeepTokens?: number;
   /** Optional 1–100 percent context threshold; per-model settings take precedence. */
   compactionThresholdPercent?: number;
-  /** @deprecated Retired by #1449: visual compaction is off for everyone. */
-  visualCompactionEnabled?: boolean;
-  /** @deprecated Retired by #1449 together with visual compaction. */
-  visualCompactionToolResultsOnly?: boolean;
-  /** @deprecated Retired by #1449 together with visual compaction. */
-  visualCompactionEvaluationMode?: boolean;
   /**
    * How many of the most-recent wire messages `compactForWire` keeps VERBATIM
    * (everything older is eligible for lossless wire-only shrinking of oversized

@@ -716,7 +716,7 @@ export class ModelHandler {
       const prepared = await prepareProviderWire(modelId, model, messages, tools, opts);
       if ('success' in prepared) return prepared;
       let { apiMessages, apiSourceIds } = prepared;
-      const { sanitizedTools, modelInputForArchive, visualDiagnostic, keepRecentMessages, inputBudget, prepareImages } = prepared;
+      const { sanitizedTools, modelInputForArchive, keepRecentMessages, inputBudget, prepareImages } = prepared;
 
       // Official OpenAI Chat Completions cache strategy. Process-node calls move
       // their node-specific system instruction behind the wired conversation;
@@ -748,12 +748,12 @@ export class ModelHandler {
         });
       }
 
-      // Capture the actual final generic provider wire after visual routing,
-      // lossless compaction, tool trimming, proactive budget refit, and prompt-
-      // cache ordering. Image data URLs are bounded by the ProcessNode observer
+      // Capture the actual final generic provider wire after lossless
+      // compaction, tool trimming, proactive budget refit, and prompt-cache
+      // ordering. Image data URLs are bounded by the ProcessNode observer
       // before debugger storage.
       try {
-        opts?.onFinalWire?.(apiMessages, visualDiagnostic, modelInputForArchive);
+        opts?.onFinalWire?.(apiMessages, modelInputForArchive);
       } catch (error) {
         log.warn('Final-wire observer failed; continuing request', { error });
       }
@@ -1081,7 +1081,6 @@ export class ModelHandler {
                         canonicalArchive: pagedCanonical,
                         genericWire: snapshot.wireMessages ?? hydratedMessages,
                         sdkRequest: snapshot.request, modelInput: modelInputForArchive,
-                        visualCompaction: visualDiagnostic,
                       };
                       const entry = await archiveModelDispatch(archiveInput, () => ({
                         ...archiveInput,
@@ -1624,7 +1623,7 @@ export class ModelHandler {
             modelId,
           });
           try {
-            opts?.onFinalWire?.(syntheticRetryMessages, visualDiagnostic, modelInputForArchive);
+            opts?.onFinalWire?.(syntheticRetryMessages, modelInputForArchive);
           } catch (error) {
             log.warn('Final-wire observer failed during empty-completion retry; continuing retry', { error });
           }
@@ -1654,7 +1653,7 @@ export class ModelHandler {
       ) {
         const refit = await refitWireAfterContextOverflow({
           modelId, model, opts, apiMessages, apiSourceIds, sanitizedTools, modelInputForArchive,
-          visualDiagnostic, keepRecentMessages, inputBudget, prepareImages,
+          keepRecentMessages, inputBudget, prepareImages,
         });
         if (refit) result = await attemptWithLimitRetry(refit.apiMessages, refit.sanitizedTools);
       }

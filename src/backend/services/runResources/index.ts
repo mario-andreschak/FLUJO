@@ -714,7 +714,7 @@ export async function getRunResourceLocalPath(uri: string): Promise<string | nul
 }
 
 /**
- * Bounded exact-source fetch used by visual archives. It returns at most
+ * Bounded exact-source fetch used by read_resource. It returns at most
  * `maxChars` of text, verifies the immutable payload hash when requested, and
  * records both the read and verification in the resource lineage.
  */

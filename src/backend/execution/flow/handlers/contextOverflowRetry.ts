@@ -23,7 +23,7 @@ const log = createLogger('backend/flow/execution/handlers/contextOverflowRetry')
 
 /** The rejected wire and what the first preparation produced for it. */
 export type ContextOverflowRefitInput = Pick<PreparedProviderWire,
-  'apiMessages' | 'apiSourceIds' | 'sanitizedTools' | 'modelInputForArchive' | 'visualDiagnostic'
+  'apiMessages' | 'apiSourceIds' | 'sanitizedTools' | 'modelInputForArchive'
   | 'keepRecentMessages' | 'inputBudget' | 'prepareImages'> & {
   modelId: string;
   model: Model;
@@ -43,7 +43,7 @@ export async function refitWireAfterContextOverflow(
 ): Promise<Pick<PreparedProviderWire, 'apiMessages' | 'apiSourceIds' | 'sanitizedTools'> | undefined> {
   const {
     modelId, model, opts, apiMessages, apiSourceIds, sanitizedTools, modelInputForArchive,
-    visualDiagnostic, keepRecentMessages, inputBudget, prepareImages,
+    keepRecentMessages, inputBudget, prepareImages,
   } = input;
   const beforeChars = JSON.stringify(apiMessages).length;
   let refitMarkers = opts?.runResourceMarkers;
@@ -177,7 +177,7 @@ export async function refitWireAfterContextOverflow(
       retryTarget,
     });
     try {
-      opts?.onFinalWire?.(retryMessages, visualDiagnostic, modelInputForArchive);
+      opts?.onFinalWire?.(retryMessages, modelInputForArchive);
     } catch (error) {
       log.warn('Final-wire observer failed during overflow refit; continuing retry', { error });
     }

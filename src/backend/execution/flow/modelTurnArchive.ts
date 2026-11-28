@@ -21,7 +21,6 @@ import type {
   ModelTurnMediaDescriptor,
   ModelTurnSnapshot,
 } from '@/shared/types/modelTurn';
-import type { VisualCompactionDiagnostic } from '@/shared/types/visualArchive';
 import { MODEL_TURN_OUTCOME_MAX_BYTES, parseModelTurnOutcomeRecord } from '@/shared/types/modelTurn';
 import { mediaTypeFromMime } from '@/shared/types/model/media';
 import { getWorkspaceDataDir } from '@/utils/workspace';
@@ -438,7 +437,6 @@ export interface ArchiveModelDispatchInput {
   genericWire: OpenAI.ChatCompletionMessageParam[];
   sdkRequest: unknown;
   modelInput?: ModelInputSnapshot;
-  visualCompaction?: VisualCompactionDiagnostic;
 }
 
 /** Immutable, content-addressed pages avoid cloning the entire conversation at
@@ -623,7 +621,7 @@ export async function archiveModelDispatch(
     provenance: pagedProvenance ? [] : input.modelInput.provenance } : undefined;
   const payload = { canonicalMessages: input.canonicalMessages, genericWire: input.genericWire,
     ...(input.canonicalArchive ? { canonicalUpdates: [...canonicalCapture!.updates.values()], media: input.canonicalArchive.media } : {}),
-    sdkRequest: input.sdkRequest, modelInput, visualCompaction: input.visualCompaction };
+    sdkRequest: input.sdkRequest, modelInput };
   return withArchiveWriteMemory(payload, () => withWorkspaceMutation(() => commitFlowDurableMutation(
     input.durableContext ?? {}, () => {
       writeAdmission?.signal?.throwIfAborted();
@@ -693,7 +691,6 @@ async function archiveModelDispatchWithinMutation(
     media: ctx.media,
     provenance: pagedProvenance ? undefined : input.modelInput?.provenance,
     counts: input.modelInput?.counts,
-    visualCompaction: input.visualCompaction,
     contextCompaction: input.modelInput?.contextCompaction,
   };
   recheckArchiveWriteMemory(snapshot, true);

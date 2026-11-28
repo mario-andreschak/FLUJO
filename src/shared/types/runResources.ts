@@ -113,7 +113,7 @@ export interface RunResourceEntry {
   spillQuotaExempt?: boolean;
   createdAt: number;
   producedBy: RunResourceProducer;
-  /** Visual archive lineage shared by its exact-source sidecar and PNG pages. */
+  /** Lineage of a resource the retired visual compaction saved (sidecar or PNG page). */
   archive?: import('./visualArchive').VisualArchiveResourceMetadata;
   /** Integrity checks performed through bounded run-resource reads. */
   verifications?: RunResourceVerification[];

@@ -92,11 +92,10 @@ describe('POST /v1/chat/conversations/:id/compact', () => {
     await running;
   });
 
-  it('changes nothing when summaries are switched off', async () => {
+  it('ignores the summary switch an older FLUJO saved as off (#1449)', async () => {
     loadItemMock.mockImplementation(settings({ compactionEnabled: false }));
     const response = await compact();
-    expect(await response.json()).toMatchObject({ status: 'disabled' });
-    expect(saveItemMock).not.toHaveBeenCalled();
+    expect(await response.json()).toMatchObject({ status: 'requested' });
   });
 
   it('leaves Persona chats, archives and protected chats to their owners', async () => {

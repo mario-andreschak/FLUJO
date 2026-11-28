@@ -28,10 +28,6 @@ const SETTINGS_SWITCHES: Record<string, string> = {
   'ModelAccessSettings.directModelCalls': 'Security: the owner can close direct model calls on the API.',
   'ModelAccessSettings.quickChat': 'Security: the owner can close Quick Chat and what is built on it.',
   'McpStartupSettings.lazyStart': 'The user trades start-up time for first-use time.',
-  'ExperimentalSettings.compactionEnabled': 'Pending: ignored; ModelHandler.ts (#571 split) still reads it.',
-  'ExperimentalSettings.visualCompactionEnabled': 'Pending: ignored; ModelHandler.ts (#571 split) still reads it.',
-  'ExperimentalSettings.visualCompactionToolResultsOnly': 'Pending: ignored; ModelHandler.ts (#571 split) still reads it.',
-  'ExperimentalSettings.visualCompactionEvaluationMode': 'Pending: ignored; ModelHandler.ts (#571 split) still reads it.',
 };
 
 function sourceFiles(directory: string): string[] {
@@ -128,12 +124,15 @@ describe('no feature switches (#1449)', () => {
       .toEqual({ unlisted: [], removed: [], fix: `${HOW_TO_FIX} Only privacy, security and real user choices belong in SETTINGS_SWITCHES.` });
   });
 
+  it('lists no setting as waiting for removal', () => {
+    const pending = Object.entries(SETTINGS_SWITCHES).filter(([, why]) => /^pending/i.test(why)).map(([name]) => name);
+    expect({ pending, fix: `${HOW_TO_FIX} Remove the setting and its reads in the same change.` })
+      .toEqual({ pending: [], fix: `${HOW_TO_FIX} Remove the setting and its reads in the same change.` });
+  });
+
   it('never brings a retired setting back into the settings types', () => {
-    const pending = Object.keys(SETTINGS_SWITCHES)
-      .filter((name) => SETTINGS_SWITCHES[name].startsWith('Pending'))
-      .map((name) => name.split('.')[1]);
     const returned = RETIRED_EXPERIMENTAL_SETTINGS
-      .filter((name) => !pending.includes(name) && settingsBooleans().includes(`ExperimentalSettings.${name}`));
+      .filter((name) => settingsBooleans().includes(`ExperimentalSettings.${name}`));
     expect(returned).toEqual([]);
   });
 });
