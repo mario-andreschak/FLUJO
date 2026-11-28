@@ -5,6 +5,7 @@ import { bindToCurrentWorkspace, getCurrentWorkspace } from '@/utils/workspace';
 import { withPersonaRuntimeLock } from '@/backend/services/enduringAgents/runtimeLock';
 import { retryTransientFileOperation } from '@/utils/transientFileRetry';
 import type { HumanOutcome, HumanStepMode } from '@/utils/shared/humanStep';
+import type { SharedState } from '@/backend/execution/flow/types';
 
 const log = createLogger('backend/services/humanTasks/humanTaskIndex');
 
@@ -28,6 +29,8 @@ export interface HumanTaskIndexEntry {
   mode: HumanStepMode;
   createdAt: string;
   expiresAt: string;
+  /** Set when a sub-flow child asks: the run that waits for this child (#1095). */
+  parentConversationId?: string;
   status: HumanTaskStatus;
   outcome?: HumanOutcome;
   decisionId?: string;
@@ -129,6 +132,26 @@ export async function updateHumanTaskEntry(
 /** Forget entries whose step finished long ago. */
 export async function pruneHumanTaskEntries(now: Date = new Date()): Promise<void> {
   await mutate((file) => pruneFinished(file, now.getTime()));
+}
+
+/** Add a step that just started to wait, from the saved run that owns it. Never fails the run. */
+export async function recordWaitingHumanTask(state: Pick<SharedState, 'humanTask' | 'flowId' | 'parentRunId' | 'parentConversationId'>,
+  conversationId: string, heldCallIds: readonly string[]): Promise<void> {
+  const task = state.humanTask;
+  if (!task || task.decision || !heldCallIds.includes(task.toolCallId)) return;
+  const parentConversationId = state.parentRunId ?? state.parentConversationId;
+  await syncHumanTaskEntry(() => putHumanTaskEntry({
+    requestId: task.requestId,
+    conversationId,
+    ...(state.flowId ? { flowId: state.flowId } : {}),
+    nodeId: task.nodeId,
+    title: task.title,
+    mode: task.mode,
+    createdAt: task.createdAt,
+    expiresAt: task.expiresAt,
+    ...(parentConversationId ? { parentConversationId } : {}),
+    status: 'waiting',
+  }), 'waiting');
 }
 
 /**

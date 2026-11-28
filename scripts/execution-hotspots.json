@@ -3,7 +3,7 @@
   "hotspots": [
     {
       "file": "src/backend/execution/flow/runFlow.ts",
-      "maxLines": 2056,
+      "maxLines": 2043,
       "modules": [
         "src/backend/execution/flow/runFlowContract.ts",
         "src/backend/execution/flow/runFlowEvents.ts",

@@ -427,6 +427,24 @@ describe('execute_flow', () => {
     expect(text(r)).toBe('done');
   });
 
+  it('runs a flow that asks a person saved, and says it waits instead of returning an empty answer (#1095)', async () => {
+    flows.loadFlows.mockResolvedValue([{ id: 'f2', name: 'Review Flow', nodes: [{ id: 'h', type: 'human', data: { properties: {} } }] }]);
+    runFlowMock.mockResolvedValue({
+      status: 'awaiting_tool_approval', outputText: '',
+      sharedState: { humanTask: { requestId: 'req-1', title: 'Check it', expiresAt: '2030-01-01T00:00:00.000Z' } },
+    });
+
+    const r = await internalCallTool(makeService(), 'execute_flow', { flow: 'Review Flow', input: 'hi' });
+
+    const input = runFlowMock.mock.calls.at(-1)?.[0] as { mode: string; conversationId?: string; userTurn?: boolean };
+    expect(input).toMatchObject({ flowId: 'f2', mode: 'conversation', userTurn: true });
+    expect(input.conversationId).toEqual(expect.any(String));
+    expect(r.isError).toBeUndefined();
+    expect(text(r)).toContain('waiting for a person ("Check it")');
+    expect(text(r)).toContain(input.conversationId!);
+    expect(text(r)).toContain('/api/human-tasks/req-1');
+  });
+
   it('errors for an unknown flow without running anything', async () => {
     flows.loadFlows.mockResolvedValue([{ id: 'f1', name: 'My Flow' }]);
     const r = await internalCallTool(makeService(), 'execute_flow', { flow: 'nope', input: 'hi' });

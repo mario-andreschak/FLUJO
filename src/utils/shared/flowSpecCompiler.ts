@@ -41,7 +41,7 @@ import { findBindings } from './mcpBinding';
 import { decisionRuleIssues, type DecisionRule } from './decisionRules';
 import { modelDecisionIssues, type DecisionQuestion } from './modelDecision';
 import { isValidRunVarName } from './resolveRunVars';
-import { humanStepIssues, type HumanStepProperties } from './humanStep';
+import { HUMAN_ROUTE_HANDLES, HUMAN_ROUTES, humanRouteOfEdge, humanStepIssues, type HumanRoute, type HumanStepProperties } from './humanStep';
 import { CONDITION_SOURCE_NODE_TYPES, defaultConditionTarget, EDGE_CONDITION_TARGETS, EdgeCondition, EdgeConditionTarget, isValidConditionKind, isRegexCompilable } from './edgeConditions';
 import { buildHandoffToolNameMap, type HandoffTargetRef } from '@/shared/utils/handoffNaming';
 import { normalizeExcludedSystemPromptSections } from '@/shared/utils/flujoSystemPrompt';
@@ -390,6 +390,10 @@ export interface FlowSpecEdge {
    *  edge wins, in author order); a bare edge is the fallback. Only meaningful
    *  on edges leaving a process, start or static node. */
   condition?: EdgeCondition;
+  /** Only on edges leaving a human node: the answer this edge is for (#1095).
+   *  `rejected` and `timed_out` edges are taken for a no or a time-out; an edge
+   *  without one is the step's plain path. */
+  humanOutcome?: HumanRoute;
 }
 
 export interface FlowSpec {
@@ -643,9 +647,10 @@ export function controlEdge(
   source: FlowNode,
   target: FlowNode,
   bidirectional?: boolean,
-  condition?: EdgeCondition
+  condition?: EdgeCondition,
+  humanOutcome?: HumanRoute,
 ): Edge {
-  const sourceHandle = `${source.type}-bottom`;
+  const sourceHandle = humanOutcome ? HUMAN_ROUTE_HANDLES[humanOutcome] : `${source.type}-bottom`;
   const targetHandle = `${target.type}-top`;
   return {
     id: `${source.id}:${sourceHandle}->${target.id}:${targetHandle}`,
@@ -658,6 +663,7 @@ export function controlEdge(
       edgeType: 'standard',
       ...(bidirectional ? { bidirectional: true } : {}),
       ...(condition ? { condition } : {}),
+      ...(humanOutcome ? { humanOutcome } : {}),
     },
     animated: true,
   } as Edge;
@@ -1358,7 +1364,18 @@ export function compileFlowSpec(
         error('edge-out-of-finish', `Edge "${fromKey}" -> "${toKey}": nothing may connect OUT OF a finish node.`);
         continue;
       }
-      const pair = `${fromKey}->${toKey}`;
+      let humanOutcome: HumanRoute | undefined;
+      if (specEdge.humanOutcome !== undefined) {
+        if (source.type !== 'human') {
+          warn('edge-human-outcome-non-human', `Edge "${fromKey}" -> "${toKey}": only edges leaving a human node can be for an answer; humanOutcome dropped.`);
+        } else if (!(HUMAN_ROUTES as readonly string[]).includes(specEdge.humanOutcome)) {
+          error('edge-human-outcome', `Edge "${fromKey}" -> "${toKey}": humanOutcome is accepted, rejected or timed_out.`);
+          continue;
+        } else {
+          humanOutcome = specEdge.humanOutcome;
+        }
+      }
+      const pair = `${fromKey}->${toKey}${humanOutcome ? `:${humanOutcome}` : ''}`;
       if (seenControlPairs.has(pair)) {
         warn('edge-duplicate', `Edge "${fromKey}" -> "${toKey}" appears more than once; kept the first.`);
         continue;
@@ -1438,7 +1455,7 @@ export function compileFlowSpec(
         }
       }
 
-      edges.push(controlEdge(source, target, bidirectional, condition));
+      edges.push(controlEdge(source, target, bidirectional, condition, humanOutcome));
     }
 
     // MCP edges after control edges (order is cosmetic; grouping aids debugging).
@@ -1767,6 +1784,7 @@ export function flowToSpec(flow: Flow): FlowSpec {
   // Index MCP nodes so each process node can pull back its bound server + enabled tools.
   const mcpById = new Map<string, FlowNode>();
   for (const n of nodes) if (n.type === 'mcp') mcpById.set(n.id, n);
+  const humanNodeIds = new Set(nodes.filter((n) => n.type === 'human').map((n) => n.id));
 
   // Tool-consumer node id → server refs, independent of authored edge direction.
   const serversByConsumer = new Map<string, FlowSpecServerRef[]>();
@@ -1924,11 +1942,13 @@ export function flowToSpec(flow: Flow): FlowSpec {
     if (!e.source || !e.target) continue;
     if (mcpById.has(e.source) || mcpById.has(e.target)) continue;
     const edgeData = e.data as { bidirectional?: boolean; condition?: EdgeCondition } | undefined;
+    const humanOutcome = humanNodeIds.has(e.source) ? humanRouteOfEdge(e) : undefined;
     specEdges.push({
       from: e.source,
       to: e.target,
       ...(edgeData?.bidirectional ? { bidirectional: true } : {}),
       ...(edgeData?.condition ? { condition: edgeData.condition } : {}),
+      ...(humanOutcome ? { humanOutcome } : {}),
     });
   }
 

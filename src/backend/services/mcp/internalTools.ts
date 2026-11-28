@@ -52,6 +52,10 @@ import { getSchedulerService } from '@/backend/services/scheduler';
 import { scheduleNextRuns } from '@/backend/services/scheduler/triggers/schedule';
 import type { PlannedExecution, TriggerConfig } from '@/shared/types/plannedExecution';
 import { runFlow } from '@/backend/execution/flow/runFlow';
+import { randomUUID } from 'node:crypto';
+import { flowMayWaitForPerson } from '@/utils/shared/flowApproval';
+import { getHarnessExecution } from '@/backend/services/harness/executionScope';
+import { waitingHandoffText } from './flowToolContinuations';
 import { compileSpec } from '@/backend/services/flow/compileFlow';
 import { deleteFlowAndMoveUses, findFlowUsage, flowInUseBody } from '@/backend/services/flow/flowDeletion';
 import { explainCompiledFlow } from '@/backend/services/flow/explainFlow';
@@ -663,6 +667,9 @@ async function executeFlow(args: Record<string, unknown>): Promise<CallToolResul
     );
   }
 
+  // A flow that may wait for a person runs saved, so it can stop and come back (#1095).
+  const conversationId = !getHarnessExecution() && await flowMayWaitForPerson(flow, (id) => resolveFlow(id))
+    ? randomUUID() : undefined;
   return store.run(depth + 1, async () => {
     try {
     await assertBundledFlujoWorkloadEffectCurrent();
@@ -670,7 +677,8 @@ async function executeFlow(args: Record<string, unknown>): Promise<CallToolResul
       flowId: flow.id,
       prompt: String(args?.input ?? ''),
       source: 'internal',
-      mode: 'ephemeral',
+      mode: conversationId ? 'conversation' : 'ephemeral',
+      ...(conversationId ? { conversationId, userTurn: true } : {}),
       flujo: true,
       requireApproval: false,
     });
@@ -679,6 +687,10 @@ async function executeFlow(args: Record<string, unknown>): Promise<CallToolResul
     }
     if (result.status === 'error') {
       return textResult({ error: result.error?.message ?? 'Unknown error during flow execution.' }, true);
+    }
+    if (result.status === 'awaiting_tool_approval' && conversationId) {
+      // Stopped for a person: say so, never an empty success. It goes on in FLUJO.
+      return textResult(waitingHandoffText(conversationId, result.sharedState).text);
     }
       return textResult(result.outputText ?? '');
     } finally {

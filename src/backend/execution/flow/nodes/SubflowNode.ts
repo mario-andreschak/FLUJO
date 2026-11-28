@@ -24,11 +24,16 @@ import {
   SubflowNodeExecResult,
   SubflowLanePlan,
   SubflowLaneResult,
+  SubflowHumanWait,
   SubflowInvocation,
   FINAL_RESPONSE_ACTION,
   ERROR_ACTION,
+  HUMAN_APPROVAL_ACTION,
   IMPLICIT_SUBFLOW_RETURN_ACTION,
 } from '../types';
+import {
+  childStillWaits, clearDelegatedWaits, humanWaitOfChild, markLaneWaiting, subflowChildIsSaved, subflowPlanMayWait, waitingText,
+} from '../subflowHumanWait';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
@@ -53,6 +58,7 @@ import { isCancelledByAncestry } from '../cancellation';
 import { buildConversationTitle } from '@/utils/shared/conversationTitle';
 import { getCurrentWorkspace } from '@/utils/workspace';
 import {
+  loadConversationState as loadSubflowConversation,
   persistSubflowParent,
   readPersistedSubflowParent,
   syncLaneFromPersistedChild,
@@ -829,6 +835,7 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
         laneCount: existingInvocation.lanes.length,
         status: existingInvocation.status,
       });
+      clearDelegatedWaits(sharedState);
       return prepFromInvocation(sharedState, existingInvocation, budget);
     }
     // Consume the single-shot, node-id-scoped handoff input ONCE here (issue #96
@@ -1264,6 +1271,8 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
       prepResult.sessionScope = undefined;
       prepResult.sessionKeyTemplate = undefined;
     }
+    // A child that may wait for a person is saved, so this visit needs a join that can wait too (#1095).
+    prepResult.persistConversation ||= await subflowPlanMayWait(prepResult);
     await attachDurableInvocation(sharedState, prepResult, budget, handoffForThisNode);
     if (handoffForThisNode && sharedState.handoffInput === handoffForThisNode) sharedState.handoffInput = undefined;
     if (nativeRoot) nativePreparedSubflows.set(prepResult, extensionContext!);
@@ -1415,6 +1424,20 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
       // Success and error results can both arrive late. Neither may overwrite a
       // committed visit or start another child batch before continuation.
       if (existing?.foldedAt) return existing.foldReceipt?.action ?? this.continuationAction(sharedState, node_params);
+      if (execResult.waiting?.length) {
+        if (sharedState.ephemeral) {
+          // Nothing can come back to a run that is not saved: end the children's steps and say so.
+          const message = 'A sub-flow waits for a person, but this run is not saved, so it cannot wait. Start the flow from the chat, an automation or an MCP client.';
+          const waits = execResult.waiting;
+          void import('@/backend/services/humanTasks/dropHumanTask').then(({ dropWaitingChildSteps }) => dropWaitingChildSteps(waits, message));
+          sharedState.lastResponse = { success: false, error: message, errorDetails: { message, type: 'approval_required', name: 'human_step' } };
+          return ERROR_ACTION;
+        }
+        // A child waits for a person: show its steps here and let runFlow save and stop this run.
+        sharedState.pendingToolCalls = execResult.waiting.map((wait) => wait.call);
+        sharedState.lastResponse = undefined;
+        return HUMAN_APPROVAL_ACTION;
+      }
       if (!outputProperty(execResult, 'success')) return await this.postAdmitted(prepResult, execResult, sharedState, node_params);
 
       const text = checkedOutputText(outputProperty(execResult, 'outputText'));
@@ -2033,6 +2056,13 @@ async function runSubflowLanesAdmitted(
       );
 
       let effectiveInput: SubflowRunInput | undefined;
+      let continueWaitingChild = false;
+      const childSaved = await subflowChildIsSaved(prepResult, async () => {
+        const pinned = pinnedSubflowDefinition(prepResult, lane.subflowId).flowDefinition;
+        if (pinned) return pinned;
+        const { flowService } = await import('@/backend/services/flow/index');
+        return flowService.getFlow(lane.subflowId);
+      });
       const prepareEffectiveInput = (): SubflowRunInput => {
         try {
           return resumedVisit ? buildSessionFollowupInput(lane.input ?? runInput, laneScratch) : (lane.input ?? runInput);
@@ -2062,6 +2092,35 @@ async function runSubflowLanesAdmitted(
         if (healed && parentState) {
           invocation!.updatedAt = Date.now();
           await persistSubflowParent(parentState);
+        }
+        if (durableLane.status === 'waiting') {
+          // The child stopped at a Human step. Ask again while it only waits; once its
+          // step has an answer (or its own children's do), carry on from where it stopped.
+          const child = await loadSubflowConversation(durableLane.conversationId);
+          const waits = childStillWaits(child) ? humanWaitOfChild(child, durableLane.conversationId) : undefined;
+          if (waits) {
+            markLaneWaiting(durableLane, waits);
+            results[i] = {
+              subflowId: lane.subflowId, subflowName: lane.subflowName, laneTitle: lane.laneTitle, success: false,
+              error: waitingText(waits), laneId: durableLane.id, conversationId: durableLane.conversationId,
+              sessionKey: durableLane.sessionKey, waiting: waits,
+            };
+            return;
+          }
+          if (!child || child.status === 'error' || child.isCancelled) {
+            // Stopped or failed while it waited: never start it again from here.
+            const error = child?.isCancelled ? 'The sub-flow was stopped while it waited for a person.' : 'The sub-flow ended with an error while it waited for a person.';
+            Object.assign(durableLane, { status: child?.isCancelled ? 'cancelled' : 'error', humanTasks: undefined, error, updatedAt: Date.now() });
+            results[i] = {
+              subflowId: lane.subflowId, subflowName: lane.subflowName, laneTitle: lane.laneTitle, success: false,
+              error, laneId: durableLane.id, conversationId: durableLane.conversationId, sessionKey: durableLane.sessionKey,
+            };
+            if (parentState) await persistSubflowParent(parentState);
+            return;
+          }
+          continueWaitingChild = true;
+          laneConversationId = durableLane.conversationId;
+          durableLane.humanTasks = undefined;
         }
         if (durableLane.status === 'completed') {
           // Replayed parent runs still receive a concise lane boundary, while
@@ -2119,15 +2178,16 @@ async function runSubflowLanesAdmitted(
         // persists as its own sidebar conversation via the sanctioned runFlow
         // mode, titled by its brief/item and linked through parentRunId — lanes
         // no longer stay force-ephemeral.
-        const r = await runFlow({
+        let r = await runFlow({
           flowId: lane.subflowId,
           ...pinnedSubflowDefinition(prepResult, lane.subflowId),
-          ...effectiveInput,
+          // A child that waited goes on from where it stopped; it gets no new input.
+          ...(continueWaitingChild ? {} : effectiveInput),
           source: 'subflow',
-          mode: prepResult.persistConversation ? 'conversation' : 'ephemeral',
+          mode: childSaved ? 'conversation' : 'ephemeral',
           ...(laneConversationId ? { conversationId: laneConversationId } : {}),
-          ...(resumedVisit ? { resumeAsNewTurn: true } : {}),
-          ...(prepResult.persistConversation && laneTitle ? { title: laneTitle } : {}),
+          ...(resumedVisit && !continueWaitingChild ? { resumeAsNewTurn: true } : {}),
+          ...(childSaved && laneTitle ? { title: laneTitle } : {}),
           flujo: true,
           requireApproval: requireApprovalOf(prepResult.requireApproval),
           approvalConversationId: prepResult.approvalConversationId,
@@ -2172,6 +2232,23 @@ async function runSubflowLanesAdmitted(
             status: 'running',
           };
           if (durableLane) durableLane.conversationId = recoveryConversationId;
+        }
+        const waits = childSaved ? humanWaitOfChild(r.sharedState, laneConversationId) : undefined;
+        if (waits) {
+          results[i] = {
+            subflowId: lane.subflowId, subflowName: lane.subflowName, laneTitle: lane.laneTitle, success: false,
+            error: waitingText(waits), laneId: lane.laneId, conversationId: laneConversationId, sessionKey: lane.sessionKey, waiting: waits,
+          };
+          if (durableLane) {
+            markLaneWaiting(durableLane, waits);
+            invocation!.updatedAt = Date.now();
+            if (parentState) await persistSubflowParent(parentState);
+          }
+          return;
+        }
+        if (r.status === 'awaiting_tool_approval' || r.status === 'paused_debug') {
+          // Never fold a child that stopped half-way as if it had finished.
+          r = { ...r, status: 'error', error: { message: 'The sub-flow stopped to wait for a decision it cannot get here. Inside a sub-flow, only a Human step can wait for a person.', statusCode: 409 } };
         }
         const cancelled = Boolean(
           r.sharedState?.isCancelled || r.sharedState?.recovery?.classification === 'cancelled',
@@ -2328,8 +2405,10 @@ async function runSubflowLanesAdmitted(
 
     // Filter preserves array index order => deterministic child-order join.
     const ordered = results.filter((r): r is SubflowLaneResult => r !== undefined);
+    const waiting: SubflowHumanWait[] = [];
+    for (const lane of ordered) if (lane.waiting) waiting.push(...lane.waiting);
     const succeeded = ordered.filter((r) => r.success);
-    const failedLanes = ordered.filter((r) => !r.success);
+    const failedLanes = ordered.filter((r) => !r.success && !r.waiting);
     const anyFailed = failedLanes.length > 0;
     // Failed/partial results are also serialized by inline tool consumers.
     // Their top-level error aliases a lane error, so charge both occurrences
@@ -2348,6 +2427,7 @@ async function runSubflowLanesAdmitted(
       const blocksJoin =
         (errorStrategy === 'fail-fast' && anyFailed) ||
         hasCancelledOrIncompleteLane ||
+        waiting.length > 0 ||
         invocation.lanes.every((lane) => lane.status !== 'completed');
       invocation.status = blocksJoin ? 'blocked' : 'ready';
       invocation.updatedAt = Date.now();
@@ -2371,6 +2451,11 @@ async function runSubflowLanesAdmitted(
         subStatus: 'error',
         lanes: ordered,
       };
+    }
+
+    if (waiting.length > 0) {
+      // Independent lanes ran to their end; the join waits for the children that wait for a person.
+      return { success: false, error: waitingText(waiting), subStatus: 'awaiting_tool_approval', lanes: ordered, waiting };
     }
 
     if (succeeded.length === 0) {

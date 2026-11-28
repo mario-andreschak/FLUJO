@@ -446,7 +446,7 @@ describe('a Human step', () => {
     expect(await getPendingApproval(conversationId)).toBeNull();
   });
 
-  it('ends an MCP flow tool call with a plain error instead of an empty success', async () => {
+  it('never ends an MCP flow tool call with an empty success: the run is saved and the call says it waits', async () => {
     const definition = draftReviewSend('mcp-tool', { mode: 'approval', prompt: 'Send?' });
     mockStoredFlows.set(definition.id, definition);
     try {
@@ -454,8 +454,9 @@ describe('a Human step', () => {
 
       const result = await flowToolsCallTool(toolName, { input: 'Go.' });
 
-      expect(result.isError).toBe(true);
-      expect(JSON.stringify(result.content)).toMatch(/Human step/);
+      expect(JSON.stringify(result.content)).toMatch(/waiting for a person/);
+      const conversationId = (result.structuredContent as { conversationId: string }).conversationId;
+      expect(stateOf(conversationId).status).toBe('awaiting_tool_approval');
     } finally {
       mockStoredFlows.delete(definition.id);
     }

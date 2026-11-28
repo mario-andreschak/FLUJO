@@ -20,6 +20,8 @@ import { commitRecoveryTransition } from '@/backend/execution/flow/recoveryCheck
 import { cancelPersonaFlowDispatch } from '@/backend/services/enduringAgents/personaDispatcher';
 import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 import { syncHumanTaskEntry, updateHumanTaskEntry } from '@/backend/services/humanTasks/humanTaskIndex';
+import { dropWaitingChildSteps } from '@/backend/services/humanTasks/dropHumanTask';
+import { delegatedHumanTasks } from '@/backend/execution/flow/humanTask';
 import { pauseChatGoal } from '@/backend/services/chatGoals/chatGoalStore';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/cancel/route');
@@ -212,6 +214,8 @@ async function POST_handler(
           status: 'cancelled', finishedAt: new Date().toISOString(),
         }), 'run cancelled');
       }
+      // The same for the Human steps of sub-flows this run waited for.
+      dropWaitingChildSteps(delegatedHumanTasks(sharedState), 'The run that waited for this step was stopped.');
       // Issue #256: clearing pendingToolCalls leaves the paused assistant
       // tool_calls turn unanswered in the transcript, which every provider 400s
       // on when the conversation is later continued. Synthesize a cancellation

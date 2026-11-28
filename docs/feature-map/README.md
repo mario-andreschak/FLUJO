@@ -87,6 +87,17 @@ this way on desktop and phone screens and keeps the evidence. On a `launch`
 mode needs about 8–10 GB for this many pages, otherwise Next restarts itself
 mid-run and the loading stage fails with `ERR_CONNECTION_REFUSED`.
 
+## Human step journey
+
+`npm run journey:human-step` checks a step that waits for a person (#1095) the
+way a user meets it, with the same free local stand-in model: add a Human step in
+the Easy view and on the Expert canvas, run Draft → Review and edit → Send in the
+chat and answer the card, then answer a Fill-in step at phone width with wrong
+answers first and open the conversation again. Like the first-use journey it
+drives a `launch` instance while one runs, or else starts its own FLUJO from the
+production build and removes it afterwards. Evidence lands in
+`human-step-journey/`. The steps are listed in [Agents](agents.md).
+
 ## Scripted pilot
 
 `npm run pilot:scripted` (after `npm run build`) plays three first-time users

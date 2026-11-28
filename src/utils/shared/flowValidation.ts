@@ -22,7 +22,7 @@ import { buildHandoffToolNameMap, type HandoffTargetRef } from '@/shared/utils/h
 import { CONDITION_SOURCE_NODE_TYPES, EdgeCondition, isValidConditionKind, isRegexCompilable } from './edgeConditions';
 import { modelsOutsideBoundary, stepModelIds } from './flowModelBoundary';
 import { modelDecisionIssues } from './modelDecision';
-import { DEFAULT_HUMAN_OUTPUT_VARIABLE, humanStepIssues, type HumanStepProperties } from './humanStep';
+import { DEFAULT_HUMAN_OUTPUT_VARIABLE, humanRouteOfEdge, humanStepIssues, type HumanStepProperties } from './humanStep';
 import { referencedRunVars, isValidRunVarName } from './resolveRunVars';
 import { referencedKvKeys, isValidKvName, parseKvRef } from './resolveKvRefs';
 import {
@@ -771,7 +771,8 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
       ...(props.onReject === 'continue' ? ['a no'] : []),
       ...(props.onTimeout === 'continue' ? ['a time-out'] : []),
     ];
-    const checksAnswer = edges.some((edge) => edge.source === node.id && !isAttachmentEdge(edge) && !!edge.data?.condition);
+    const checksAnswer = edges.some((edge) => edge.source === node.id && !isAttachmentEdge(edge)
+      && (!!edge.data?.condition || humanRouteOfEdge(edge) !== undefined));
     if (goesOnAfter.length > 0 && !checksAnswer) {
       add(
         'warning',

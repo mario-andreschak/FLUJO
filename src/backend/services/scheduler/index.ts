@@ -5,7 +5,7 @@ import { assertBundledFlujoWorkloadEffectCurrent, BundledFlujoWorkloadError, get
 import { v4 as uuidv4 } from 'uuid';
 import { FILE_RECORD_ID_RULE, newRecordId } from '@/shared/recordId';
 import { createHash } from 'crypto';
-import { flowRequiresStepApproval } from '@/utils/shared/flowApproval';
+import { flowMayWaitForPerson } from '@/utils/shared/flowApproval';
 import { saveItem, loadItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import {
@@ -3400,14 +3400,14 @@ export class SchedulerService {
   }
 
   /**
-   * Whether an automation's flow requires a person for some tool calls. If the flow
+   * Whether an automation's flow, or a sub-flow it names, may need a person (a step approval or a Human step). If the flow
    * cannot be read, the answer is yes: the run is then saved and can wait, and the
    * only cost is one saved conversation. The other answer could run a tool unasked.
    */
   private async flowHasStepApproval(flowId: string): Promise<boolean> {
     try {
       const { flowService } = await import('@/backend/services/flow');
-      return flowRequiresStepApproval(await flowService.getFlow(flowId));
+      return flowMayWaitForPerson(await flowService.getFlow(flowId), (id) => flowService.getFlow(id));
     } catch (error) {
       log.warn(`Could not read flow ${flowId} to check its approval rules`, error);
       return true;

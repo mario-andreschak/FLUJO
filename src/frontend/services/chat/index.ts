@@ -511,7 +511,7 @@ class ChatService {
   async answerHumanTask(
     requestId: string,
     action: 'approve' | 'reject',
-    human: HumanAnswer,
+    human: HumanAnswer & { conversationId?: string },
   ): Promise<{ status: string; repeat?: boolean; conversationId?: string; receipt?: { decisionId: string; outcome: string } }> {
     const response = await fetch(withWorkspaceUrl(`/api/human-tasks/${encodeURIComponent(requestId)}`), {
       method: 'POST',

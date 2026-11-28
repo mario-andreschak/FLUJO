@@ -13,6 +13,8 @@ import { loadConversationState } from '@/backend/execution/flow/loadConversation
 import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 import { applyApprovalDecision, refusedHumanStepAnswer } from '@/backend/execution/flow/resumeAfterApproval';
 import type { HumanAnswer } from '@/utils/shared/humanStep';
+import { findDelegatedHumanTask } from '@/backend/execution/flow/humanTask';
+import { answerHumanTask, continueAnsweredHumanTask } from '@/backend/services/humanTasks/answerHumanTask';
 import { processChatCompletion } from '@/app/v1/chat/completions/chatCompletionService';
 import { ChatCompletionRequest } from '@/app/v1/chat/completions/requestParser';
 import { flowService } from '@/backend/services/flow/index';
@@ -290,6 +292,25 @@ async function POST_handler(
       return json({ error: `Pending tool call with ID ${body.toolCallId} not found` }, 404);
     }
     const targetIds = body.toolCallId ? [body.toolCallId] : waiting;
+
+    // Human steps of sub-flows this run only shows: answer each where it was asked.
+    const delegated = targetIds.map((toolCallId) => findDelegatedHumanTask(state, { toolCallId }));
+    if (delegated.some(Boolean)) {
+      if (!delegated.every(Boolean) || (mappedAction === 'approve' && delegated.length > 1)) {
+        return json({ error: 'Answer each sub-flow step on its own: send its toolCallId.' }, 400);
+      }
+      const receipts = [];
+      for (const task of delegated) {
+        const answered = await answerHumanTask({
+          requestId: task!.requestId, accept: mappedAction === 'approve', answer: body.human ?? {}, channel: 'approvals',
+          conversationId: task!.conversationId, fromThisComputer: assertLocalRequest(request, { strictLoopback: true }) === null,
+        });
+        if (answered.kind === 'refused') return json({ error: answered.error, fieldErrors: answered.fieldErrors }, answered.status);
+        continueAnsweredHumanTask(answered);
+        receipts.push(answered.receipt);
+      }
+      return json({ status: 'decided', approvalId: id, conversationId: entry.conversationId, receipts }, 202);
+    }
 
     if (state.personaAttribution) {
       const { personaId, activityId, behaviorRevisionId } = state.personaAttribution;
