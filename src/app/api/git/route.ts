@@ -24,9 +24,8 @@ const log = createLogger('app/api/git/route');
 
 // Hard ceiling for install/build streams: a runaway or hanging npm install|build can
 // otherwise pin the core forever. On timeout we kill the process tree (reusing the
-// existing killProcessTree plumbing) and emit a terminal `result` error. Default
-// 15 min; floored at 60s; tunable via FLUJO_GIT_STREAM_TIMEOUT_MS for constrained hosts.
-const GIT_STREAM_TIMEOUT_MS = Math.max(60_000, Number(process.env.FLUJO_GIT_STREAM_TIMEOUT_MS) || 15 * 60 * 1000);
+// existing killProcessTree plumbing) and emit a terminal `result` error.
+const GIT_STREAM_TIMEOUT_MS = 15 * 60 * 1000;
 
 // Type definition for command execution options
 type CommandExecutionOptions = {

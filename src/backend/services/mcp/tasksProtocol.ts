@@ -11,7 +11,6 @@ import {
   GetTaskResultSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { createLogger } from '@/utils/logger';
-import { FEATURES } from '@/config/features';
 import {
   MCP_TASK_METHODS,
   MCP_TASKS_EXTENSION_ID,
@@ -28,18 +27,8 @@ import { InputResponsesV2Schema } from '@modelcontextprotocol/ext-tasks/core/v2'
 
 const log = createLogger('backend/services/mcp/tasksProtocol');
 
-/** Client-side Tasks master switch (governs negotiation AND persistence). */
-export function mcpTasksClientEnabled(): boolean {
-  return FEATURES.ENABLE_MCP_TASKS_CLIENT === true;
-}
-
-/** Server-side switch; the authorized modern /mcp-flows path owns its handlers. */
-export function mcpTasksServerEnabled(): boolean {
-  return FEATURES.ENABLE_MCP_TASKS_SERVER === true;
-}
-
 export interface TaskNegotiation {
-  /** Feature flag on AND the live server advertised tools/call task support. */
+  /** The live server advertised tools/call task support. */
   supported: boolean;
   supportsToolsCall: boolean;
   supportsCancel: boolean;
@@ -90,7 +79,7 @@ export function getTaskNegotiation(client: Client | undefined): TaskNegotiation 
     supportsCancel: false,
     supportsList: false,
   };
-  if (!client || !mcpTasksClientEnabled()) return none;
+  if (!client) return none;
 
   // Modern Tasks are negotiated per request by the official extension framing.
   // Do not cache an unavailable session before discovery/connection completes.
@@ -207,9 +196,7 @@ export async function decideTaskAugmentation(
     return {
       request: false,
       negotiation,
-      reason: mcpTasksClientEnabled()
-        ? 'server does not advertise tasks.requests.tools.call'
-        : 'MCP Tasks client support disabled',
+      reason: 'server does not advertise tasks.requests.tools.call',
     };
   }
 

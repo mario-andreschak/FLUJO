@@ -4,7 +4,7 @@
  * Verifies the acceptance criteria that are checkable at the service layer:
  *  - capture records a snapshot; files() lists the changed path,
  *  - capture is disabled (returns null) when the root is not a git repo,
- *  - capture is disabled when snapshots are switched off (FLUJO_SNAPSHOTS=0),
+ *  - capture ignores the retired switches (#1449),
  *  - revert restores exactly the selected paths and leaves unrelated edits alone,
  *  - revert is reversible (returns a pre-revert snapshot SHA),
  *  - the user's OWN git state (HEAD / index / status) is provably untouched,
@@ -147,43 +147,6 @@ describe('ShadowRepoService', () => {
     }
   });
 
-  it('disables snapshots when the persisted setting is off', async () => {
-    const repo = await makeRealRepo();
-    try {
-      loadItemMock.mockResolvedValue({
-        experimental: { enabled: false, snapshotsEnabled: false },
-      });
-      expect(await shadowRepoService.isEnabledFor(repo)).toBe(false);
-      expect(await shadowRepoService.capture(repo)).toBeNull();
-    } finally {
-      await fsp.rm(repo, { recursive: true, force: true }).catch(() => {});
-    }
-  });
-
-  it('keeps snapshots disabled when the persisted setting is absent', async () => {
-    const repo = await makeRealRepo();
-    try {
-      loadItemMock.mockResolvedValue({ experimental: { enabled: false } });
-      expect(await shadowRepoService.isEnabledFor(repo)).toBe(false);
-    } finally {
-      await fsp.rm(repo, { recursive: true, force: true }).catch(() => {});
-    }
-  });
-
-  it('keeps the environment disable authoritative over the persisted setting', async () => {
-    const repo = await makeRealRepo();
-    try {
-      process.env.FLUJO_SNAPSHOTS = '0';
-      loadItemMock.mockResolvedValue({
-        experimental: { enabled: false, snapshotsEnabled: true },
-      });
-      expect(await shadowRepoService.isEnabledFor(repo)).toBe(false);
-      expect(loadItemMock).not.toHaveBeenCalled();
-    } finally {
-      await fsp.rm(repo, { recursive: true, force: true }).catch(() => {});
-    }
-  });
-
   it('returns null when the target is not a git repository', async () => {
     const plain = await mkTemp('flujo-plain-');
     try {
@@ -200,12 +163,12 @@ describe('ShadowRepoService', () => {
     await expect(shadowRepoService.capture(missing)).resolves.toBeNull();
   });
 
-  it('is disabled when snapshots are switched off (FLUJO_SNAPSHOTS=0)', async () => {
+  it('ignores the retired switches (#1449)', async () => {
     const repo = await makeRealRepo();
     try {
       process.env.FLUJO_SNAPSHOTS = '0';
-      expect(await shadowRepoService.isEnabledFor(repo)).toBe(false);
-      expect(await shadowRepoService.capture(repo)).toBeNull();
+      loadItemMock.mockResolvedValue({ experimental: { snapshotsEnabled: false } });
+      expect(await shadowRepoService.isEnabledFor(repo)).toBe(true);
     } finally {
       await fsp.rm(repo, { recursive: true, force: true }).catch(() => {});
     }

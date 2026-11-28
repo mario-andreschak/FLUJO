@@ -9,7 +9,7 @@ import {
   PERSONA_LIFECYCLE_STATES,
   PERSONA_PRIORITIES,
 } from '@/shared/types/enduringAgent';
-import { readPersonaRuntimeEventLogConfig, type PersonaRuntimeEventLogConfig } from '@/config/features';
+import { PERSONA_RUNTIME_EVENT_LOG_DEFAULT_CONFIG, type PersonaRuntimeEventLogConfig } from '@/config/features';
 import { assertSafeCollectionId, writeFileAtomic } from '@/utils/storage/backend';
 import { createLogger } from '@/utils/logger';
 import {
@@ -20,6 +20,7 @@ import {
 
 import { getPersonaRuntimeClock } from './runtimeClock';
 import { withPersonaRuntimeLock } from './runtimeLock';
+import { getPersonaRuntimeRetentionMode } from './personaRuntimeRetentionControl';
 
 const runtimeClock = getPersonaRuntimeClock();
 
@@ -721,7 +722,7 @@ async function createInitialManifest(
     bytes: summary.bytes,
     createdAt: Math.max(0, Math.floor(stat.birthtimeMs || stat.ctimeMs || now)),
   };
-  const config = eventLogConfigOverride ?? readPersonaRuntimeEventLogConfig();
+  const config = eventLogConfigOverride ?? PERSONA_RUNTIME_EVENT_LOG_DEFAULT_CONFIG;
   const oversized = summary.eventCount > 0 && (
     summary.bytes >= config.maxSegmentBytes
     || summary.eventCount >= config.maxSegmentEvents
@@ -1022,7 +1023,7 @@ async function rotateIfNeeded(
   personaId: string,
   state: PersonaRuntimeEventLogState,
 ): Promise<void> {
-  const config = eventLogConfigOverride ?? readPersonaRuntimeEventLogConfig();
+  const config = eventLogConfigOverride ?? PERSONA_RUNTIME_EVENT_LOG_DEFAULT_CONFIG;
   const active = state.manifest.segments[state.manifest.segments.length - 1];
   if (
     state.activeEventCount === 0
@@ -1256,7 +1257,7 @@ export interface PersonaRuntimeEventRetentionResult {
 
 export async function sweepPersonaRuntimeEventSegments(
   config: PersonaRuntimeEventLogConfig =
-    eventLogConfigOverride ?? readPersonaRuntimeEventLogConfig(),
+    eventLogConfigOverride ?? PERSONA_RUNTIME_EVENT_LOG_DEFAULT_CONFIG,
 ): Promise<PersonaRuntimeEventRetentionResult> {
   const result: PersonaRuntimeEventRetentionResult = {
     personasExamined: 0,
@@ -1266,6 +1267,7 @@ export async function sweepPersonaRuntimeEventSegments(
     errors: 0,
   };
   if (config.retentionDays <= 0) return result;
+  if (!eventLogConfigOverride && await getPersonaRuntimeRetentionMode() !== 'active') return result;
   let entries;
   try {
     entries = await fs.readdir(eventLogDir(), { withFileTypes: true });

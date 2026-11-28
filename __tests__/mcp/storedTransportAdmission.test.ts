@@ -21,7 +21,7 @@ it('tags legacy stored stdio explicitly so its runtime-home policy runs', async 
   expect(Array.isArray(loaded)).toBe(true);
   const config = (loaded as MCPServerConfig[])[0];
   expect(config.transport).toBe('stdio');
-  expect(await resolveRuntimeHomeIsolation(config, {})).toBe(true);
+  expect(await resolveRuntimeHomeIsolation(config)).toBe(true);
   expect(record).not.toHaveProperty('transport');
   expect(saveItem).not.toHaveBeenCalled();
 });

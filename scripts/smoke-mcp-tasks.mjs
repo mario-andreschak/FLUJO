@@ -107,14 +107,13 @@ async function stop() {
   if (!await Promise.race([receipt.then(() => true), delay(5000).then(() => false)])) throw new Error('Owned Tasks server did not close; cleanup refused.');
   child = undefined;
 }
-async function start(enabled = true) {
+async function start() {
   const value = await port(); base = `http://127.0.0.1:${value}`; log = '';
   child = spawn(process.execPath, [path.join(application, 'scripts', 'launch-next.mjs'), 'start', '-p', String(value), '-H', '127.0.0.1'], {
     cwd: runtimeApplication, detached: process.platform !== 'win32', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...safeEnvironment(), ...operator.env, FLUJO_DATA_DIR: data, FLUJO_APP_ROOT: runtimeApplication,
       FLUJO_BASE_URL: base, FLUJO_PORT: String(value), FLUJO_EXPOSURE_MODE: 'localhost',
-      FLUJO_MCP_APP_SANDBOX_HOST: '127.0.0.1', FLUJO_MCP_APP_SANDBOX_PORT: String(await port()),
-      FLUJO_MCP_TASKS_SERVER: String(enabled), FLUJO_MCP_TASKS_CLIENT: 'true' },
+      FLUJO_MCP_APP_SANDBOX_HOST: '127.0.0.1', FLUJO_MCP_APP_SANDBOX_PORT: String(await port()) },
   });
   childClosed = new Promise(resolve => child.once('close', resolve));
   child.on('error', error => { log = `${log}\n${error.name}`.slice(-40000); });
@@ -254,15 +253,10 @@ try {
   receipt.groups.push('completed-result-after-restart', 'interrupted-task-without-replay');
   const ledger = await fs.readFile(path.join(data, '.mcp-server-tasks', 'ledger.json'), 'utf8');
   for (const secret of [operator.token, otherOperator.token, password, privateInput, answer, 'synthetic-smoke-key']) assert.ok(!ledger.includes(secret));
-  await stop(); await start(false);
   await legacy();
-  const disabled = await connect(); assert.equal(disabled.tasks, undefined);
-  assert.equal(disabled.client.getServerCapabilities()?.extensions?.['io.modelcontextprotocol/tasks'], undefined);
   assert.equal(providerCalls, beforeRestart);
-  receipt.groups.push('legacy-and-disabled-feature');
+  receipt.groups.push('legacy-client');
 
-  await stop(); await start();
-  assert.equal((await api('/api/encryption/secure', { action: 'authenticate', password })).success, true);
   main = await connect(); assert.ok(main.tasks);
   holdProvider = true;
   const revoked = await main.tasks.callTool({ name: 'tasks_smoke', arguments: { input: privateInput } });

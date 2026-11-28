@@ -160,7 +160,7 @@ try {
   for (const server of await request('/api/mcp/servers')) await request('/api/mcp/servers/' + encodeURIComponent(server.name), { disabled: true }, { method: 'PUT' });
   const settings = await request('/api/storage?key=speech_settings');
   await request('/api/storage', { key: 'speech_settings', value: { ...settings.value,
-    telemetry: { enabled: false, notifyDaily: false }, experimental: { ...settings.value?.experimental, compactionEnabled: false } } });
+    telemetry: { enabled: false, notifyDaily: false } } });
   executionToken = await scopedCredential(config); secrets.push(executionToken);
   for (const adapter of ['openai-responses', 'openrouter-agent']) {
     const model = await request('/api/model', { id: randomUUID(), name: requestedModel, provider: 'openrouter',

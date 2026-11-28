@@ -16,7 +16,6 @@ Roles are reusable job descriptions for Personas: a name, instructions saying wh
 
 ## How to get to it (user POV)
 
-- Turn on "Enable experimental features" in Settings → "Experimental features" first; otherwise the menu entry is hidden.
 - On a wide window, choose "More" in the top navigation, then the "Experimental" tab in the row below, then "Roles" (`data-tour="nav-roles"`, indented under "Personas").
 - On a window 1535 px wide or narrower, choose "Open navigation menu", then "Roles" under the "Experimental" heading.
 - From the "Create a Persona" wizard, step "Role": "Create a simple Role" opens `/roles/new` in a new tab.
@@ -34,7 +33,6 @@ Preconditions: a throwaway instance from the verify-flujo skill. No model is nee
 
 ## Gotchas
 
-- The pages open even with experimental features off; only the menu entry is hidden.
 - "Save Role" stays disabled until both "Role name" and "What should this Role do?" have text.
 - The driver does not print a new Role's id. Reach the Role by clicking its card on `/roles` (role `link`; the name contains the Role's name), or keep going inside the same `steps` run after saving.
 - Archived Roles are hidden from the gallery until "Show archived Roles" is ticked, and an archived Role has no "Edit" button.

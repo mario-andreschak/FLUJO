@@ -16,10 +16,7 @@ import { persistConversationState } from '@/backend/execution/flow/persistConver
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import type { SharedState } from '@/backend/execution/flow/types';
 import { requestCodexSessionFork } from '@/backend/services/model/adapters/codexSessionStore';
-import {
-  shadowRepoService,
-  snapshotsEnabled,
-} from '@/backend/services/snapshot/ShadowRepoService';
+import { shadowRepoService } from '@/backend/services/snapshot/ShadowRepoService';
 import { StorageKey } from '@/shared/types/storage';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import type {
@@ -216,10 +213,6 @@ function latestMessageEvents(
     : null;
 }
 
-function unavailable() {
-  return NextResponse.json({ error: 'Filesystem snapshots and restore are not enabled' }, { status: 404 });
-}
-
 function runningConflict() {
   return NextResponse.json(
     { error: 'Wait for the conversation to stop before restoring it' },
@@ -233,7 +226,6 @@ async function GET_handler(
 ) {
   const locked = await assertUnlocked({ openai: true });
   if (locked) return locked;
-  if (!(await snapshotsEnabled())) return unavailable();
   const { conversationId } = await params;
   const messageId = request.nextUrl.searchParams.get('messageId');
   if (!messageId) return NextResponse.json({ error: 'messageId is required' }, { status: 400 });
@@ -260,7 +252,6 @@ async function POST_handler(
 ) {
   const locked = await assertUnlocked({ openai: true });
   if (locked) return locked;
-  if (!(await snapshotsEnabled())) return unavailable();
   const notLocal = assertLocalRequest(request);
   if (notLocal) return notLocal;
 

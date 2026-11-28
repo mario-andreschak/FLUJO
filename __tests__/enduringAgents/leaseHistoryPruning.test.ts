@@ -1,9 +1,13 @@
+let mockRetentionMode: 'shadow' | 'active' = 'shadow';
+jest.mock('@/backend/services/enduringAgents/personaRuntimeRetentionControl', () => ({
+  getPersonaRuntimeRetentionMode: jest.fn(async () => mockRetentionMode),
+}));
+
 import {
   ENDURING_AGENT_SCHEMA_VERSION,
   type PersonaActivity,
   type PersonaLease,
 } from '@/shared/types/enduringAgent';
-import { FEATURES } from '@/config/features';
 import {
   prunePersonaLeaseHistory,
 } from '@/backend/services/enduringAgents/leaseHistoryPruning';
@@ -102,11 +106,11 @@ async function loadHistory(id: string): Promise<unknown | null> {
 
 describe('guarded Persona lease-history pruning', () => {
   afterEach(() => {
-    FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING = false;
+    mockRetentionMode = 'shadow';
   });
 
-  it('stays off unless its own switch is on', async () => {
-    FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING = false;
+  it('stays off until Persona history cleanup is active', async () => {
+    mockRetentionMode = 'shadow';
 
     await expect(prunePersonaLeaseHistory('not_a_safe_storage_id', {
       retainedCount: 0,
@@ -119,8 +123,8 @@ describe('guarded Persona lease-history pruning', () => {
     });
   });
 
-  it('runs on its own switch, independent of Persona history cleanup', async () => {
-    FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING = true;
+  it('runs once Persona history cleanup is active', async () => {
+    mockRetentionMode = 'active';
     const workspaceId = freshWorkspace('eligible');
 
     await runWithWorkspace(workspaceId, async () => {
@@ -161,7 +165,7 @@ describe('guarded Persona lease-history pruning', () => {
   });
 
   it('prunes production-sharded lease history using the complete sharded Activity view', async () => {
-    FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING = true;
+    mockRetentionMode = 'active';
     const workspaceId = freshWorkspace('sharded');
 
     await runWithWorkspace(workspaceId, async () => {
@@ -196,7 +200,7 @@ describe('guarded Persona lease-history pruning', () => {
   });
 
   it('preserves a terminal maximum-token authority head independently of status', async () => {
-    FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING = true;
+    mockRetentionMode = 'active';
     const workspaceId = freshWorkspace('terminal-head');
 
     await runWithWorkspace(workspaceId, async () => {
@@ -216,7 +220,7 @@ describe('guarded Persona lease-history pruning', () => {
   });
 
   it('retains a candidate referenced by a waiting Activity', async () => {
-    FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING = true;
+    mockRetentionMode = 'active';
     const workspaceId = freshWorkspace('waiting-reference');
 
     await runWithWorkspace(workspaceId, async () => {
@@ -242,7 +246,7 @@ describe('guarded Persona lease-history pruning', () => {
   });
 
   it('retains a candidate whose owning Activity is missing', async () => {
-    FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING = true;
+    mockRetentionMode = 'active';
     const workspaceId = freshWorkspace('missing-activity');
 
     await runWithWorkspace(workspaceId, async () => {
@@ -262,7 +266,7 @@ describe('guarded Persona lease-history pruning', () => {
   });
 
   it('fails closed on conflicting fencing tokens without deleting anything', async () => {
-    FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING = true;
+    mockRetentionMode = 'active';
     const workspaceId = freshWorkspace('duplicate-token');
 
     await runWithWorkspace(workspaceId, async () => {
@@ -288,7 +292,7 @@ describe('guarded Persona lease-history pruning', () => {
   });
 
   it('fails closed when the strict Activity scan encounters malformed storage', async () => {
-    FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING = true;
+    mockRetentionMode = 'active';
     const workspaceId = freshWorkspace('malformed-activity');
 
     await runWithWorkspace(workspaceId, async () => {
@@ -315,7 +319,7 @@ describe('guarded Persona lease-history pruning', () => {
   });
 
   it('enforces the per-sweep delete cap in oldest-first token order', async () => {
-    FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING = true;
+    mockRetentionMode = 'active';
     const workspaceId = freshWorkspace('delete-cap');
 
     await runWithWorkspace(workspaceId, async () => {

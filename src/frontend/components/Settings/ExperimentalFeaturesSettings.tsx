@@ -12,10 +12,10 @@ import {
   Stack,
   Switch,
   Typography,
-  Alert
+  Alert,
 } from '@mui/material';
 import { createLogger } from '@/utils/logger';
-import { ExperimentalSettings } from '@/shared/types/storage/storage';
+import type { ExperimentalSettings } from '@/shared/types/storage/storage';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import SnapshotStorageSettings from './SnapshotStorageSettings';
@@ -41,8 +41,6 @@ interface ExperimentalSettingsGroupProps {
 interface ExperimentalToggleProps {
   checked: boolean;
   description: string;
-  disabled?: boolean;
-  indented?: boolean;
   label: string;
   name: string;
   onChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
@@ -73,22 +71,16 @@ function ExperimentalSettingsGroup({ id, title, children }: ExperimentalSettings
 function ExperimentalToggle({
   checked,
   description,
-  disabled = false,
-  indented = false,
   label,
   name,
   onChange,
 }: ExperimentalToggleProps) {
   return (
-    <FormControl
-      fullWidth
-      sx={indented ? { pl: 2, borderLeft: 2, borderColor: 'divider' } : undefined}
-    >
+    <FormControl fullWidth>
       <FormControlLabel
         control={(
           <Switch
             checked={checked}
-            disabled={disabled}
             name={name}
             onChange={onChange}
           />
@@ -216,207 +208,21 @@ function McpAppConsentManager() {
   );
 }
 
+/** Advanced settings: MCP safety choices, tool-result limits and snapshot storage. */
 export default function ExperimentalFeaturesSettings() {
   const { settings, updateSettings } = useStorage();
   const { t } = useI18n();
+  const experimental: ExperimentalSettings = settings?.experimental ?? {};
 
-  // Missing/undefined is treated as disabled — the "experimental" default.
-  const experimental: ExperimentalSettings = settings?.experimental ?? { enabled: false };
-
-  const handleEnableChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    log.debug(`Experimental features toggled: ${event.target.checked}`);
+  const setChoice = (name: 'requireMcpAppLaunchClick' | 'restrictMcpFilesystemToRoots') => (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    log.debug(`${name} toggled: ${event.target.checked}`);
     updateSettings({
       ...settings,
       experimental: {
         ...experimental,
-        enabled: event.target.checked,
-      },
-    });
-  };
-
-  const handleClaudeSessionResumeChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    log.debug(`Claude session resume toggled: ${event.target.checked}`);
-    updateSettings({
-      ...settings,
-      experimental: {
-        ...experimental,
-        claudeSessionResume: event.target.checked,
-      },
-    });
-  };
-
-  const handleClaudeWarmProcessChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    log.debug(`Claude warm process toggled: ${event.target.checked}`);
-    updateSettings({
-      ...settings,
-      experimental: {
-        ...experimental,
-        claudeWarmProcess: event.target.checked,
-      },
-    });
-  };
-
-  const handleCodexModelCatalogCacheChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    log.debug(`Codex model catalog cache toggled: ${event.target.checked}`);
-    updateSettings({
-      ...settings,
-      experimental: {
-        ...experimental,
-        codexModelCatalogCache: event.target.checked,
-      },
-    });
-  };
-
-  const handleAutoUnloadOllamaChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    log.debug(`Auto-unload Ollama models toggled: ${event.target.checked}`);
-    updateSettings({
-      ...settings,
-      experimental: {
-        ...experimental,
-        autoUnloadOllamaModels: event.target.checked,
-      },
-    });
-  };
-
-  const handleMcpBetaProtocolChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    log.debug(`Modern MCP protocol toggled: ${event.target.checked}`);
-    updateSettings({
-      ...settings,
-      experimental: {
-        ...experimental,
-        mcpBetaProtocol: event.target.checked,
-      },
-    });
-  };
-
-  const handleLowLatencySavesChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    log.debug(`Low-latency saves toggled: ${event.target.checked}`);
-    updateSettings({
-      ...settings,
-      experimental: {
-        ...experimental,
-        lowLatencySaves: event.target.checked,
-      },
-    });
-  };
-
-  const handleMcpListCacheChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    log.debug(`MCP list reuse toggled: ${event.target.checked}`);
-    updateSettings({
-      ...settings,
-      experimental: {
-        ...experimental,
-        mcpListCache: event.target.checked,
-      },
-    });
-  };
-
-  const handleMcpRuntimeHomeIsolationChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    log.debug(`Workspace MCP runtime-home isolation toggled: ${event.target.checked}`);
-    updateSettings({
-      ...settings,
-      experimental: {
-        ...experimental,
-        mcpRuntimeHomeIsolation: event.target.checked,
-      },
-    });
-  };
-
-  const handleFlowBasedGeneratorChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    log.debug(`Flow-based generator toggled: ${event.target.checked}`);
-    updateSettings({
-      ...settings,
-      experimental: {
-        ...experimental,
-        flowBasedGenerator: event.target.checked,
-      },
-    });
-  };
-
-  const handleMcpAppLaunchRestrictionChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    log.debug(`MCP App click-to-launch restriction toggled: ${event.target.checked}`);
-    updateSettings({
-      ...settings,
-      experimental: {
-        ...experimental,
-        requireMcpAppLaunchClick: event.target.checked,
-      },
-    });
-  };
-
-  const handleMcpRootsRestrictionChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    log.debug(`MCP roots restriction toggled: ${event.target.checked}`);
-    updateSettings({
-      ...settings,
-      experimental: {
-        ...experimental,
-        restrictMcpFilesystemToRoots: event.target.checked,
-      },
-    });
-  };
-
-  const handleSnapshotsChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    log.debug(`Filesystem snapshots toggled: ${event.target.checked}`);
-    updateSettings({
-      ...settings,
-      experimental: {
-        ...experimental,
-        snapshotsEnabled: event.target.checked,
-      },
-    });
-  };
-
-  const handleShowModelsWithoutToolsChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    log.debug(`Show models without tool capabilities toggled: ${event.target.checked}`);
-    updateSettings({
-      ...settings,
-      experimental: {
-        ...experimental,
-        showModelsWithoutToolCapabilities: event.target.checked,
-      },
-    });
-  };
-
-  const handleVisualCompactionChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    log.debug(`Visual context compaction toggled: ${event.target.checked}`);
-    updateSettings({
-      ...settings,
-      experimental: {
-        ...experimental,
-        visualCompactionEnabled: event.target.checked,
-      },
-    });
-  };
-
-  const handleSummarizingCompactionChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    log.debug(`AI summarizing compaction toggled: ${event.target.checked}`);
-    updateSettings({
-      ...settings,
-      experimental: {
-        ...experimental,
-        compactionEnabled: event.target.checked,
-      },
-    });
-  };
-
-  const handleVisualToolResultsOnlyChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    log.debug(`Visual compaction tool-results-only toggled: ${event.target.checked}`);
-    updateSettings({
-      ...settings,
-      experimental: {
-        ...experimental,
-        visualCompactionToolResultsOnly: event.target.checked,
-      },
-    });
-  };
-
-  const handleVisualEvaluationModeChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    log.debug(`Visual compaction evaluation mode toggled: ${event.target.checked}`);
-    updateSettings({
-      ...settings,
-      experimental: {
-        ...experimental,
-        visualCompactionEvaluationMode: event.target.checked,
+        [name]: event.target.checked,
       },
     });
   };
@@ -425,131 +231,10 @@ export default function ExperimentalFeaturesSettings() {
     <Box sx={{ p: 2 }}>
       <Stack spacing={3}>
         <ExperimentalSettingsGroup
-          id="feature-access"
-          title={t('settings.experimental.group.featureAccess')}
-        >
-          <Box>
-            <ExperimentalToggle
-              checked={experimental.enabled}
-              description={t('settings.experimental.enableDescription')}
-              label={t('settings.experimental.enable')}
-              name="experimentalEnabled"
-              onChange={handleEnableChange}
-            />
-            <Alert severity="info" sx={{ mt: 2 }}>
-              <Typography variant="body2">
-                {t('settings.experimental.disableInfo')}
-              </Typography>
-            </Alert>
-          </Box>
-        </ExperimentalSettingsGroup>
-
-        <ExperimentalSettingsGroup
-          id="model-behavior"
-          title={t('settings.experimental.group.modelBehavior')}
-        >
-          <ExperimentalToggle
-            checked={experimental.harnessLabEnabled === true}
-            description={t('harness.description')}
-            label={t('harness.enable')}
-            name="harnessLabEnabled"
-            onChange={(event) => { void updateSettings({ ...settings, experimental: { ...experimental, harnessLabEnabled: event.target.checked } }); }}
-          />
-          <ExperimentalToggle
-            checked={experimental.showModelsWithoutToolCapabilities ?? false}
-            description={t('settings.experimental.modelsWithoutToolsDescription')}
-            label={t('settings.experimental.modelsWithoutTools')}
-            name="showModelsWithoutToolCapabilities"
-            onChange={handleShowModelsWithoutToolsChange}
-          />
-          <ExperimentalToggle
-            checked={experimental.claudeSessionResume ?? false}
-            description={t('settings.experimental.claudeResumeDescription')}
-            label={t('settings.experimental.claudeResume')}
-            name="claudeSessionResume"
-            onChange={handleClaudeSessionResumeChange}
-          />
-          <ExperimentalToggle
-            checked={experimental.claudeWarmProcess ?? false}
-            description={t('settings.experimental.claudeWarmProcessDescription')}
-            label={t('settings.experimental.claudeWarmProcess')}
-            name="claudeWarmProcess"
-            onChange={handleClaudeWarmProcessChange}
-          />
-          <ExperimentalToggle
-            checked={experimental.codexModelCatalogCache ?? false}
-            description={t('settings.experimental.codexModelCatalogCacheDescription')}
-            label={t('settings.experimental.codexModelCatalogCache')}
-            name="codexModelCatalogCache"
-            onChange={handleCodexModelCatalogCacheChange}
-          />
-          <ExperimentalToggle
-            checked={experimental.autoUnloadOllamaModels ?? false}
-            description={t('settings.experimental.ollamaDescription')}
-            label={t('settings.experimental.ollama')}
-            name="autoUnloadOllamaModels"
-            onChange={handleAutoUnloadOllamaChange}
-          />
-        </ExperimentalSettingsGroup>
-
-        <ExperimentalSettingsGroup
           id="context-management"
           title={t('settings.experimental.group.contextManagement')}
         >
           <ToolResultLimitSettings />
-          <ExperimentalToggle
-            checked={experimental.compactionEnabled ?? false}
-            description={t('settings.experimental.summarizingCompactionDescription')}
-            label={t('settings.experimental.summarizingCompaction')}
-            name="compactionEnabled"
-            onChange={handleSummarizingCompactionChange}
-          />
-          <ExperimentalToggle
-            checked={experimental.visualCompactionEnabled ?? false}
-            description={t('settings.experimental.visualCompactionDescription')}
-            label={t('settings.experimental.visualCompaction')}
-            name="visualCompactionEnabled"
-            onChange={handleVisualCompactionChange}
-          />
-          <ExperimentalToggle
-            checked={experimental.visualCompactionToolResultsOnly !== false}
-            description={t('settings.experimental.toolResultsOnlyDescription')}
-            disabled={!experimental.visualCompactionEnabled}
-            indented
-            label={t('settings.experimental.toolResultsOnly')}
-            name="visualCompactionToolResultsOnly"
-            onChange={handleVisualToolResultsOnlyChange}
-          />
-          <ExperimentalToggle
-            checked={experimental.visualCompactionEvaluationMode ?? false}
-            description={t('settings.experimental.evaluationDescription')}
-            disabled={!experimental.visualCompactionEnabled}
-            indented
-            label={t('settings.experimental.evaluation')}
-            name="visualCompactionEvaluationMode"
-            onChange={handleVisualEvaluationModeChange}
-          />
-        </ExperimentalSettingsGroup>
-
-        <ExperimentalSettingsGroup
-          id="flow-execution"
-          title={t('settings.experimental.group.flowExecution')}
-        >
-          <ExperimentalToggle
-            checked={experimental.flowBasedGenerator ?? false}
-            description={t('settings.experimental.flowGeneratorDescription')}
-            disabled={!experimental.enabled}
-            label={t('settings.experimental.flowGenerator')}
-            name="flowBasedGenerator"
-            onChange={handleFlowBasedGeneratorChange}
-          />
-          <ExperimentalToggle
-            checked={experimental.lowLatencySaves ?? false}
-            description={t('settings.experimental.lowLatencySavesDescription')}
-            label={t('settings.experimental.lowLatencySaves')}
-            name="lowLatencySaves"
-            onChange={handleLowLatencySavesChange}
-          />
         </ExperimentalSettingsGroup>
 
         <ExperimentalSettingsGroup
@@ -557,32 +242,11 @@ export default function ExperimentalFeaturesSettings() {
           title={t('settings.experimental.group.mcpAndApps')}
         >
           <ExperimentalToggle
-            checked={experimental.mcpBetaProtocol !== false}
-            description={t('settings.experimental.mcpBetaDescription')}
-            label={t('settings.experimental.mcpBeta')}
-            name="mcpBetaProtocol"
-            onChange={handleMcpBetaProtocolChange}
-          />
-          <ExperimentalToggle
-            checked={experimental.mcpListCache ?? false}
-            description={t('settings.experimental.mcpListCacheDescription')}
-            label={t('settings.experimental.mcpListCache')}
-            name="mcpListCache"
-            onChange={handleMcpListCacheChange}
-          />
-          <ExperimentalToggle
-            checked={experimental.mcpRuntimeHomeIsolation ?? false}
-            description={t('settings.experimental.mcpRuntimeHomeIsolationDescription')}
-            label={t('settings.experimental.mcpRuntimeHomeIsolation')}
-            name="mcpRuntimeHomeIsolation"
-            onChange={handleMcpRuntimeHomeIsolationChange}
-          />
-          <ExperimentalToggle
             checked={experimental.restrictMcpFilesystemToRoots ?? false}
             description={t('settings.experimental.restrictMcpFilesystemToRootsDescription')}
             label={t('settings.experimental.restrictMcpFilesystemToRoots')}
             name="restrictMcpFilesystemToRoots"
-            onChange={handleMcpRootsRestrictionChange}
+            onChange={setChoice('restrictMcpFilesystemToRoots')}
           />
           <Box>
             <ExperimentalToggle
@@ -590,7 +254,7 @@ export default function ExperimentalFeaturesSettings() {
               description={t('settings.experimental.requireMcpAppLaunchClickDescription')}
               label={t('settings.experimental.requireMcpAppLaunchClick')}
               name="requireMcpAppLaunchClick"
-              onChange={handleMcpAppLaunchRestrictionChange}
+              onChange={setChoice('requireMcpAppLaunchClick')}
             />
             {experimental.requireMcpAppLaunchClick === true && <McpAppConsentManager />}
           </Box>
@@ -600,14 +264,7 @@ export default function ExperimentalFeaturesSettings() {
           id="snapshots-and-recovery"
           title={t('settings.experimental.group.snapshotsAndRecovery')}
         >
-          <ExperimentalToggle
-            checked={experimental.snapshotsEnabled ?? false}
-            description={t('settings.experimental.snapshotsDescription')}
-            label={t('settings.experimental.snapshots')}
-            name="snapshotsEnabled"
-            onChange={handleSnapshotsChange}
-          />
-          <SnapshotStorageSettings showCaptureToggle={false} />
+          <SnapshotStorageSettings />
         </ExperimentalSettingsGroup>
       </Stack>
     </Box>

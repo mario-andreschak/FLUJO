@@ -17,7 +17,6 @@ import {
   listBehaviorMaintenanceRuns,
   savePersonaActivity,
 } from '@/backend/services/enduringAgents/store';
-import { FEATURES } from '@/config/features';
 import {
   type PersonaActivity,
   type PersonaActivityOutcomeResolution,
@@ -27,20 +26,6 @@ import { runWithWorkspace } from '@/utils/workspace';
 
 import { createPersonaFromRole } from './fixtures/personaFactory';
 
-/**
- * The rollout gates are plain mutable module state, so the enabled path is
- * exercised by flipping them directly (the same convention as
- * `behaviorMaintenance.test.ts`). Every test restores them in `afterEach`
- * because `FEATURES` is a shared singleton inside one Jest worker.
- */
-type MutableMaintenanceFeatures = {
-  ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION: boolean;
-  ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS: boolean;
-  ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS: boolean;
-  ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK: boolean;
-};
-
-const maintenanceFeatures = FEATURES as unknown as MutableMaintenanceFeatures;
 const REUSABLE_LESSON = 'Run the focused regression test before reporting completion.';
 let workspaceSequence = 0;
 
@@ -147,19 +132,7 @@ async function persistRepeatedLesson(
 }
 
 describe('Persona self-improvement with the complete rollout gate enabled', () => {
-  beforeEach(() => {
-    maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = true;
-    maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = true;
-    maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS = true;
-    maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK = true;
-  });
 
-  afterEach(() => {
-    maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = false;
-    maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = false;
-    maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS = false;
-    maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK = false;
-  });
 
   it('drives the full chain from Activity outcomes to an activated Behavior revision', async () => {
     await inFreshWorkspace(async () => {

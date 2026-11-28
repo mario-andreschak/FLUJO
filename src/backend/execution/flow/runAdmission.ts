@@ -6,6 +6,7 @@ import { pendingAllocationBytes, setAllocationReservation } from './allocationRe
 
 import { getCurrentWorkspace } from '@/utils/workspace';
 import { CapacityWaitQueue, type CapacityWaitOptions } from '@/utils/capacityWaitQueue';
+import { testSetting } from '@/shared/testSetting';
 
 const MiB = 1024 * 1024;
 const MIN_RESERVATION_BYTES = MiB;
@@ -78,7 +79,7 @@ setAllocationReservation('run', runtime.bytes);
 const waiting = runtime.waiting ??= new CapacityWaitQueue();
 
 function configured(name: string, fallback: number): number {
-  const value = Number(process.env[`FLUJO_RUN_ADMISSION_${name}`]);
+  const value = Number(testSetting(`FLUJO_RUN_ADMISSION_${name}`));
   return Number.isSafeInteger(value) && value > 0 ? value : fallback;
 }
 

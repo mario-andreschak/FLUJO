@@ -1,62 +1,62 @@
-import { loadItem } from '@/utils/storage/backend';
-import { StorageKey, type Settings } from '@/shared/types/storage';
+import { StorageKey } from '@/shared/types/storage';
 import type { MCPServerConfig } from '@/shared/types/mcp';
-import { createLogger } from '@/utils/logger';
+import { loadItem, loadItemForBackup, saveItem } from '@/utils/storage/backend';
+import { getCurrentWorkspace } from '@/utils/workspace';
 import { assertMcpTransport } from './transportAdmission';
 
-const log = createLogger('backend/services/mcp/runtimeHomeIsolation');
+type StoredRecord = Record<string, unknown>;
 
-export const MCP_RUNTIME_HOME_ISOLATION_ENV = 'FLUJO_MCP_RUNTIME_HOME_ISOLATION';
+const movedDefaults = new Map<string, Promise<boolean>>();
 
-/**
- * Parse the installation-wide operator override. Undefined and unrecognised
- * values mean "inherit" so a malformed launcher value cannot silently opt a
- * server into sharing or isolation.
- */
-export function parseRuntimeHomeIsolationOverride(
-  raw: string | undefined,
-): boolean | undefined {
-  const value = raw?.trim().toLowerCase();
-  if (!value) return undefined;
-  if (['1', 'true', 'yes', 'on', 'isolated'].includes(value)) return true;
-  if (['0', 'false', 'no', 'off', 'host'].includes(value)) return false;
-  return undefined;
+function isRecord(value: unknown): value is StoredRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**
- * Resolve stdio runtime-home isolation with one authoritative precedence chain:
- *
- *   process environment > per-server mode > workspace default > off
- *
- * Settings storage is workspace-scoped, so this must run inside the request or
- * callback's bound workspace context. Failure is fail-open to the requested
- * product default (host home), not to isolation.
+ * #1449 retired the workspace-wide "isolate every server" switch. A workspace
+ * that had it on gets `isolated` written into each stdio server that followed
+ * it, so the choice now lives only in the server's own settings.
  */
-export async function resolveRuntimeHomeIsolation(
-  config: MCPServerConfig,
-  env: Readonly<Record<string, string | undefined>> = process.env,
-): Promise<boolean> {
+async function moveRetiredWorkspaceDefault(): Promise<boolean> {
+  const settings = await loadItemForBackup<unknown>(StorageKey.SPEECH_SETTINGS, null);
+  if (!isRecord(settings) || !isRecord(settings.experimental)
+    || settings.experimental.mcpRuntimeHomeIsolation !== true) return false;
+  const servers = await loadItem<Record<string, StoredRecord>>(StorageKey.MCP_SERVERS, {});
+  const next = Object.fromEntries(Object.entries(servers).map(([name, server]) => [
+    name,
+    server.transport === 'stdio' && (server.runtimeHomeMode ?? 'inherit') === 'inherit'
+      ? { ...server, runtimeHomeMode: 'isolated' }
+      : server,
+  ]));
+  await saveItem(StorageKey.MCP_SERVERS, next);
+  await saveItem(StorageKey.SPEECH_SETTINGS, settings);
+  return true;
+}
+
+function retiredWorkspaceDefault(): Promise<boolean> {
+  const workspace = getCurrentWorkspace();
+  const pending = movedDefaults.get(workspace) ?? moveRetiredWorkspaceDefault();
+  movedDefaults.set(workspace, pending);
+  pending.catch(() => movedDefaults.delete(workspace));
+  return pending;
+}
+
+/** Runs at workspace start-up so the move happens before any setting is saved again. */
+export async function moveRetiredRuntimeHomeDefault(): Promise<void> {
+  await retiredWorkspaceDefault().catch(() => false);
+}
+
+/**
+ * A stdio server gets a private workspace HOME/config/cache tree when its own
+ * settings say `isolated`; otherwise it uses the host home like a terminal.
+ */
+export async function resolveRuntimeHomeIsolation(config: MCPServerConfig): Promise<boolean> {
   assertMcpTransport(config);
-  if (config.transport !== 'stdio') return false;
-
-  const processOverride = parseRuntimeHomeIsolationOverride(
-    env[MCP_RUNTIME_HOME_ISOLATION_ENV],
-  );
-  if (processOverride !== undefined) return processOverride;
-
+  if (config.transport !== 'stdio' || config.runtimeHomeMode === 'host') return false;
   if (config.runtimeHomeMode === 'isolated') return true;
-  if (config.runtimeHomeMode === 'host') return false;
+  return retiredWorkspaceDefault().catch(() => false);
+}
 
-  try {
-    const settings = await loadItem<Settings | undefined>(
-      StorageKey.SPEECH_SETTINGS,
-      undefined,
-    );
-    return settings?.experimental?.mcpRuntimeHomeIsolation === true;
-  } catch (error) {
-    log.warn('Could not read the workspace MCP runtime-home preference; defaulting to host home', {
-      error,
-    });
-    return false;
-  }
+export function _resetRuntimeHomeMigrationForTests(): void {
+  movedDefaults.clear();
 }

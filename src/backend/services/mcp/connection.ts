@@ -228,9 +228,7 @@ export function getUnderlyingTransport(transport: unknown): unknown {
 }
 
 // Marker stashed on clients built by the v2-beta path (betaClient.ts), so
-// shouldRecreateClient can rebuild a connection when the experimental
-// mcpBetaProtocol toggle flips — a v1 client must never be reused as a beta
-// client or vice versa.
+// shouldRecreateClient never reuses a v1 client as a beta client or vice versa.
 export interface ClientWithBetaMarker {
   __flujoBeta?: boolean;
 }
@@ -1213,9 +1211,8 @@ export async function createStdioTransport(
 /**
  * Check if an existing client needs to be recreated.
  *
- * `useBetaProtocol` is the CURRENT value of the experimental mcpBetaProtocol
- * setting (see betaClient.ts). A client built by the other SDK generation can
- * never be reused — the toggle flip rebuilds the connection on next connect.
+ * `useBetaProtocol` says which SDK generation the next connection uses (see
+ * betaClient.ts). A client built by the other generation is never reused.
  */
 export function shouldRecreateClient(
   client: Client,

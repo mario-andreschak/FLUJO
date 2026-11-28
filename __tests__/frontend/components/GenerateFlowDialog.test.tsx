@@ -12,14 +12,6 @@ const generateFlowMock = jest.fn();
 const improveFlowMock = jest.fn();
 const startVisualGenerationMock = jest.fn();
 const loadModelsMock = jest.fn();
-const synthesizeFlowGeneratorMock = jest.fn();
-const createConversationMock = jest.fn();
-const completeFlowGeneratorTurnMock = jest.fn();
-const restoreFlowGeneratorMock = jest.fn();
-let mockStorageValue: any = {
-  settings: {},
-  settingsHydrated: true,
-};
 
 jest.mock('@/frontend/services/flow', () => ({
   flowService: {
@@ -36,19 +28,6 @@ jest.mock('@/frontend/services/model', () => ({
   modelService: {
     loadModels: (...args: unknown[]) => loadModelsMock(...args),
   },
-}));
-
-jest.mock('@/frontend/services/chat', () => ({
-  chatService: {
-    synthesizeFlowGenerator: (...args: unknown[]) => synthesizeFlowGeneratorMock(...args),
-    createConversation: (...args: unknown[]) => createConversationMock(...args),
-    completeFlowGeneratorTurn: (...args: unknown[]) => completeFlowGeneratorTurnMock(...args),
-    restoreFlowGenerator: (...args: unknown[]) => restoreFlowGeneratorMock(...args),
-  },
-}));
-
-jest.mock('@/frontend/contexts/StorageContext', () => ({
-  useStorage: () => mockStorageValue,
 }));
 
 jest.mock('@/frontend/components/Chat/ChatInput', () => ({
@@ -107,10 +86,6 @@ const visualAgent = {
 
 beforeEach(() => {
   jest.clearAllMocks();
-  mockStorageValue = {
-    settings: {},
-    settingsHydrated: true,
-  };
   loadModelsMock.mockResolvedValue([
     { id: 'model-1', name: 'gpt', displayName: 'Generator' },
   ]);
@@ -147,17 +122,6 @@ beforeEach(() => {
     attempts: 1,
     installedServers: [],
   });
-  synthesizeFlowGeneratorMock.mockResolvedValue({
-    conversationId: 'conversation-1',
-    flow: {
-      id: 'quickchat-flow-generator-conversation-1',
-      name: 'Experimental Flow Generator Session',
-      nodes: [],
-      edges: [],
-    },
-  });
-  createConversationMock.mockResolvedValue(undefined);
-  restoreFlowGeneratorMock.mockResolvedValue({ flow: root });
 });
 
 describe('GenerateFlowDialog generation contract', () => {
@@ -236,67 +200,5 @@ describe('GenerateFlowDialog generation contract', () => {
       expect.any(Function),
       expect.anything(),
     ));
-  });
-
-  it('runs entirely through the multi-stage system Flow when the experimental setting is active', async () => {
-    mockStorageValue = {
-      settings: {
-        experimental: {
-          enabled: true,
-          flowBasedGenerator: true,
-        },
-      },
-      settingsHydrated: true,
-    };
-    const toolDraft = {
-      flow: root,
-      flows: [child, root],
-      rootFlowId: root.id,
-      validation,
-    };
-    completeFlowGeneratorTurnMock.mockImplementation(async (payload: {
-      messages: Array<Record<string, unknown>>;
-    }) => ({
-      messages: [
-        ...payload.messages,
-        {
-          role: 'tool',
-          content: JSON.stringify({
-            content: [{ type: 'text', text: JSON.stringify(toolDraft) }],
-          }),
-        },
-        { role: 'assistant', content: 'Draft compiled and validated.' },
-      ],
-    }));
-    const onGenerated = jest.fn();
-    render(
-      <GenerateFlowDialog open onClose={() => undefined} onGenerated={onGenerated} />
-    );
-
-    expect(await screen.findByText('Experimental · Flow-based')).toBeInTheDocument();
-    expect(screen.getByRole('button', {
-      name: 'Restore the bundled experimental Generation Flow',
-    })).toBeInTheDocument();
-    const send = screen.getByRole('button', { name: 'Send request' });
-    await waitFor(() => expect(send).toBeEnabled());
-    fireEvent.click(send);
-
-    await waitFor(() => expect(synthesizeFlowGeneratorMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelId: 'model-1',
-        allowInstall: false,
-      })
-    ));
-    expect(generateFlowMock).not.toHaveBeenCalled();
-    expect(startVisualGenerationMock).not.toHaveBeenCalled();
-    expect(improveFlowMock).not.toHaveBeenCalled();
-    await waitFor(() => expect(completeFlowGeneratorTurnMock).toHaveBeenCalledTimes(1));
-
-    fireEvent.click(screen.getByRole('button', { name: 'Continue to simple builder' }));
-    expect(onGenerated).toHaveBeenCalledWith(expect.objectContaining({
-      flow: root,
-      flows: [child, root],
-      rootFlowId: root.id,
-    }));
   });
 });

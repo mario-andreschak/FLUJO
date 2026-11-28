@@ -64,9 +64,7 @@ import { applyPresetArguments } from '@/backend/utils/resolveDynamicReferences';
 import { traceMark } from '@/backend/execution/flow/turnTrace';
 import {
   claimClaudeSpare,
-  closeAllClaudeSpares,
   explainClaudeSpareMiss,
-  isClaudeWarmProcessEnabled,
   prepareClaudeSpare,
   releaseClaudeSpare,
   takeClaudeSpare,
@@ -1045,10 +1043,9 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // can take a parked Claude Code process started with exactly these options.
     // Resumed sessions, the native broker paths and extension-bound runs always
     // start Claude Code themselves. They leave processes parked for other
-    // requests alone (#1096): only switching the setting off closes them.
-    const warmSetting = !nativeToolPort && !nativeOriginalProcessHost && await isClaudeWarmProcessEnabled();
+    // requests alone (#1096).
+    const warmSetting = !nativeToolPort && !nativeOriginalProcessHost;
     const warmEnabled = warmSetting && !resumeSessionId && !executionExtensionContext;
-    if (!warmSetting && !nativeToolPort && !nativeOriginalProcessHost) closeAllClaudeSpares();
     // Claude Code adds the account's claude.ai connectors while it starts. A
     // parked process has always finished that, a fresh one often has not, so
     // the model could see different tools. FLUJO denies them anyway (#166);

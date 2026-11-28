@@ -15,7 +15,6 @@ import {
   Typography,
 } from '@mui/material';
 import type { SnapshotRetentionPolicy, SnapshotStatus } from '@/shared/types/snapshot';
-import { useStorage } from '@/frontend/contexts/StorageContext';
 
 const GIB = 1024 * 1024 * 1024;
 const DAY = 24 * 60 * 60 * 1000;
@@ -33,12 +32,7 @@ function formatBytes(bytes: number) {
 }
 
 /** Management surface for derived filesystem snapshot history. */
-export default function SnapshotStorageSettings({
-  showCaptureToggle = true,
-}: {
-  showCaptureToggle?: boolean;
-}) {
-  const { settings, updateSettings } = useStorage();
+export default function SnapshotStorageSettings() {
   const [status, setStatus] = useState<SnapshotStatus | null>(null);
   const [draft, setDraft] = useState<SnapshotRetentionPolicy | null>(null);
   const [loading, setLoading] = useState(true);
@@ -138,7 +132,6 @@ export default function SnapshotStorageSettings({
     if (draft && parsed !== null) setDraft({ ...draft, [field]: parsed });
   };
 
-  const captureEnabled = settings.experimental?.snapshotsEnabled === true;
   const repositorySummaries = status?.usage.repositories ?? [];
   const captureCount = repositorySummaries.reduce(
     (total, repository) => total + repository.commitCount,
@@ -157,16 +150,6 @@ export default function SnapshotStorageSettings({
     || status?.activity.revert
     || status?.activity.migration,
   );
-  const setCaptureEnabled = (enabled: boolean) => {
-    void updateSettings({
-      ...settings,
-      experimental: {
-        enabled: settings.experimental?.enabled ?? false,
-        ...settings.experimental,
-        snapshotsEnabled: enabled,
-      },
-    });
-  };
 
   return (
     <Box sx={{ p: 2 }}>
@@ -174,17 +157,6 @@ export default function SnapshotStorageSettings({
       <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 2 }}>
         Snapshot history supports Diff and Revert. It is derived data: cleanup never deletes project files or your project&apos;s .git directory.
       </Typography>
-      {showCaptureToggle && (
-        <>
-          <FormControlLabel
-            control={<Switch checked={captureEnabled} onChange={(event) => setCaptureEnabled(event.target.checked)} />}
-            label="Capture filesystem snapshots"
-          />
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Turning capture off stops new snapshots and does not free disk space.
-          </Typography>
-        </>
-      )}
       {loading && <CircularProgress size={20} />}
       {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
       {message && <Alert severity="success" sx={{ mb: 1 }}>{message}</Alert>}

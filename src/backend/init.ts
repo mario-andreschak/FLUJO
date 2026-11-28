@@ -1,5 +1,4 @@
 import { Cron } from 'croner';
-import { FEATURES } from '@/config/features';
 import { verifyStorage } from '@/utils/storage/backend';
 import { mcpService } from '@/backend/services/mcp';
 import { sweepOldRunResources } from '@/backend/services/runResources';
@@ -261,13 +260,9 @@ function armRetentionSweep(): void {
     });
     log.info('Armed memory candidate lifecycle sweep (hourly)');
   }
-  // Lease-history pruning (issue #478) is deliberately armed only when its
-  // independent irreversible-deletion flag is enabled. The callback rechecks
-  // the flag inside the pruning service before every Persona deletion sweep.
-  if (
-    FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING
-    && !global.__flujo_persona_lease_history_pruning_cron
-  ) {
+  // Lease-history pruning (issue #478) deletes only while the workspace's
+  // measured Persona cleanup (#481) is active, rechecked before every delete.
+  if (!global.__flujo_persona_lease_history_pruning_cron) {
     global.__flujo_persona_lease_history_pruning_cron = new Cron(
       '31 * * * *',
       { unref: true },
@@ -296,8 +291,8 @@ function armRetentionSweep(): void {
     );
     log.info('Armed Persona runtime retention sweep (hourly)');
   }
-  // Runtime-event segment retention (#482) is armed unconditionally. The
-  // validated retentionDays <= 0 default makes the sweep a read-free no-op.
+  // Runtime-event segment retention (#482) is armed unconditionally and removes
+  // old segments only while the workspace's measured Persona cleanup is active.
   if (!global.__flujo_persona_runtime_event_retention_cron) {
     global.__flujo_persona_runtime_event_retention_cron = new Cron(
       '53 * * * *',

@@ -35,31 +35,31 @@ describe('runtime environment settings file', () => {
 
     await writeRuntimeEnvironmentFile({
       FLUJO_PORT: '4310',
-      FLUJO_EXTRA_LOCAL_HOSTS: 'host one,host-two',
+      FLUJO_MCP_APP_HOST_ORIGINS: 'host one,host-two',
     });
 
     const contents = await fs.readFile(runtimeEnvironmentFile(), 'utf8');
     expect(contents).toContain('UNMANAGED=value');
     expect(contents).toContain('# keep this');
     expect(contents).toContain('FLUJO_PORT="4310"');
-    expect(contents).toContain('FLUJO_EXTRA_LOCAL_HOSTS="host one,host-two"');
+    expect(contents).toContain('FLUJO_MCP_APP_HOST_ORIGINS="host one,host-two"');
     await expect(readRuntimeEnvironmentFile()).resolves.toMatchObject({
       configured: {
         FLUJO_PORT: '4310',
-        FLUJO_EXTRA_LOCAL_HOSTS: 'host one,host-two',
+        FLUJO_MCP_APP_HOST_ORIGINS: 'host one,host-two',
       },
     });
   });
 
   it('keeps Unicode line and paragraph separators escaped on one line', async () => {
     const value = 'host\u2028one,host\u2029two';
-    await writeRuntimeEnvironmentFile({ FLUJO_EXTRA_LOCAL_HOSTS: value });
+    await writeRuntimeEnvironmentFile({ FLUJO_MCP_APP_HOST_ORIGINS: value });
 
     const contents = await fs.readFile(runtimeEnvironmentFile(), 'utf8');
     expect(contents).not.toMatch(/[\u2028\u2029]/);
-    expect(contents).toContain('FLUJO_EXTRA_LOCAL_HOSTS="host\\u2028one,host\\u2029two"');
+    expect(contents).toContain('FLUJO_MCP_APP_HOST_ORIGINS="host\\u2028one,host\\u2029two"');
     await expect(readRuntimeEnvironmentFile()).resolves.toMatchObject({
-      configured: { FLUJO_EXTRA_LOCAL_HOSTS: value },
+      configured: { FLUJO_MCP_APP_HOST_ORIGINS: value },
     });
   });
 

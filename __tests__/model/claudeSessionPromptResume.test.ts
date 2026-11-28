@@ -234,11 +234,10 @@ it('starts a new session with this turn\'s instructions when the saved conversat
   for (const part of ['Remember ticket 123.', 'Which ticket?']) expect(occurrences(flattened, part)).toBe(1);
 });
 
-describe('with parked Claude Code processes switched on (#1408)', () => {
+describe('with parked Claude Code processes (#1408)', () => {
   interface FakeSpare { options: Record<string, unknown>; claim: jest.Mock; close: jest.Mock }
   let spares: FakeSpare[];
   beforeEach(() => {
-    process.env.FLUJO_CLAUDE_WARM_PROCESS = '1';
     spares = [];
     prewarmMock.mockReset().mockImplementation(async ({ options }: { options: Record<string, unknown> }) => {
       const spare: FakeSpare = {
@@ -256,7 +255,6 @@ describe('with parked Claude Code processes switched on (#1408)', () => {
   });
   afterEach(() => {
     closeAllClaudeSpares();
-    delete process.env.FLUJO_CLAUDE_WARM_PROCESS;
   });
   const settle = () => new Promise(resolve => setImmediate(resolve));
 

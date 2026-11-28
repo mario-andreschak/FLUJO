@@ -6,6 +6,7 @@ import { inspectCodexLogin } from '@/backend/services/model/adapters/codexAuth';
 import { harnessModelRoute } from '@/shared/harnessModelPolicy';
 import type { Model } from '@/shared/types/model';
 import type { HarnessOperation } from './engine';
+import { testSetting } from '@/shared/testSetting';
 
 export const modelFingerprint = (model: Model) => createHash('sha256').update(JSON.stringify(model)).digest('hex');
 
@@ -18,7 +19,7 @@ export async function getHarnessModel(modelId: string, fingerprint?: string) {
   if (!model || !route) throw new HarnessModelError('Choose a keyless Codex Luna, Terra or Sol connection, or an explicit approved OpenRouter text model. Routers and fallback policies are not supported.');
   if (fingerprint && fingerprint !== modelFingerprint(model)) throw new HarnessModelError('The model configuration changed. Start a new experiment for a controlled comparison.');
   if (route === 'codex-subscription') {
-    if (process.env.FLUJO_CODEX_APP_SERVER === '0') throw new HarnessModelError('Harness Lab requires the managed Codex app-server transport.');
+    if (testSetting('FLUJO_CODEX_APP_SERVER') === '0') throw new HarnessModelError('Harness Lab requires the managed Codex app-server transport.');
     if ((await inspectCodexLogin()).authentication !== 'login-detected') throw new HarnessModelError('Connect a Codex ChatGPT subscription login in AI Setup first. API-key authentication is not supported for this route.');
   }
   return { model, route };

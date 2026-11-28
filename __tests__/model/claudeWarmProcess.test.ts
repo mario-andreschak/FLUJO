@@ -1,5 +1,5 @@
 /**
- * Issue #1408: opt-in parked Claude Code processes for the Claude subscription
+ * Issue #1408: parked Claude Code processes for the Claude subscription
  * adapter. A parked process must never act for anyone before or after the one
  * request that claims it, must only be claimed by a request with the exact
  * same start-up options, and must fall back to a normal start whenever it
@@ -7,18 +7,12 @@
  */
 import type { Options, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 
-const loadItemMock = jest.fn();
-jest.mock('@/utils/storage/backend', () => ({
-  loadItem: (...args: unknown[]) => loadItemMock(...args),
-}));
-
 import {
   _claudeSpareCountForTests,
   claimClaudeSpare,
   claudeSpareKey,
   closeAllClaudeSpares,
   explainClaudeSpareMiss,
-  isClaudeWarmProcessEnabled,
   maxClaudeSpares,
   prepareClaudeSpare,
   releaseClaudeSpare,
@@ -95,8 +89,6 @@ const permissionContext = () => ({ signal: new AbortController().signal, toolUse
 afterEach(() => {
   closeAllClaudeSpares();
   jest.useRealTimers();
-  delete process.env.FLUJO_CLAUDE_WARM_PROCESS;
-  loadItemMock.mockReset();
 });
 
 describe('claude warm process key', () => {
@@ -135,23 +127,6 @@ describe('claude warm process key', () => {
 });
 
 describe('claude warm process switch', () => {
-  it('is off unless the setting or the environment turns it on', async () => {
-    loadItemMock.mockResolvedValue(undefined);
-    await expect(isClaudeWarmProcessEnabled()).resolves.toBe(false);
-    loadItemMock.mockResolvedValue({ experimental: { claudeWarmProcess: true } });
-    await expect(isClaudeWarmProcessEnabled()).resolves.toBe(true);
-    process.env.FLUJO_CLAUDE_WARM_PROCESS = '0';
-    await expect(isClaudeWarmProcessEnabled()).resolves.toBe(false);
-    process.env.FLUJO_CLAUDE_WARM_PROCESS = '1';
-    loadItemMock.mockResolvedValue(undefined);
-    await expect(isClaudeWarmProcessEnabled()).resolves.toBe(true);
-  });
-
-  it('reads as off when settings cannot be read', async () => {
-    loadItemMock.mockRejectedValue(new Error('locked'));
-    await expect(isClaudeWarmProcessEnabled()).resolves.toBe(false);
-  });
-
   it('scales the number of parked processes with memory', () => {
     const gib = 1024 ** 3;
     expect(maxClaudeSpares(1 * gib)).toBe(1);

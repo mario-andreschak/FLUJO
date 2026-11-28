@@ -2,8 +2,8 @@
  * Tests for the experimental MCP v2-beta protocol support (spec revision 2026-07-28).
  *
  * Covers the three seams the feature adds:
- *  1. isMcpBetaProtocolEnabled — reads the experimental flag from the Settings blob,
- *     defaulting to disabled on a missing value or a storage failure.
+ *  1. isMcpBetaProtocolEnabled — always true since #1449; negotiation falls back
+ *     to the classic handshake per server.
  *  2. shouldRecreateClient — a toggle flip must rebuild the connection (a v1 client
  *     can never be reused as a beta client or vice versa), while a stable beta
  *     connection with an unchanged config must NOT be rebuilt (the restart-death-
@@ -78,34 +78,11 @@ describe("isMcpBetaProtocolEnabled", () => {
     else process.env.FLUJO_MCP_PROTOCOL_NEGOTIATION = savedNegotiation;
   });
 
-  it("negotiates the modern protocol when the owner never changed the setting", async () => {
-    loadItemMock.mockResolvedValue({ speech: { enabled: false } });
-    expect(await isMcpBetaProtocolEnabled()).toBe(true);
-  });
-
-  it("is enabled when the flag is set", async () => {
-    loadItemMock.mockResolvedValue({
-      experimental: { enabled: true, mcpBetaProtocol: true },
-    });
-    expect(await isMcpBetaProtocolEnabled()).toBe(true);
-  });
-
-  it("uses the classic handshake when the owner switched it off", async () => {
-    loadItemMock.mockResolvedValue({
-      experimental: { enabled: true, mcpBetaProtocol: false },
-    });
-    expect(await isMcpBetaProtocolEnabled()).toBe(false);
-  });
-
-  it("uses the classic handshake when FLUJO_MCP_PROTOCOL_NEGOTIATION=legacy", async () => {
+  it("always negotiates the modern protocol; old settings and the retired variable change nothing (#1449)", async () => {
     process.env.FLUJO_MCP_PROTOCOL_NEGOTIATION = "legacy";
-    loadItemMock.mockResolvedValue({ experimental: { mcpBetaProtocol: true } });
-    expect(await isMcpBetaProtocolEnabled()).toBe(false);
-  });
-
-  it("keeps the default when storage fails, because negotiation always falls back", async () => {
-    loadItemMock.mockRejectedValue(new Error("disk gone"));
+    loadItemMock.mockResolvedValue({ experimental: { mcpBetaProtocol: false } });
     expect(await isMcpBetaProtocolEnabled()).toBe(true);
+    expect(loadItemMock).not.toHaveBeenCalled();
   });
 });
 

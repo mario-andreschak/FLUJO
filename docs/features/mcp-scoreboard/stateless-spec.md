@@ -21,8 +21,8 @@ SDKs: `@modelcontextprotocol/client`, `server`, `core` 2.4.0.
 
 | Criterion | Status | Source | Test |
 | --- | --- | --- | --- |
-| Negotiates 2026-07-28 by default, no opt-in | Yes | `isMcpBetaProtocolEnabled` in [betaClient.ts](../../../src/backend/services/mcp/betaClient.ts) | `betaProtocolToggle.test.ts` "negotiates the modern protocol when the owner never changed the setting" |
-| Owner can force the classic handshake | Yes: Settings → Experimental features → "Modern MCP protocol", or `FLUJO_MCP_PROTOCOL_NEGOTIATION=legacy` | same file; [ExperimentalFeaturesSettings.tsx](../../../src/frontend/components/Settings/ExperimentalFeaturesSettings.tsx) | `betaProtocolToggle.test.ts` (switch off, env, storage failure) |
+| Negotiates 2026-07-28 always, no switch | Yes | `createNewBetaClient` in [betaClient.ts](../../../src/backend/services/mcp/betaClient.ts) | `proxyModernServing.test.ts` |
+| A server that only speaks the classic handshake still works | Yes: FLUJO falls back by itself for that server; there is no switch to force it | same file | `proxyModernServing.test.ts` "lets a modern client fall back to the classic server" |
 | Streamable HTTP: asks `server/discover`, no session id, version and capabilities in every request's `_meta`, `MCP-Protocol-Version` / `Mcp-Method` / `Mcp-Name` headers | Yes (official SDK `auto` mode) | `createNewBetaClient` in [betaClient.ts](../../../src/backend/services/mcp/betaClient.ts) | `proxyModernServing.test.ts`, `modernTasksDispatch.test.ts`, `conformanceAdapters.test.ts` |
 | HTTP: older server answers the probe with an error, client falls back to `initialize` | Yes | SDK `auto` mode | `proxyModernServing.test.ts` "lets a modern client fall back to the classic server" |
 | stdio: `server/discover` first, on the server's own process | Yes | [stdioNegotiation.ts](../../../src/backend/services/mcp/stdioNegotiation.ts) | `stdioProtocolNegotiation.test.ts` "speaks 2026-07-28 with a modern server on a single process" |

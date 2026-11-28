@@ -1,7 +1,6 @@
 import os from 'os';
 import path from 'path';
 import { promises as fs } from 'fs';
-import { loadItem } from '@/utils/storage/backend';
 import { readStableFile } from '@/utils/readStableFile';
 import { prepareCodexModelCatalogSnapshot } from '@/backend/services/model/adapters/codexModelCatalog';
 
@@ -9,7 +8,6 @@ jest.mock('os', () => ({ homedir: jest.fn() }));
 jest.mock('fs', () => ({ promises: {
   mkdir: jest.fn(), mkdtemp: jest.fn(), chmod: jest.fn(), writeFile: jest.fn(), rm: jest.fn(),
 } }));
-jest.mock('@/utils/storage/backend', () => ({ loadItem: jest.fn() }));
 jest.mock('@/utils/readStableFile', () => ({ readStableFile: jest.fn() }));
 jest.mock('@/utils/workspace', () => ({ getWorkspaceDataDir: () => jest.requireActual('path').resolve('fixture-workspace') }));
 jest.mock('@/backend/services/model/adapters/codexRuntimeUpdate', () => ({ readOrdinaryCodexVersion: jest.fn(async () => '0.153.3') }));
@@ -17,7 +15,6 @@ const warnMock = jest.fn();
 jest.mock('@/utils/logger', () => ({ createLogger: () => ({ warn: (...args: unknown[]) => warnMock(...args) }) }));
 
 const homedirMock = os.homedir as jest.MockedFunction<typeof os.homedir>;
-const loadItemMock = loadItem as jest.MockedFunction<typeof loadItem>;
 const readMock = readStableFile as jest.MockedFunction<typeof readStableFile>;
 const mockFs = fs as unknown as Record<'mkdir' | 'mkdtemp' | 'chmod' | 'writeFile' | 'rm', jest.Mock>;
 const compatibleCatalog = Buffer.from(' {"client_version":"0.153.0","models":[{"slug":"gpt-5","model_messages":{}}]}\n');
@@ -29,7 +26,6 @@ describe('prepareCodexModelCatalogSnapshot', () => {
   const previousCodexHome = process.env.CODEX_HOME;
   beforeEach(() => {
     homedirMock.mockReturnValue('C:\\Users\\test');
-    loadItemMock.mockReset().mockResolvedValue({ experimental: { enabled: false, codexModelCatalogCache: true } });
     readMock.mockReset().mockResolvedValue(compatibleCatalog);
     Object.values(mockFs).forEach(mock => mock.mockReset().mockResolvedValue(undefined));
     mockFs.mkdtemp.mockResolvedValue(directory);
@@ -39,13 +35,6 @@ describe('prepareCodexModelCatalogSnapshot', () => {
   afterAll(() => {
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousCodexHome;
-  });
-
-  it('defaults to off and does not inspect the cache or create a snapshot', async () => {
-    loadItemMock.mockResolvedValue(undefined);
-    await expect(prepareCodexModelCatalogSnapshot()).resolves.toBeUndefined();
-    expect(readMock).not.toHaveBeenCalled();
-    expect(mockFs.mkdir).not.toHaveBeenCalled();
   });
 
   it('snapshots exact default-home bytes with exclusive creation and owned cleanup', async () => {
@@ -83,14 +72,6 @@ describe('prepareCodexModelCatalogSnapshot', () => {
     expect(mockFs.mkdtemp).not.toHaveBeenCalled();
   });
 
-  it('defaults to off and preserves the setting-read diagnostic', async () => {
-    const err = new Error('storage unavailable');
-    loadItemMock.mockRejectedValue(err);
-    await expect(prepareCodexModelCatalogSnapshot()).resolves.toBeUndefined();
-    expect(readMock).not.toHaveBeenCalled();
-    expect(warnMock).toHaveBeenCalledWith('Failed to read codexModelCatalogCache setting; defaulting to disabled', { err });
-  });
-
   it('rejects a byte-different published copy and removes the unpublished directory', async () => {
     readMock.mockResolvedValueOnce(compatibleCatalog).mockResolvedValueOnce(Buffer.from('different'));
     await expect(prepareCodexModelCatalogSnapshot()).resolves.toBeUndefined();
@@ -104,10 +85,10 @@ describe('prepareCodexModelCatalogSnapshot', () => {
     expect(mockFs.rm).toHaveBeenCalledTimes(1);
   });
 
-  it('refuses a pre-cancelled run before inspecting settings or creating files', async () => {
+  it('refuses a pre-cancelled run before reading the cache or creating files', async () => {
     const controller = new AbortController(); controller.abort();
     await expect(prepareCodexModelCatalogSnapshot(controller.signal)).rejects.toThrow('Codex run cancelled by user.');
-    expect(loadItemMock).not.toHaveBeenCalled();
+    expect(readMock).not.toHaveBeenCalled();
     expect(mockFs.mkdtemp).not.toHaveBeenCalled();
   });
 

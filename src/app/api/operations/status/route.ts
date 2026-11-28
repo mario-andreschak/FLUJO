@@ -16,6 +16,7 @@ import { getAllocationReservationSnapshot } from '@/backend/execution/flow/alloc
 import { getConversationPublicationDiagnostics } from '@/backend/execution/flow/conversationPublication';
 import { getChatIngressDiagnostics } from '@/utils/http/chatIngress';
 import { getChatRateDiagnostics } from '@/utils/http/chatRateLimit';
+import { testSetting } from '@/shared/testSetting';
 
 export const runtime = 'nodejs';
 
@@ -49,7 +50,7 @@ const GET_handler = async (request: Request, admission: Admission) => {
       import('@/backend/execution/flow/conversationLog'),
     ]);
     const scheduler = getSchedulerService();
-    const budget = process.env.FLUJO_OPERATIONS_RSS_BUDGET_BYTES;
+    const budget = testSetting('FLUJO_OPERATIONS_RSS_BUDGET_BYTES');
     const snapshot = await collectOperationsSnapshot({
       observationProcessId: getObservationProcessId(),
       workspace, compatibility: getWorkerCompatibility(), worker: getWorkerBootstrapStatus(),

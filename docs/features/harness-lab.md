@@ -1,8 +1,8 @@
 # Harness Lab — experimental
 
-Harness Lab applies the **Harness² propose → probe → compose → recurse** approach to FLUJO’s authored Process instructions. It supports normal agents, Persona Core instructions and Persona behavior flows, with retained versions and unattended improvement after conversations. It is disabled by default.
+Harness Lab applies the **Harness² propose → probe → compose → recurse** approach to FLUJO’s authored Process instructions. It supports normal agents, Persona Core instructions and Persona behavior flows, with retained versions and unattended improvement after conversations.
 
-Open **Settings → Experimental → Enable Harness Lab**, then **More → Harness Lab** (`/harness`). Agent builders and Persona behavior cards also link to the relevant target. The navigation experiment switch controls visibility; the separate Harness Lab flag controls server dispatch and activation.
+Open **More → Harness Lab** (`/harness`). There is no switch to turn on. Agent builders and Persona behavior cards also link to the relevant target. Harness Lab runs only when you press Run.
 
 ## Configure and use it
 
@@ -20,7 +20,7 @@ Normal conversations and completed, durably pinned Persona behavior calls supply
 
 An experiment improves one instruction on one fixed model, and it needs a model to propose and to judge. A comparison answers a different question: which of these models or flows gets my examples right? It changes nothing and asks no model for an opinion, so it costs only the runs themselves.
 
-`POST /api/harness/comparisons` starts one and returns at once. It also needs Harness Lab to be enabled. Read the result with `GET /api/harness/comparisons/{id}`:
+`POST /api/harness/comparisons` starts one and returns at once. Read the result with `GET /api/harness/comparisons/{id}`:
 
 ```json
 {

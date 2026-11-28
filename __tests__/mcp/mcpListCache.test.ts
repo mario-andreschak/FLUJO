@@ -1,24 +1,17 @@
 /**
- * Issue #1408: opt-in reuse of MCP tool and resource lists. Off, every call
- * lists. On, a list is reused only for a server that announces changes, on
- * the same connection, and is dropped on a change notice or after 60 s.
+ * Issue #1408: reuse of MCP tool and resource lists, on for everyone (#1449).
+ * A list is reused only for a server that announces changes, on the same
+ * connection, and is dropped on a change notice or after 60 s.
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
-const loadItemMock = jest.fn();
-jest.mock('@/utils/storage/backend', () => ({
-  loadItem: (...args: unknown[]) => loadItemMock(...args),
-}));
-
 import {
   MCP_LIST_CACHE_MAX_AGE_MS,
-  _resetMcpListCacheSettingForTests,
   cachedMcpList,
   invalidateMcpLists,
-  isMcpListCacheEnabled,
 } from '@/backend/services/mcp/listCache';
 import { registerToolListChangedHandler } from '@/backend/services/mcp/resourceNotifications';
 
@@ -34,34 +27,19 @@ const announcing = (listChanged = true) => ({
 const loader = <T extends object>(load: () => T | Promise<T>) =>
   jest.fn(async (): Promise<T & { error?: string }> => load());
 
-beforeEach(() => {
-  _resetMcpListCacheSettingForTests();
-  loadItemMock.mockReset().mockResolvedValue(undefined);
-  process.env.FLUJO_MCP_LIST_CACHE = '1';
-});
 afterEach(() => {
   delete process.env.FLUJO_MCP_LIST_CACHE;
   jest.useRealTimers();
 });
 
 describe('MCP list reuse switch', () => {
-  it('is off unless the setting or the environment turns it on', async () => {
-    delete process.env.FLUJO_MCP_LIST_CACHE;
-    await expect(isMcpListCacheEnabled()).resolves.toBe(false);
-    _resetMcpListCacheSettingForTests();
-    loadItemMock.mockResolvedValue({ experimental: { mcpListCache: true } });
-    await expect(isMcpListCacheEnabled()).resolves.toBe(true);
-    process.env.FLUJO_MCP_LIST_CACHE = '0';
-    await expect(isMcpListCacheEnabled()).resolves.toBe(false);
-  });
-
-  it('lists every time when off', async () => {
+  it('ignores the retired environment switch (#1449)', async () => {
     process.env.FLUJO_MCP_LIST_CACHE = '0';
     const client = announcing();
     const load = loader(() => ({ tools: [{ name: 'a' }] }));
     await cachedMcpList(client, 'tools', 'model', load);
     await cachedMcpList(client, 'tools', 'model', load);
-    expect(load).toHaveBeenCalledTimes(2);
+    expect(load).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -4,7 +4,7 @@ Generated from the App Router source by `node scripts/generate-api-inventory.mjs
 
 This inventory lists explicit handler exports, not a public stability guarantee or complete request schema. Next.js may supply implicit HEAD/OPTIONS behavior. Internal administration routes can execute code or disclose secrets; obey their workspace, unlock, exposure, and worker-auth requirements. See the [integration guide](README.md) and the curated in-app `/docs` reference.
 
-Route files: 251.
+Route files: 250.
 
 | Path | Explicit methods | Handler |
 | --- | --- | --- |
@@ -44,7 +44,6 @@ Route files: 251.
 | `/api/flow/compile` | POST | [source](../../src/app/api/flow/compile/route.ts) |
 | `/api/flow/generate` | POST | [source](../../src/app/api/flow/generate/route.ts) |
 | `/api/flow/generate/visual` | POST | [source](../../src/app/api/flow/generate/visual/route.ts) |
-| `/api/flow/generator` | POST, PUT | [source](../../src/app/api/flow/generator/route.ts) |
 | `/api/flow/improve` | POST | [source](../../src/app/api/flow/improve/route.ts) |
 | `/api/flow/model-agent` | POST | [source](../../src/app/api/flow/model-agent/route.ts) |
 | `/api/flow/prompt-renderer` | POST | [source](../../src/app/api/flow/prompt-renderer/route.ts) |

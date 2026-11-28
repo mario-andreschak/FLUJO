@@ -75,6 +75,7 @@ import {
   RESTRICTED_CODEX_THREAD_OPTIONS,
   type RestrictedCodexProfile,
 } from './codexRestrictedProfile';
+import { testSetting } from '@/shared/testSetting';
 
 const log = createLogger('backend/services/model/adapters/codexAdapter');
 
@@ -215,7 +216,7 @@ export class CodexAdapter implements CompletionAdapter {
       || !input.signal || input.tools?.length || input.localToolExecutors || input.nativeToolPort
       || input.nativeOriginalProcessHost || input.executionExtensionContext || input.conversationId
       || input.nodeId || input.codexSession || input.sessionResume || input.steering
-      || process.env.FLUJO_CODEX_APP_SERVER === '0')) {
+      || testSetting('FLUJO_CODEX_APP_SERVER') === '0')) {
       throw new Error('Harness text inference requires a fresh, tool-free Codex subscription request.');
     }
     const invocationStartedAt = Date.now();
@@ -802,7 +803,7 @@ export class CodexAdapter implements CompletionAdapter {
     let normalizedInput = fullInput;
     let inputSystemPrompt = systemPrompt;
     const ordinaryThreadPath = !nativeToolPort && !executionExtensionContext && !nativeOriginalProcessHost && !apiKey
-      && process.env.FLUJO_CODEX_APP_SERVER !== '0';
+      && testSetting('FLUJO_CODEX_APP_SERVER') !== '0';
     const sdkFallbackPath = !nativeToolPort && !executionExtensionContext && !nativeOriginalProcessHost && !ordinaryThreadPath;
     if (ordinaryThreadPath) configuration.developerInstructions +=
       '\nWhen calling FLUJO MCP tools from code-mode exec, capture the result and emit the relevant returned content with text(...) or image(...) for image blocks. Put that emission after await in the same exec script, including calls that yield and resume with wait. Use the emitted result to produce the requested final response.';

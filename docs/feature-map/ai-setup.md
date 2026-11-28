@@ -40,7 +40,7 @@ Preconditions: a throwaway instance from the verify-flujo skill; a fresh instanc
 - "I’m an expert" in the wizard skips the questions and opens the manual form.
 - With Provider "Ollama" the manual form needs no API key ("Not needed for Ollama. Leave it empty."); it stores the same placeholder as the wizard. Any local OpenAI-compatible server works this way, including the stub model of `npm run journey:first-use`.
 - Offline (Ollama) and subscription routes check or install tools on the machine running FLUJO. Do not let a run install software.
-- Provider model lists hide models known not to support tool calls (for example image generators) unless "Show models without tool capabilities" is on under Settings → Experimental features.
+- Provider model lists hide models known not to support tool calls (for example image generators) unless the provider lists nothing else. Then the tool-less models are shown so the list is not empty.
 - The allowance panel appears only when a subscription connection exists, and a throwaway instance has no real subscription, so it can only show the wording states. Percentages from real accounts need the owner's own logins; `docs/features/models/subscription-allowance.md` lists what each state means.
 - The "Connect AI" button carries `data-tour="add-model"`; the page itself carries `data-tour="models-overview"`.
 - "Copy to a team workspace: <name>" appears only while sign-in for several people is on (Settings → "Users and sign-in"). Its dialog lists only workspaces the person may change; keys, passwords and sign-ins stay behind and the result lists what to enter in the team workspace. A copied app starts turned off.

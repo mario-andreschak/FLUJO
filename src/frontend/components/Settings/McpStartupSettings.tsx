@@ -13,7 +13,6 @@ export default function McpStartupSettings() {
   const { settings, updateSettings } = useStorage();
   const { t } = useI18n();
   const [servers, setServers] = useState<ServerEntry[]>([]);
-  const [environmentValue, setEnvironmentValue] = useState<string>();
   const [failed, setFailed] = useState<string>();
 
   useEffect(() => {
@@ -21,12 +20,6 @@ export default function McpStartupSettings() {
     mcpService.loadServerConfigs().then((configs: unknown) => {
       if (!cancelled && Array.isArray(configs)) setServers((configs as ServerEntry[]).filter(server => !server.disabled));
     });
-    fetch('/api/runtime-environment')
-      .then(response => (response.ok ? response.json() : undefined))
-      .then((data?: { active?: Record<string, string> }) => {
-        if (!cancelled) setEnvironmentValue(data?.active?.FLUJO_MCP_LAZY_START?.trim() || undefined);
-      })
-      .catch(() => undefined);
     return () => { cancelled = true; };
   }, []);
 
@@ -47,7 +40,6 @@ export default function McpStartupSettings() {
           control={
             <Switch
               checked={settings.mcp?.lazyStart === true}
-              disabled={environmentValue !== undefined}
               onChange={(event) => updateSettings({ ...settings, mcp: { ...settings.mcp, lazyStart: event.target.checked } })}
             />
           }
@@ -57,9 +49,6 @@ export default function McpStartupSettings() {
           {t('settings.mcpStartup.lazyDescription')}
         </Typography>
       </FormControl>
-      {environmentValue !== undefined && (
-        <Alert severity="info">{t('settings.mcpStartup.environmentOverride', { value: environmentValue })}</Alert>
-      )}
 
       <Divider />
       <Typography variant="subtitle2">{t('settings.mcpStartup.alwaysOnTitle')}</Typography>

@@ -17,9 +17,8 @@ the final duplicate property wins even when that final value is nonnumeric.
 The scanner checks every line in the original descriptor snapshot. It does not
 use a tail heuristic or a maximum file-size cutoff. Allocation is bounded by
 128 container levels and retains no strings. Work is not limited by default, so
-a long or old conversation is always continuable; callers (and
-`FLUJO_CONVERSATION_SEQUENCE_SCAN_MAX_MS`) may still opt into a token or time
-budget, whose refusal is never a partial successful scan.
+a long or old conversation is always continuable; callers may still opt into
+a token or time budget, whose refusal is never a partial successful scan.
 
 Run paths (`runFlow`, streaming chat completions) and `latestSequence` first
 seed the counter with an asynchronous scan that yields between fixed-size

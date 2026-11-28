@@ -3,7 +3,6 @@ import { BaseNode } from '../pocketflow';
 import { createLogger } from '@/utils/logger';
 import { FINAL_RESPONSE_ACTION, SharedState, StartNodeParams, StartNodePrepResult, StartNodeExecResult } from '../types';
 import OpenAI from 'openai';
-import { FEATURES } from '@/config/features'; // Import feature flags
 import { FlujoChatMessage } from '@/shared/types/chat'; // Import FlujoChatMessage
 import { defaultConditionTarget, selectConditionedEdge } from '@/utils/shared/edgeConditions';
 
@@ -66,17 +65,6 @@ export class StartNode extends BaseNode<StartNodeParams, SharedState, StartNodeP
       execResult,
       nodeParams: node_params
     }));
-    
-    // Add tracking information
-    if (FEATURES.ENABLE_EXECUTION_TRACKER && Array.isArray(sharedState.trackingInfo.nodeExecutionTracker)) {
-      sharedState.trackingInfo.nodeExecutionTracker.push({
-        nodeType: 'StartNode',
-        nodeId: node_params?.id || 'unknown',
-        nodeName: node_params?.properties?.name || 'Start Node',
-        timestamp: new Date().toISOString()
-      });
-      log.info('Added StartNode tracking information');
-    }
     
     // Conditions test the caller's message, so route before the system prompt is
     // appended. Otherwise a 'last-message' condition would test the prompt itself.

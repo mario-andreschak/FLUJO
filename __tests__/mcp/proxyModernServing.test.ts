@@ -9,9 +9,7 @@ import { Client as LegacyClient } from '@modelcontextprotocol/sdk/client/index.j
 import { StreamableHTTPClientTransport as LegacyTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { McpError } from '@modelcontextprotocol/sdk/types.js';
 
-let modernProtocol = true;
 jest.mock('@/app/api/_workspace', () => ({ withWorkspaceRoute: (handler: unknown) => handler }));
-jest.mock('@/backend/services/mcp/betaClient', () => ({ isMcpBetaProtocolEnabled: async () => modernProtocol }));
 jest.mock('@/backend/services/mcp/proxyForward', () => ({
   isLocalRequest: jest.requireActual('@/utils/http/localRequest').isLocalRequest,
   isServerExposed: jest.fn(async () => true),
@@ -40,7 +38,7 @@ const routeFetch = async (input: string | URL | Request, init?: RequestInit) => 
 const local = { headers: { host: 'localhost:4200' } };
 
 describe('per-server proxy serving both protocol generations', () => {
-  beforeEach(() => { jest.clearAllMocks(); modernProtocol = true; });
+  beforeEach(() => { jest.clearAllMocks(); });
 
   it('serves a 2026-07-28 client statelessly: discover, tools, progress, resources and error codes', async () => {
     const client = new ModernClient({ name: 'modern-proxy-test', version: '1' }, {
@@ -72,15 +70,4 @@ describe('per-server proxy serving both protocol generations', () => {
     } finally { await client.close(); }
   });
 
-  it('lets a modern client fall back to the classic server when the owner forces the classic handshake', async () => {
-    modernProtocol = false;
-    const client = new ModernClient({ name: 'auto-proxy-test', version: '1' }, {
-      capabilities: {}, versionNegotiation: { mode: 'auto' },
-    });
-    await client.connect(new StreamableHTTPClientTransport(new URL(url), { fetch: routeFetch, requestInit: local }));
-    try {
-      expect(client.getNegotiatedProtocolVersion()).not.toBe('2026-07-28');
-      expect((await client.listTools()).tools.map(tool => tool.name)).toEqual(['downstream_echo']);
-    } finally { await client.close(); }
-  });
 });

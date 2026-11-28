@@ -10,8 +10,6 @@ jest.mock('@/app/api/_workspace', () => ({ withWorkspaceRoute: (handler: unknown
 jest.mock('@/backend/services/mcp/proxyForward', () => ({
   isLocalRequest: jest.requireActual('@/utils/http/localRequest').isLocalRequest,
 }));
-let modernProtocol = true;
-jest.mock('@/backend/services/mcp/betaClient', () => ({ isMcpBetaProtocolEnabled: async () => modernProtocol }));
 jest.mock('@modelcontextprotocol/server', () => {
   const actual = jest.requireActual('@modelcontextprotocol/server');
   return { ...actual, isLegacyRequest: jest.fn(actual.isLegacyRequest) };
@@ -53,7 +51,7 @@ const modern = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'server/discover'
 } } });
 
 describe('Flows route bounded body-primary classification', () => {
-  beforeEach(() => { jest.clearAllMocks(); modernProtocol = true; });
+  beforeEach(() => { jest.clearAllMocks(); });
 
   test.each([undefined, '1'])('bounds an oversized chunked body despite Content-Length=%s', async length => {
     const source = stream([new Uint8Array(limit), new Uint8Array(1), new Uint8Array(1024)]);
@@ -88,15 +86,6 @@ describe('Flows route bounded body-primary classification', () => {
     const response = await POST(incoming(legacy));
     expect(await response.json()).toEqual({ branch: 'legacy', body: legacy });
     expect(isLegacyRequest).toHaveBeenCalledTimes(1);
-    expect(handleModernFlowsMcpRequest).not.toHaveBeenCalled();
-  });
-
-  test('the classic-handshake setting retains the old legacy dispatch without the new probe', async () => {
-    modernProtocol = false;
-    const body = legacy + ' '.repeat(limit);
-    const response = await POST(incoming(body, '1'));
-    expect(await response.json()).toEqual({ branch: 'legacy', body });
-    expect(isLegacyRequest).not.toHaveBeenCalled();
     expect(handleModernFlowsMcpRequest).not.toHaveBeenCalled();
   });
 });

@@ -9,7 +9,7 @@ import { mcpStringDataRecord } from '@/utils/mcp/connectionData';
 import { assertPackageRunnerResolution, packageRunnerArguments } from '../security/protectedPackageRunner';
 import { GOAL_ENDURANCE_FIXTURE_TOKEN_ENV, resolveGoalEnduranceFixtureToken } from './goalEnduranceFixtureEnvironment';
 import { activatePendingWorkload, getPendingWorkloadEnvironment, revokePendingWorkload, type PendingBundledFlujoWorkload } from '../security/bundledFlujoWorkload';
-import { parseRuntimeHomeIsolationOverride, resolveRuntimeHomeIsolation, MCP_RUNTIME_HOME_ISOLATION_ENV } from './runtimeHomeIsolation';
+import { resolveRuntimeHomeIsolation } from './runtimeHomeIsolation';
 import { stdioLaunchForm } from './launchForm';
 
 const BROKER_NAMES = ['FLUJO_MCP_APP_RUNTIME_REGISTER_URL', 'FLUJO_MCP_APP_RUNTIME_REGISTER_TOKEN'];
@@ -166,8 +166,6 @@ export async function attachTrustedHost(transport: HostTransport, config: MCPStd
   const close = transport.close.bind(transport);
   const checkLive = () => {
     if (retired || getCurrentWorkspace() !== initial.workspace) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
-    const globalHome = parseRuntimeHomeIsolationOverride(process.env[MCP_RUNTIME_HOME_ISOLATION_ENV]);
-    if (initial.policy.packageRunner && globalHome !== undefined && globalHome !== (initial.policy.runtimeHome === 'isolated')) throw new TrustedHostMcpError('HOST_POLICY_INVALID');
     if (resolveGoalEnduranceFixtureToken(captured) !== fixtureToken) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
     if (JSON.stringify(workerRuntimeCredentials(captured)) !== JSON.stringify(workerCredentials)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
     if (JSON.stringify(getPendingWorkloadEnvironment(captured, workload)) !== JSON.stringify(workloadEnvironment)) throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');

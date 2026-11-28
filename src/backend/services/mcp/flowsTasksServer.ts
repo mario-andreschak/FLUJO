@@ -10,7 +10,6 @@ import {
   GetTaskResultV2Schema, UpdateTaskRequestV2Schema, UpdateTaskResultV2Schema,
   CancelTaskRequestV2Schema, CancelTaskResultV2Schema, hasTaskClientCapabilityV2,
 } from '@modelcontextprotocol/ext-tasks/core/v2';
-import { FEATURES } from '@/config/features';
 import { getCurrentWorkspace } from '@/utils/workspace';
 import { isLocalRequest } from '@/utils/http/localRequest';
 import { isOwnerPolicyConfigured, resolveOwnerRequest, type OwnerRequestAuthorization } from '@/backend/services/security/ownerAccess';
@@ -91,10 +90,10 @@ export async function handleModernFlowsMcpRequest(request: Request): Promise<Res
   if (denied) return denied;
   const workspace = getCurrentWorkspace();
   const assertAuthorized = () => admitted(auth, workspace);
-  const enabled = auth !== undefined && FEATURES.ENABLE_MCP_TASKS_SERVER === true && ordinaryTaskProfile();
+  const enabled = auth !== undefined && ordinaryTaskProfile();
   const assertTasks = async (ctx: ServerContext): Promise<OwnerRequestAuthorization> => {
     await assertAuthorized();
-    if (!auth || !enabled || FEATURES.ENABLE_MCP_TASKS_SERVER !== true || !ordinaryTaskProfile()
+    if (!auth || !enabled || !ordinaryTaskProfile()
         || !taskCapability(ctx)) throw new ServerTaskError('TASK_ACCESS_DENIED');
     return auth;
   };

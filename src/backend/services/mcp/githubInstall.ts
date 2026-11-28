@@ -42,10 +42,7 @@ export interface PreparedGithubServerRuntime extends GithubInstallResult {
 }
 
 
-const INSTALL_TIMEOUT_MS = Math.max(
-  60_000,
-  Number(process.env.FLUJO_GITHUB_INSTALL_TIMEOUT_MS) || 15 * 60 * 1000,
-);
+const INSTALL_TIMEOUT_MS = 15 * 60 * 1000;
 const OUTPUT_TAIL_LIMIT = 8_000;
 
 interface PackageJson {

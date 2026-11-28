@@ -8,6 +8,7 @@ import { replaceFileWithRetry, retryTransientFileOperation } from '@/utils/trans
 import { readPersonaRecordText, type PersonaRecordText } from './readPersonaRecord';
 import { PersonaShardIdentityError } from './personaShardIdentity';
 import { StorageKey } from '../../shared/types/storage';
+import { withoutRetiredSettings } from '@/shared/config/retiredSettings';
 import { FILE_RECORD_ID_RULE } from '@/shared/recordId';
 import { createLogger } from '@/utils/logger';
 import { getDataDir } from '@/utils/paths';
@@ -323,6 +324,7 @@ export async function saveItem<T>(key: StorageKey, value: T, assertCurrent?: () 
       owned => retryConversationPublication(() => withWorkspaceMutation(() => withConversationPublicationIntent(id,
         () => writeFileAtomic(filePath, { conversation: true, value: owned }, assertCurrent)))));
   }
+  if (key === StorageKey.SPEECH_SETTINGS) value = withoutRetiredSettings(value);
   await assertCredentialStoreReady(filePath);
   await withWorkspaceMutation(async () => {
     // Serialize against any in-flight write for the same key. We chain off the
@@ -392,7 +394,7 @@ export async function loadItem<T>(key: StorageKey, defaultValue: T): Promise<T> 
     try {
       const parsedContent = JSON.parse(content);
       log.verbose(`Successfully loaded item from: ${filePath}`);
-      return parsedContent;
+      return key === StorageKey.SPEECH_SETTINGS ? withoutRetiredSettings(parsedContent) : parsedContent;
     } catch (error) {
       // If JSON parsing fails, this is a critical error - don't return default
       const parseError = error as Error;

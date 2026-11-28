@@ -6,7 +6,6 @@ import { encodeToolName, hashSchema } from '../handlers/toolNamespace';
 import { mcpService } from '@/backend/services/mcp';
 import { extractUiResourceUri } from '@/shared/utils/mcpApps';
 import { SharedState, MCPNodeParams, MCPNodePrepResult, MCPNodeExecResult } from '../types';
-import { FEATURES } from '@/config/features'; // Import feature flags
 import { hidePresetParameters, mergeToolParameterPresets } from '@/utils/shared/toolParameterPresets';
 import type { MCPServerConfig } from '@/shared/types/mcp';
 
@@ -124,17 +123,6 @@ export class MCPNode extends BaseNode<MCPNodeParams, SharedState, MCPNodePrepRes
       execResult,
       nodeParams: node_params
     }));
-    
-    // Add tracking information
-    if (FEATURES.ENABLE_EXECUTION_TRACKER && Array.isArray(sharedState.trackingInfo.nodeExecutionTracker)) {
-      sharedState.trackingInfo.nodeExecutionTracker.push({
-        nodeType: 'MCPNode',
-        nodeId: node_params?.id || 'unknown',
-        nodeName: node_params?.properties?.name || 'MCP Node',
-        timestamp: new Date().toISOString()
-      });
-      log.info('Added MCPNode tracking information');
-    }
     
     // Store MCP context in shared state if execution was successful
     if (execResult.success && execResult.server && execResult.tools) {

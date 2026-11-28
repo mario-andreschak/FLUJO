@@ -27,7 +27,7 @@ describe('StorageProvider fresh-install defaults', () => {
     global.fetch = originalFetch;
   });
 
-  it('persists the enabled experimental defaults when settings are absent', async () => {
+  it('persists the fresh-install defaults when settings are absent', async () => {
     const fetchMock = jest.fn(async (
       input: Parameters<typeof fetch>[0],
       init?: Parameters<typeof fetch>[1],
@@ -52,12 +52,8 @@ describe('StorageProvider fresh-install defaults', () => {
       const value = JSON.parse(screen.getByTestId('settings').textContent ?? '{}');
       expect(value.settingsHydrated).toBe(true);
       expect(value.settings.experimental).toEqual({
-        enabled: true,
         claudeSessionResume: true,
         autoUnloadOllamaModels: true,
-        compactionEnabled: true,
-        subflowDetachedInvocation: true,
-        subflowSessions: true,
       });
     });
 
@@ -69,12 +65,8 @@ describe('StorageProvider fresh-install defaults', () => {
       key: StorageKey.SPEECH_SETTINGS,
       value: expect.objectContaining({
         experimental: expect.objectContaining({
-          enabled: true,
           claudeSessionResume: true,
           autoUnloadOllamaModels: true,
-          compactionEnabled: true,
-          subflowDetachedInvocation: true,
-          subflowSessions: true,
         }),
       }),
     });

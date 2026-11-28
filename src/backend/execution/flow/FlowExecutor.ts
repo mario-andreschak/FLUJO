@@ -1,7 +1,6 @@
 import { createLogger } from '@/utils/logger';
 import { SharedState, ERROR_ACTION, DebugStep, PrepResult, ExecResult, ProcessNodePrepResult } from './types';
 import cloneDeep from 'lodash/cloneDeep'; // Import cloneDeep for snapshots
-import { FEATURES } from '@/config/features'; // Import feature flags
 import { FlowEngine } from './engine/FlowEngine';
 import { PocketflowEngine } from './engine/PocketflowEngine';
 import { EmitFn } from '@/shared/types/execution/events';
@@ -187,10 +186,9 @@ export class FlowExecutor {
 
     log.debug(`executeStep called for conversation ${conversationId}`, { flowId, currentNodeId });
 
-    // Build the execution trace when globally enabled OR when this conversation
-    // is in debug mode (so the visual debugger has data without forcing every
-    // normal run to pay the per-step snapshot cost).
-    const traceEnabled = FEATURES.ENABLE_EXECUTION_TRACKER || !!sharedState.debugMode;
+    // Build the execution trace only in debug mode, so the visual debugger has
+    // data without every normal run paying the per-step snapshot cost.
+    const traceEnabled = !!sharedState.debugMode;
 
     // Declare for access in catch block
     let stateBefore: Partial<SharedState> | undefined = undefined;

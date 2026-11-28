@@ -261,11 +261,6 @@
       "count": 1
     }
   },
-  "src/backend/services/model/adapters/codexModelCatalog.ts": {
-    "flujo/no-workaround-comment": {
-      "count": 1
-    }
-  },
   "src/backend/services/model/adapters/fallbackAdapter.ts": {
     "flujo/no-double-cast": {
       "count": 1

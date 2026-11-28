@@ -133,50 +133,25 @@ export function shippedServerEnv(
     forwarded.add('FLUJO_BASH_ROOTS');
     forwarded.add('FLUJO_FS_ROOTS');
   } else if (descriptor.defaultName === 'browser') {
+    // A new browser server starts with the host's security limits and the
+    // places its programs live. Everything else is the server's own setting.
     for (const key of [
       'FLUJO_BROWSER_ENABLED',
       'FLUJO_BROWSER_ALLOWED_ORIGINS',
       'FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS',
       'FLUJO_BROWSER_RESTRICT_NAVIGATION',
-      'FLUJO_BROWSER_MODE',
+      'FLUJO_BROWSER_ALLOW_SERVICE_WORKERS',
+      'FLUJO_BROWSER_ALLOW_LOCAL_CAPTURE',
+      'FLUJO_BROWSER_LOCAL_CAPTURE_ROOTS',
       'FLUJO_BROWSER_EXECUTABLE_PATH',
-      'FLUJO_BROWSER_PROFILE_DIR',
-      'FLUJO_BROWSER_LOCALE',
-      'FLUJO_BROWSER_TIMEZONE_ID',
-      'FLUJO_BROWSER_EXTENSION_DIRS',
-      'FLUJO_BROWSER_WINDOW_VISIBILITY',
-      'FLUJO_BROWSER_MAX_SESSIONS',
-      'FLUJO_BROWSER_IDLE_TIMEOUT_MS',
-      'FLUJO_BROWSER_MAX_REDIRECTS',
-      'FLUJO_BROWSER_SCREENSHOT_DIR',
-      // Live view gateway (MJPEG screencast + input) and media/runtime tuning.
+      'FLUJO_BROWSER_CHANNEL',
+      'FLUJO_FFMPEG_PATH',
+      'PLAYWRIGHT_BROWSERS_PATH',
       'FLUJO_BROWSER_STREAM_ENABLED',
       'FLUJO_BROWSER_STREAM_HOST',
       'FLUJO_BROWSER_STREAM_PORT',
       'FLUJO_BROWSER_STREAM_PUBLIC_ORIGIN',
-      'FLUJO_BROWSER_STREAM_QUALITY',
-      // Escape hatch: relax the live-view gateway origin allowlist for hosted
-      // deployments behind a rewriting reverse proxy (see gateway.ts).
       'FLUJO_MCP_APP_SANDBOX_ALLOW_ALL',
-      'FLUJO_BROWSER_STREAM_MAX_WIDTH',
-      'FLUJO_BROWSER_STREAM_MAX_HEIGHT',
-      'FLUJO_BROWSER_STREAM_AUDIO',
-      'FLUJO_BROWSER_VIEWPORT_WIDTH',
-      'FLUJO_BROWSER_VIEWPORT_HEIGHT',
-      'FLUJO_BROWSER_CHANNEL',
-      'FLUJO_BROWSER_HEADED',
-      'FLUJO_BROWSER_AUDIO',
-      'FLUJO_BROWSER_ALLOW_SERVICE_WORKERS',
-      'PLAYWRIGHT_BROWSERS_PATH',
-      // Deterministic capture and the optional recording/muxing pipeline.
-      'FLUJO_BROWSER_ALLOW_LOCAL_CAPTURE',
-      'FLUJO_BROWSER_LOCAL_CAPTURE_ROOTS',
-      'FLUJO_BROWSER_RECORD_DIR',
-      'FLUJO_BROWSER_RECORD_MAX_MS',
-      'FLUJO_BROWSER_RECORD_MAX_WIDTH',
-      'FLUJO_BROWSER_RECORD_MAX_HEIGHT',
-      'FLUJO_BROWSER_INLINE_RECORDING_MAX_BYTES',
-      'FLUJO_FFMPEG_PATH',
     ]) forwarded.add(key);
   }
 

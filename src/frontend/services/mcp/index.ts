@@ -24,7 +24,6 @@ export type McpServerDeleteResult =
   | { status: 'in-use'; usage: McpServerUsage; changed: boolean; error: string }
   | { status: 'failed'; error: string };
 import { announceEditConflict, baseRevisionHeaders, editConflictFrom } from '@/frontend/services/sharedItems';
-import { FEATURES } from '@/config/features'; // Import the feature flags
 import {
   callStreamingTool,
   type StreamingToolCallOptions,

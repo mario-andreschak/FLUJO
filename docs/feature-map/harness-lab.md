@@ -16,7 +16,6 @@ Harness Lab improves an agent's instructions by experiment. The user starts from
 
 ## How to get to it (user POV)
 
-- Turn on two switches in Settings → "Experimental features": "Enable experimental features" (under "Feature access") and "Enable Harness Lab" (under "Models and providers"). The menu entry stays hidden until both are on.
 - On a wide window, choose "More" in the top navigation, then the "Experimental" tab in the row below, then "Harness Lab" (`data-tour="nav-harness"`).
 - On a window 1535 px wide or narrower, choose "Open navigation menu", then "Harness Lab" under the "Experimental" heading.
 - Under "More" → "Help" → "FLUJO help", "Harness Lab" opens its online guide (not this page).
@@ -24,9 +23,8 @@ Harness Lab improves an agent's instructions by experiment. The user starts from
 
 ## Driving it with flujo-drive
 
-Preconditions: a throwaway instance from the verify-flujo skill with both switches on. Running an experiment also needs a suitable model under AI Setup (a keyless Codex connection or an approved OpenRouter text model).
+Preconditions: a throwaway instance from the verify-flujo skill. Running an experiment also needs a suitable model under AI Setup (a keyless Codex connection or an approved OpenRouter text model).
 
-- **Turn it on**: use `steps /settings --file <steps.json>`: click button "Experimental features", click switch "Enable experimental features", click switch "Enable Harness Lab". Both are saved right away.
 - **Open the page**: `node scripts/flujo-drive.mjs open /harness` → heading "Harness Lab" with the "Experimental" badge and the "New experiment" form, filled with a sample support-summary experiment.
 - **Read the form**: `node scripts/flujo-drive.mjs aria /harness --out harness-form.aria.txt` → the fields above and the "Create and run" button.
 - **Add an example**: `node scripts/flujo-drive.mjs click /harness --role button --name "Add example" --then-shot harness-example.png` → one more example row.
@@ -34,7 +32,5 @@ Preconditions: a throwaway instance from the verify-flujo skill with both switch
 
 ## Gotchas
 
-- The page opens even when the switch is off, but then shows "Enable this experiment in Settings to run it." with a "Settings" button, and "Create and run" stays disabled.
 - With no suitable model, a warning names what to add in AI Setup, and "Create and run" stays disabled. Ordinary API-key models may not be offered.
 - A run makes real model calls (the page shows "Maximum experiment steps") and can use paid allowance. A manual run may pause when the page closes, so a one-shot driver command will not finish one.
-- Turning the switch off keeps saved experiments and evidence.

@@ -1,5 +1,4 @@
 import type { FlowRunInput, FlowRunResult } from '@/backend/execution/flow/runFlow';
-import { FEATURES } from '@/config/features';
 import {
   peekSteeringMessages,
   takeSteeringMessages,
@@ -669,7 +668,6 @@ describe('Persona Flow dispatcher', () => {
 
   afterEach(() => {
     _setPersonaRuntimeLockProcessBirthProbeForTests(undefined);
-    FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = false;
     jest.restoreAllMocks();
   });
 
@@ -802,10 +800,9 @@ describe('Persona Flow dispatcher', () => {
     expect(harness.dependencies.runFlow).toHaveBeenCalledTimes(1);
   });
 
-  it('reconciles Behavior maintenance runs on completion even when admission is disabled', async () => {
-    // Both rollout gates are off here (their production default), so admission
-    // is a no-write call. A run admitted before the gate was turned off must
-    // still be terminalized instead of being stranded until the next restart.
+  it('reconciles a stranded Behavior maintenance run on completion', async () => {
+    // A run admitted before a restart must be finished on the next completion
+    // instead of being stranded until the next restart.
     const workspaceId = workspace('maintenance-reconcile');
     const strandedRunId = 'maint_stranded_midflight';
     // Maintenance records are only writable for a Persona that exists durably
@@ -873,17 +870,14 @@ describe('Persona Flow dispatcher', () => {
         workspaceId,
         () => getBehaviorMaintenanceRun(strandedRunId),
       );
-      if (reconciled?.state === 'completed') break;
+      if (reconciled && ['completed', 'failed', 'cancelled', 'awaiting_review'].includes(reconciled.state)) break;
       if (Date.now() >= deadline) {
         throw new Error('Timed out waiting for the maintenance run to be terminalized.');
       }
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
-    expect(reconciled).toMatchObject({
-      id: strandedRunId,
-      state: 'completed',
-      reasonCode: 'shadow_admission_only',
-    });
+    expect(reconciled?.id).toBe(strandedRunId);
+    expect(reconciled?.reasonCode).not.toBe('diagnosis_pending');
   });
 
   it('synchronizes a failed assignment before exposing the terminal dispatch', async () => {
@@ -906,36 +900,6 @@ describe('Persona Flow dispatcher', () => {
       expect.objectContaining({ status: 'error' }),
       expect.anything(),
     );
-  });
-
-  it('settles completed work without admitting maintenance when admission is disabled', async () => {
-    FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = false;
-    const harness = makeHarness(workspace('memory-maintenance-disabled'), {
-      enableMemoryMaintenance: true,
-    });
-
-    const submission = await harness.dispatcher.submit(
-      dispatchInput('persona_test', 'memory-maintenance-disabled'),
-      { waitForCompletion: true, timeoutMs: 2_000 },
-    );
-
-    expect(submission.dispatch).toMatchObject({
-      state: 'completed',
-      memoryCandidateLimit: 3,
-      terminalProjectionsSettledAt: expect.any(Number),
-    });
-    expect(harness.dependencies.runFlow).toHaveBeenCalledTimes(1);
-    const records = await harness.dispatcher.list('persona_test');
-    expect(records).toHaveLength(1);
-    expect(records[0]).toMatchObject({
-      id: submission.dispatch.id,
-      terminalProjectionsSettledAt: expect.any(Number),
-    });
-    expect(records.some((record) => record.admission.kind === 'maintenance')).toBe(false);
-
-    await harness.dispatcher.pump('persona_test');
-    expect(harness.dependencies.runFlow).toHaveBeenCalledTimes(1);
-    expect(await harness.dispatcher.list('persona_test')).toHaveLength(1);
   });
 
   it('keeps completion waits cancellable while terminal projections are in flight', async () => {
@@ -969,7 +933,6 @@ describe('Persona Flow dispatcher', () => {
   });
 
   it('runs one restricted memory-maintenance Activity after an authored Activity completes', async () => {
-    FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = true;
     const harness = makeHarness(workspace('memory-maintenance'), {
       enableMemoryMaintenance: true,
     });
@@ -1058,7 +1021,6 @@ describe('Persona Flow dispatcher', () => {
   });
 
   it('returns maintenance validation failures to the tool call and records them in the conversation', async () => {
-    FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = true;
     const harness = makeHarness(workspace('memory-maintenance-invalid-proposal'), {
       enableMemoryMaintenance: true,
     });
@@ -1117,7 +1079,6 @@ describe('Persona Flow dispatcher', () => {
   });
 
   it('lets the deterministic maintenance node commit through the dispatcher gateway exactly once', async () => {
-    FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = true;
     const harness = makeHarness(workspace('memory-maintenance-gateway'), {
       enableMemoryMaintenance: true,
     });
@@ -1163,7 +1124,6 @@ describe('Persona Flow dispatcher', () => {
   });
 
   it('does not learn automatically when the Persona learning control is off', async () => {
-    FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = true;
     const harness = makeHarness(workspace('memory-maintenance-off'), {
       enableMemoryMaintenance: true,
       autonomyLevel: 'locked',

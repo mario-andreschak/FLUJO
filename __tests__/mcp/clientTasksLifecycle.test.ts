@@ -36,7 +36,7 @@ const result = { resultType: 'complete', content: [{ type: 'text', text: 'Synthe
 
 function run(task: McpTask = baseTask, extra: Partial<Parameters<typeof runRemoteTaskLifecycle>[0]> = {}) {
   return runRemoteTaskLifecycle({ client, serverName: 'synthetic-server', serverIdentity: 'stable-config', toolName: 'task-tool',
-    task, timeoutMs: 10_000, ownership: { conversationId: attended.conversationId }, persist: true, supportsCancel: true, ...extra });
+    task, timeoutMs: 10_000, ownership: { conversationId: attended.conversationId }, supportsCancel: true, ...extra });
 }
 async function advance(ms = 50) { await jest.advanceTimersByTimeAsync(ms); }
 

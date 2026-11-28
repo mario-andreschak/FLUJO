@@ -49,22 +49,18 @@ is armed on `SIGINT`/`SIGTERM`/`SIGHUP` (POSIX) with a 20s cap before force exit
 ### Stdio runtime-home isolation is opt-in
 
 Ordinary stdio MCP servers use the host home and configured environment by default.
-Operators can opt into a private per-workspace, per-server home under
-`userdata/mcp-runtime/`. Isolation redirects conventional home, configuration,
+Each server can opt into a private per-workspace home under
+`userdata/mcp-runtime/` with its own Runtime home setting. Isolation redirects conventional home, configuration,
 cache and temporary-directory variables, so it can prevent an MCP server from
 discovering credentials and tools stored in the host profile. It can also make a
 server appear newly installed or signed out, which is why it is not the default.
 
-The effective setting is resolved in this order:
+The server's own Runtime home setting decides: isolated or host home. There is
+no process-wide switch and no workspace-wide switch. A workspace that used the
+old workspace-wide switch gets `isolated` written into its stdio servers the
+first time it is used.
 
-1. Process-wide `FLUJO_MCP_RUNTIME_HOME_ISOLATION` (`on`, `true`, `1`, or
-   `isolated`; `off`, `false`, `0`, or `host`). This is available in Settings →
-   Process environment and takes effect after an application restart.
-2. The server's Runtime home setting: inherit, isolated, or host home.
-3. The workspace-wide experimental MCP runtime-home isolation toggle.
-4. Off when none of the above opts in.
-
-Changing a workspace or server preference takes effect when that stdio server is
+Changing a server's setting takes effect when that stdio server is
 next connected. The bundled Bash server is deliberately exempt: it remains
 attached to the live host account because it is FLUJO's host-terminal boundary.
 
@@ -119,15 +115,15 @@ startup" with acquire-on-use:
   keep using a client that is being torn down.
 - `pinServer(server, pin)` / `unpinServer` model demand that outlives one call:
   subscriptions/triggers, MCP App sessions, remote tasks, always-on config.
-- `sweepIdleServers()` closes warm servers idle beyond `FLUJO_MCP_IDLE_TTL_MS`
-  (default 10 min) and `enforceWarmCapacity()` evicts the LRU **idle** server past
-  `FLUJO_MCP_MAX_WARM_SERVERS` (default 8). Neither ever warms a cold server, and
-  neither considers a leased or pinned record.
+- `sweepIdleServers()` closes warm servers idle for more than 10 minutes (fixed)
+  and `enforceWarmCapacity()` evicts the LRU **idle** server past the warm-server
+  limit. The limit scales with memory: one server per 2 GiB, between 2 and 16.
+  Neither ever warms a cold server, and neither considers a leased or pinned
+  record.
 
 `MCPService.callTool()` holds a lease for the whole call, so an in-flight tool call
 can never have its server closed underneath it. `startEnabledServers()` supports
-lazy start (**Settings > Tool server startup**, or `FLUJO_MCP_LAZY_START`, which wins
-when set), which discovers configuration without warming anything except always-on
+lazy start (**Settings > Tool server startup** only), which discovers configuration without warming anything except always-on
 servers. It defaults **off**: eager startup may only be retired once every consumer
 acquires a lease before use. Always-on is set per server on the same settings page.
 
@@ -142,10 +138,9 @@ read it directly) and adds the bookkeeping around it:
   can never trade bounded memory for a lost transcript.
 - Running / awaiting-approval / paused-debug / recovery-owned states are never
   candidates, and every eviction re-validates the live state first.
-- Bounds: TTL (`FLUJO_CONVERSATION_CACHE_TTL_MS`, default 30 min), entry count
-  (`FLUJO_CONVERSATION_CACHE_MAX_ENTRIES`, default 200) and an approximate byte
-  budget (`FLUJO_CONVERSATION_CACHE_MAX_BYTES`, default 64 MiB), with LRU eviction
-  among terminal entries only.
+- Bounds: TTL (30 min), entry count (200) and an approximate byte budget
+  (64 MiB), with LRU eviction among terminal entries only. These are fixed
+  defaults; only tests can change them.
 - `coalesceLoad()` collapses concurrent durable loads of one conversation id, so
   several control routes missing at the same instant perform one storage read, log
   replay and dangling-tool repair rather than N racing ones.

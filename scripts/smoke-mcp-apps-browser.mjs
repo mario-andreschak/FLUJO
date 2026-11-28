@@ -89,7 +89,7 @@ try {
   for (const generation of ['legacy', 'modern']) {
     const serverName = `apps-${generation}`;
     await api('/api/storage', { key: 'speech_settings', value: {
-      experimental: { mcpBetaProtocol: generation === 'modern' }, onboarding: { completed: true }, telemetry: { enabled: false } } });
+      onboarding: { completed: true }, telemetry: { enabled: false } } });
     await api('/api/mcp/servers', { name: serverName, transport: 'streamable', serverUrl: `${fixture.origin}/${generation}`, disabled: false, enableMcpApps: true });
     const context = await browser.newContext({ viewport: { width: generation === 'legacy' ? 1440 : 390, height: 900 }, locale: 'en-US', acceptDownloads: true });
     await context.route('**/*', route => {

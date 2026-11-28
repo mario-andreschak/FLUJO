@@ -1,7 +1,6 @@
 jest.mock('@/backend/services/mcp/tasksExtensionSession', () => ({ getTasksExtensionSession: (client: { taskSession?: unknown }) => client.taskSession, wasModernTasksExtensionClient: () => false }));
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { z } from 'zod';
-jest.mock('@/config/features', () => ({ FEATURES: { ENABLE_MCP_TASKS_CLIENT: true } }));
 jest.mock('@/backend/utils/resolveGlobalVars', () => ({ resolveGlobalVars: jest.fn(async (value: unknown) => value) }));
 jest.mock('@/backend/services/mcp/config', () => ({ loadServerConfigs: jest.fn(async () => [{
   name: 'srv', transport: 'streamable', serverUrl: 'https://tasks.example.test/mcp', disabled: false,

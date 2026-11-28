@@ -17,6 +17,7 @@ import {
   getCurrentWorkspace,
   getWorkspaceDbDir,
 } from '@/utils/workspace';
+import { testSetting } from '@/shared/testSetting';
 
 const runtimeClock = getPersonaRuntimeClock();
 const systemClock = getPersonaFilesystemClock();
@@ -1255,7 +1256,7 @@ const MODEL_CATALOG_WRITER_WAIT_MS = 2_000;
 const MODEL_CATALOG_WRITER_POLL_MS = 50;
 
 function nonNegativeMsFromEnv(name: string, fallback: number, max: number): number {
-  const configured = process.env[name];
+  const configured = testSetting(name);
   const value = configured === undefined || configured.trim() === '' ? NaN : Number(configured);
   return Number.isFinite(value) && value >= 0 ? Math.min(value, max) : fallback;
 }

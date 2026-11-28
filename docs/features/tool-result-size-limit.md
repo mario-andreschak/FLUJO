@@ -10,9 +10,8 @@ the rest with the `read_resource` tool, in parts if needed (`max_chars` and
 
 ## Where to find it
 
-**Settings → Experimental features → Context management → Move large tool
-results to a resource.** The switch works on its own; you do not need to turn
-on experimental features first.
+**Settings → Advanced → Context management → Move large tool
+results to a resource.**
 
 | Control | What it does |
 |---|---|

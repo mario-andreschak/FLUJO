@@ -1,8 +1,4 @@
 import {
-  FEATURES,
-  isPersonaBehaviorMaintenanceDiagnosisReady,
-} from '@/config/features';
-import {
   BEHAVIOR_MAINTENANCE_DETAILED_RUN_LIMIT,
   BEHAVIOR_MAINTENANCE_DIAGNOSIS_LEASE_MS,
   BEHAVIOR_MAINTENANCE_RETENTION_MS,
@@ -12,7 +8,6 @@ import {
   compactBehaviorMaintenanceRuns,
   diagnoseBehaviorMaintenanceRun,
   executeBehaviorMaintenanceRun,
-  getBehaviorAutoRollbackCooldownMs,
   reconcileBehaviorMaintenanceRuns,
   recordBehaviorMaintenanceDiagnosis,
 } from '@/backend/services/enduringAgents/behaviorMaintenance';
@@ -33,14 +28,6 @@ import {
 } from '@/shared/types/enduringAgent';
 import { runWithWorkspace } from '@/utils/workspace';
 
-type MutableMaintenanceFeatures = {
-  ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION: boolean;
-  ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS: boolean;
-  ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS: boolean;
-  ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK: boolean;
-};
-
-const maintenanceFeatures = FEATURES as unknown as MutableMaintenanceFeatures;
 let workspaceSequence = 0;
 
 function inFreshWorkspace<T>(task: () => T): T {
@@ -112,22 +99,6 @@ async function persistActivity(value: PersonaActivity): Promise<void> {
 }
 
 describe('Behavior automatic-rollback cooldown policy', () => {
-  const cooldownCases: Array<[string | undefined, number]> = [
-    [undefined, DEFAULT_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS],
-    ['', DEFAULT_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS],
-    ['0', DEFAULT_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS],
-    ['-1', DEFAULT_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS],
-    ['3599999', DEFAULT_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS],
-    ['1.5', DEFAULT_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS],
-    ['Infinity', DEFAULT_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS],
-    ['3600000', DEFAULT_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS],
-    ['7200000', 2 * DEFAULT_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS],
-  ];
-
-  it.each(cooldownCases)('validates configured cooldown %p', (raw, expected) => {
-    expect(getBehaviorAutoRollbackCooldownMs(raw)).toBe(expected);
-  });
-
   it('uses the latest active expiry for an exact Persona revision', () => {
     const now = 10_000;
     const metric = (input: Partial<BehaviorOutcomeMetric>): BehaviorOutcomeMetric => ({
@@ -159,123 +130,7 @@ describe('Behavior automatic-rollback cooldown policy', () => {
   });
 });
 
-describe('Behavior maintenance diagnosis readiness', () => {
-  it.each([
-    [false, false, false, false],
-    [false, false, true, false],
-    [false, true, false, false],
-    [false, true, true, false],
-    [true, false, false, false],
-    [true, false, true, false],
-    [true, true, false, false],
-    [true, true, true, true],
-  ])(
-    'diagnosis=%s metrics=%s autoRollback=%s resolves readiness=%s',
-    (diagnosis, metrics, autoRollback, expected) => {
-      const original = {
-        diagnosis: maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS,
-        metrics: maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS,
-        autoRollback: maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK,
-      };
-      try {
-        maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = diagnosis;
-        maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS = metrics;
-        maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK = autoRollback;
-
-        expect(isPersonaBehaviorMaintenanceDiagnosisReady()).toBe(expected);
-      } finally {
-        maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = original.diagnosis;
-        maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS = original.metrics;
-        maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK = original.autoRollback;
-      }
-    },
-  );
-});
-
 describe('Behavior maintenance lifecycle', () => {
-  beforeEach(() => {
-    maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = true;
-    maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = true;
-    maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS = true;
-    maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK = true;
-  });
-
-  afterEach(() => {
-    maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = false;
-    maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = false;
-    maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS = false;
-    maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK = false;
-  });
-
-  it('does not write a run when admission and diagnosis are disabled', async () => {
-    await inFreshWorkspace(async () => {
-      maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = false;
-      maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = false;
-      const setup = await setupPersona();
-      const now = Date.now();
-      const completed = activity({
-        id: 'activity_disabled',
-        personaId: setup.persona.id,
-        behaviorRevisionId: setup.revision.id,
-        now,
-      });
-      await persistActivity(completed);
-
-      await expect(admitBehaviorMaintenanceRun(completed, now)).resolves.toBeNull();
-      expect(await listBehaviorMaintenanceRuns(setup.persona.id)).toEqual([]);
-    });
-  });
-
-  it.each([
-    ['outcome metrics', 'ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS'],
-    ['automatic rollback', 'ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK'],
-  ] as const)(
-    'dynamically blocks every diagnosis boundary and restart reconciliation when %s stops',
-    async (_label, disabledFlag) => {
-      await inFreshWorkspace(async () => {
-        const setup = await setupPersona();
-        const now = Date.now();
-        const source = activity({
-          id: 'activity_safety_dependency_disabled_midflight',
-          personaId: setup.persona.id,
-          behaviorRevisionId: setup.revision.id,
-          now,
-        });
-        await persistActivity(source);
-        const pending = await admitBehaviorMaintenanceRun(source, now);
-        if (!pending) throw new Error('Expected queued maintenance admission.');
-
-        maintenanceFeatures[disabledFlag] = false;
-
-        await expect(diagnoseBehaviorMaintenanceRun(pending))
-          .rejects.toThrow('diagnosis is not ready');
-        await expect(recordBehaviorMaintenanceDiagnosis({
-          runId: pending.id,
-          action: 'no_change',
-          reasonCode: 'must_not_persist',
-          now: now + 1,
-        })).rejects.toThrow('diagnosis is not ready');
-        await expect(executeBehaviorMaintenanceRun(pending.id, { now: now + 1 }))
-          .resolves.toBeNull();
-        expect(await getBehaviorMaintenanceRun(pending.id)).toMatchObject({
-          state: 'queued',
-          attempts: 0,
-        });
-
-        await reconcileBehaviorMaintenanceRuns(setup.persona.id, now + 2);
-        expect(await getBehaviorMaintenanceRun(pending.id)).toMatchObject({
-          state: 'completed',
-          reasonCode: 'shadow_admission_only',
-          attempts: 0,
-          completedAt: now + 2,
-        });
-
-        maintenanceFeatures[disabledFlag] = true;
-        expect(isPersonaBehaviorMaintenanceDiagnosisReady()).toBe(true);
-      });
-    },
-  );
-
   it('never admits cancelled Activities', async () => {
     await inFreshWorkspace(async () => {
       const setup = await setupPersona();
@@ -426,46 +281,8 @@ describe('Behavior maintenance lifecycle', () => {
     });
   });
 
-  it('terminalizes shadow-only admissions so later evidence windows are not blocked', async () => {
-    await inFreshWorkspace(async () => {
-      maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = false;
-      const setup = await setupPersona();
-      const now = Date.now();
-      const first = activity({
-        id: 'activity_shadow_one',
-        personaId: setup.persona.id,
-        behaviorRevisionId: setup.revision.id,
-        now,
-      });
-      await persistActivity(first);
-      const firstRun = await admitBehaviorMaintenanceRun(first, now);
-      expect(firstRun).toMatchObject({
-        state: 'completed',
-        reasonCode: 'shadow_admission_only',
-        action: 'no_change',
-        completedAt: now,
-      });
-
-      const replayed = await admitBehaviorMaintenanceRun(first, now);
-      expect(replayed).toEqual(firstRun);
-      expect(await listBehaviorMaintenanceRuns(setup.persona.id)).toHaveLength(1);
-
-      const second = activity({
-        id: 'activity_shadow_two',
-        personaId: setup.persona.id,
-        behaviorRevisionId: setup.revision.id,
-        now: now + 1,
-      });
-      await persistActivity(second);
-      const secondRun = await admitBehaviorMaintenanceRun(second, now + 1);
-      expect(secondRun?.id).not.toBe(firstRun?.id);
-      expect(await listBehaviorMaintenanceRuns(setup.persona.id)).toHaveLength(2);
-    });
-  });
-
   it('repairs a legacy queued shadow admission before admitting a later window', async () => {
     await inFreshWorkspace(async () => {
-      maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = false;
       const setup = await setupPersona();
       const now = Date.now();
       const first = activity({
@@ -476,7 +293,7 @@ describe('Behavior maintenance lifecycle', () => {
       });
       await persistActivity(first);
       const firstRun = await admitBehaviorMaintenanceRun(first, now);
-      if (!firstRun) throw new Error('Expected shadow maintenance admission.');
+      if (!firstRun) throw new Error('Expected queued maintenance admission.');
       const legacySourceActivityIds = [...firstRun.sourceActivityIds];
       const legacyDigest = firstRun.sourceWindowDigest;
       await saveBehaviorMaintenanceRun(BehaviorMaintenanceRunSchema.parse({
@@ -509,173 +326,11 @@ describe('Behavior maintenance lifecycle', () => {
         completedAt: now + 1,
       });
       expect(secondRun).toMatchObject({
-        state: 'completed',
-        reasonCode: 'shadow_admission_only',
-        action: 'no_change',
-      });
-      expect(secondRun?.id).not.toBe(firstRun.id);
-      expect(await listBehaviorMaintenanceRuns(setup.persona.id)).toHaveLength(2);
-    });
-  });
-
-  it('does not repair an ordinary queued diagnosis run when diagnosis is disabled', async () => {
-    await inFreshWorkspace(async () => {
-      const setup = await setupPersona();
-      const now = Date.now();
-      const first = activity({
-        id: 'activity_pending_diagnosis_one',
-        personaId: setup.persona.id,
-        behaviorRevisionId: setup.revision.id,
-        now,
-      });
-      await persistActivity(first);
-      const pending = await admitBehaviorMaintenanceRun(first, now);
-      if (!pending) throw new Error('Expected queued maintenance admission.');
-
-      maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = false;
-      const second = activity({
-        id: 'activity_pending_diagnosis_two',
-        personaId: setup.persona.id,
-        behaviorRevisionId: setup.revision.id,
-        now: now + 1,
-      });
-      await persistActivity(second);
-      const coalesced = await admitBehaviorMaintenanceRun(second, now + 1);
-
-      expect(coalesced).toEqual(pending);
-      expect(await getBehaviorMaintenanceRun(pending.id)).toMatchObject({
         state: 'queued',
         reasonCode: 'diagnosis_pending',
       });
-      expect(await listBehaviorMaintenanceRuns(setup.persona.id)).toHaveLength(1);
-    });
-  });
-
-  it('terminalizes an in-flight run when diagnosis is disabled mid-flight', async () => {
-    await inFreshWorkspace(async () => {
-      const setup = await setupPersona();
-      const now = Date.now();
-      const source = activity({
-        id: 'activity_midflight_diagnosis_off',
-        personaId: setup.persona.id,
-        behaviorRevisionId: setup.revision.id,
-        now,
-      });
-      await persistActivity(source);
-      const pending = await admitBehaviorMaintenanceRun(source, now);
-      if (!pending) throw new Error('Expected queued maintenance admission.');
-      expect(pending).toMatchObject({ state: 'queued', reasonCode: 'diagnosis_pending' });
-
-      maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = false;
-      await reconcileBehaviorMaintenanceRuns(setup.persona.id, now + 1);
-
-      expect(await getBehaviorMaintenanceRun(pending.id)).toMatchObject({
-        id: pending.id,
-        state: 'completed',
-        reasonCode: 'shadow_admission_only',
-        updatedAt: now + 1,
-        completedAt: now + 1,
-      });
-      expect(await listBehaviorMaintenanceRuns(setup.persona.id)).toHaveLength(1);
-    });
-  });
-
-  it('terminalizes an in-flight run when admission is disabled mid-flight', async () => {
-    await inFreshWorkspace(async () => {
-      const setup = await setupPersona();
-      const now = Date.now();
-      const source = activity({
-        id: 'activity_midflight_admission_off',
-        personaId: setup.persona.id,
-        behaviorRevisionId: setup.revision.id,
-        now,
-      });
-      await persistActivity(source);
-      const pending = await admitBehaviorMaintenanceRun(source, now);
-      if (!pending) throw new Error('Expected queued maintenance admission.');
-
-      maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = false;
-      maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = false;
-      const later = activity({
-        id: 'activity_midflight_admission_off_two',
-        personaId: setup.persona.id,
-        behaviorRevisionId: setup.revision.id,
-        now: now + 1,
-      });
-      await persistActivity(later);
-      await expect(admitBehaviorMaintenanceRun(later, now + 1)).resolves.toBeNull();
-
-      await reconcileBehaviorMaintenanceRuns(setup.persona.id, now + 2);
-
-      expect(await getBehaviorMaintenanceRun(pending.id)).toMatchObject({
-        id: pending.id,
-        state: 'completed',
-        reasonCode: 'shadow_admission_only',
-        completedAt: now + 2,
-      });
-      expect(await listBehaviorMaintenanceRuns(setup.persona.id)).toHaveLength(1);
-    });
-  });
-
-  it('never strands or duplicates a run across repeated disabled reconciles', async () => {
-    await inFreshWorkspace(async () => {
-      const setup = await setupPersona();
-      const now = Date.now();
-      const source = activity({
-        id: 'activity_midflight_idempotent',
-        personaId: setup.persona.id,
-        behaviorRevisionId: setup.revision.id,
-        now,
-      });
-      await persistActivity(source);
-      const pending = await admitBehaviorMaintenanceRun(source, now);
-      if (!pending) throw new Error('Expected queued maintenance admission.');
-
-      maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = false;
-      maintenanceFeatures.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = false;
-      await reconcileBehaviorMaintenanceRuns(setup.persona.id, now + 1);
-      const first = await getBehaviorMaintenanceRun(pending.id);
-      expect(first).toMatchObject({ state: 'completed', attempts: 0 });
-
-      await reconcileBehaviorMaintenanceRuns(setup.persona.id, now + 2);
-      expect(await getBehaviorMaintenanceRun(pending.id)).toEqual(first);
-      expect(await listBehaviorMaintenanceRuns(setup.persona.id)).toHaveLength(1);
-    });
-  });
-
-  it('does not repair a queued shadow admission while diagnosis is enabled', async () => {
-    await inFreshWorkspace(async () => {
-      const setup = await setupPersona();
-      const now = Date.now();
-      const first = activity({
-        id: 'activity_enabled_shadow_one',
-        personaId: setup.persona.id,
-        behaviorRevisionId: setup.revision.id,
-        now,
-      });
-      await persistActivity(first);
-      const pending = await admitBehaviorMaintenanceRun(first, now);
-      if (!pending) throw new Error('Expected queued maintenance admission.');
-      const legacyShadow = await saveBehaviorMaintenanceRun(BehaviorMaintenanceRunSchema.parse({
-        ...pending,
-        reasonCode: 'shadow_admission_only',
-      }));
-
-      const second = activity({
-        id: 'activity_enabled_shadow_two',
-        personaId: setup.persona.id,
-        behaviorRevisionId: setup.revision.id,
-        now: now + 1,
-      });
-      await persistActivity(second);
-      const coalesced = await admitBehaviorMaintenanceRun(second, now + 1);
-
-      expect(coalesced).toEqual(legacyShadow);
-      expect(await getBehaviorMaintenanceRun(legacyShadow.id)).toMatchObject({
-        state: 'queued',
-        reasonCode: 'shadow_admission_only',
-      });
-      expect(await listBehaviorMaintenanceRuns(setup.persona.id)).toHaveLength(1);
+      expect(secondRun?.id).not.toBe(firstRun.id);
+      expect(await listBehaviorMaintenanceRuns(setup.persona.id)).toHaveLength(2);
     });
   });
 

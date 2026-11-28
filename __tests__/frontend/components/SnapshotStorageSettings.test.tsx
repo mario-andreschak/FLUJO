@@ -33,7 +33,6 @@ function makeStatus(overrides: Partial<SnapshotStatus> = {}): SnapshotStatus {
       revert: false,
       migration: false,
       storageBusy: false,
-      operatorDisabled: false,
       captureSuspended: false,
       localFolderAccess: false,
     },

@@ -19,17 +19,15 @@
  * Everything here is BEST-EFFORT: any failure is logged and degrades to
  * "no snapshot" (returns `null`) — a capture failure must never abort a run.
  *
- * Disabled when snapshots are switched off (env `FLUJO_SNAPSHOTS=0`) or when
- * the target is not a git repository (mirrors opencode: we only snapshot real
- * project directories, which also skips the default `getDataDir()` root).
+ * Skipped when the target is not a git repository (mirrors opencode: we only
+ * snapshot real project directories, which also skips the default
+ * `getDataDir()` root).
  */
 import path from 'path';
 import crypto from 'crypto';
 import { promises as fs } from 'fs';
 import { simpleGit, type SimpleGit } from 'simple-git';
 import { createLogger } from '@/utils/logger';
-import { loadItem } from '@/utils/storage/backend';
-import { StorageKey, type Settings } from '@/shared/types/storage/storage';
 import { _setSnapshotStoreDirForTests, snapshotStore } from './SnapshotStore';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 
@@ -59,27 +57,6 @@ function resolveShadowRootDir(): string {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy, so importing this module never touches workspace paths (#406)
   const { getWorkspaceDataDir } = require('@/utils/workspace');
   return path.join(getWorkspaceDataDir(), 'snapshots');
-}
-
-/**
- * One authoritative gate for snapshot capture and restore UI/API availability.
- * The operator can force the feature off; otherwise the user must explicitly
- * opt in through Settings > Experimental.
- */
-export async function snapshotsEnabled(): Promise<boolean> {
-  const raw = (process.env.FLUJO_SNAPSHOTS || '').trim().toLowerCase();
-  if (raw === '0' || raw === 'false' || raw === 'off') return false;
-
-  try {
-    const settings = await loadItem<Settings | undefined>(
-      StorageKey.SPEECH_SETTINGS,
-      undefined,
-    );
-    return settings?.experimental?.snapshotsEnabled === true;
-  } catch (error) {
-    log.warn('Could not load snapshot setting; disabling snapshots', error);
-    return false;
-  }
 }
 
 /**
@@ -136,11 +113,10 @@ class ShadowRepoService {
   }
 
   /**
-   * True when snapshots are on AND `root` is an existing git repository.
+   * True when `root` is an existing git repository.
    * Read-only: `checkIsRepo` inspects the real repo but never mutates it.
    */
   async isEnabledFor(root: string): Promise<boolean> {
-    if (!(await snapshotsEnabled())) return false;
     const eligible = await this.isEligibleRoot(root);
     if (!eligible) log.debug('isEnabledFor: not a git repo / unavailable', { root });
     return eligible;

@@ -136,8 +136,8 @@ Cancelling a run, or Codex dropping a tool call, ends the FLUJO tool call: a too
 still waiting for approval stops waiting and records why, and running tool work
 receives the cancellation. A forced stop ends Codex's whole process tree,
 including helpers it started (such as git).
-`FLUJO_CODEX_APP_SERVER=0` selects the retained SDK route for an intentional
-rollback; API-key, restricted and Native routes still use their admitted paths.
+`FLUJO_CODEX_APP_SERVER=0` is only a test hook that selects the retained SDK
+route; API-key, restricted and Native routes still use their admitted paths.
 
 Ordinary flows expose filesystem and other operations through FLUJO's MCP
 bridge. Current CodeModeOnly models use Codex's computational wrapper to call

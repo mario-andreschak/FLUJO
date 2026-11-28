@@ -17,6 +17,7 @@
  * Deliberately NOT here: admission control, global work queues, model/Jest
  * concurrency limits (explicitly out of scope for #413).
  */
+import os from 'node:os';
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { createLogger } from '@/utils/logger';
 import { DEFAULT_WORKSPACE, getCurrentWorkspace } from '@/utils/workspace';
@@ -35,20 +36,15 @@ import {
 const log = createLogger('backend/services/mcp/mcpLeasePool');
 
 /** How long a zero-lease, unpinned warm server may idle before it is closed. */
-const DEFAULT_IDLE_TTL_MS = 10 * 60_000;
-/** How many servers may be warm at once before idle-only LRU eviction kicks in. */
-const DEFAULT_MAX_WARM = 8;
+const IDLE_TTL_MS = 10 * 60_000;
 
 function idleTtlMs(): number {
-  const raw = Number(process.env.FLUJO_MCP_IDLE_TTL_MS);
-  if (Number.isFinite(raw) && raw > 0) return raw;
-  return DEFAULT_IDLE_TTL_MS;
+  return IDLE_TTL_MS;
 }
 
+/** Warm servers before idle-only LRU eviction: one per 2 GiB of memory, between 2 and 16. */
 function maxWarmServers(): number {
-  const raw = Number(process.env.FLUJO_MCP_MAX_WARM_SERVERS);
-  if (Number.isFinite(raw) && raw > 0) return Math.floor(raw);
-  return DEFAULT_MAX_WARM;
+  return Math.max(2, Math.min(16, Math.floor(os.totalmem() / (2 * 1024 ** 3))));
 }
 
 /**

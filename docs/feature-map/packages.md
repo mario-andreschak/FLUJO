@@ -14,17 +14,15 @@ Packages bundle a FLUJO setup (agents, models, tool servers by reference, and pl
 
 ## How to get to it (user POV)
 
-- Turn on "Enable experimental features" in Settings → "Experimental features" first. Without it the page cannot be opened.
 - On a wide window, choose "More" in the top navigation, then the "Experimental" tab in the row below, then "Extensions" (`data-tour="nav-packages"`).
 - On a window 1535 px wide or narrower, choose "Open navigation menu", then "Extensions" under the "Experimental" heading.
 - On the World page (`/world`): "Explore my world", then "Riverside Market", then "View all" opens this page in a panel inside the World.
-- Open `http://127.0.0.1:<port>/packages` (only once experimental features are on).
+- Open `http://127.0.0.1:<port>/packages`.
 
 ## Driving it with flujo-drive
 
-Preconditions: a throwaway instance from the verify-flujo skill with experimental features on, and at least one agent so the wizard has something to select.
+Preconditions: a throwaway instance from the verify-flujo skill, and at least one agent so the wizard has something to select.
 
-- **Turn on experimental features**: use `steps /settings --file <steps.json>`: click button "Experimental features", click switch "Enable experimental features". It is saved right away.
 - **Open the page**: `node scripts/flujo-drive.mjs open /packages` → heading "Packages" with the "Experimental" badge, "Package registry account", "Browse registry" and "Installed packages".
 - **Start the wizard**: `node scripts/flujo-drive.mjs click /packages --role button --name "Create package" --then-shot packages-wizard.png` → the "Create package" dialog on "Select contents".
 - **Check installed packages**: `node scripts/flujo-drive.mjs text /packages` → "No packages installed yet." on a fresh instance.
@@ -33,7 +31,6 @@ Preconditions: a throwaway instance from the verify-flujo skill with experimenta
 
 ## Gotchas
 
-- With experimental features off, `/packages` shows a spinner and then sends the user to `/settings`. Landing on Settings means the switch is off, not that the page broke.
 - There are two "Create package" buttons (page header and the middle panel); both open the same wizard. The header one has `data-tour="packages-create"`.
 - "Next" on "Select contents" stays disabled until something is chosen.
 - "Browse registry" talks to the online registry; without internet it shows no results or an error. Do not sign in, sign up or publish during a test run.

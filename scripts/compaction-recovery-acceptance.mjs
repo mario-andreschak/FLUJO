@@ -291,7 +291,7 @@ try {
   const settings = await request('/api/storage?key=speech_settings');
   await request('/api/storage', { key: 'speech_settings', value: { ...settings.value,
     telemetry: { enabled: false, notifyDaily: false }, experimental: { ...settings.value?.experimental,
-      compactionEnabled: true, compactionKeepTokens: 256, visualCompactionEnabled: false } } });
+      compactionKeepTokens: 256 } } });
   const model = await request('/api/model', { id: 'compaction-recovery-free', name: requestedModel, provider: 'openrouter',
     adapter: 'openai', displayName: 'Existing compaction recovery acceptance', ApiKey: relayToken, baseUrl: evidence.relay + '/api/v1',
     maxTokens: 4000, compactionThreshold: 512 }, { expected: [201] });

@@ -1,6 +1,5 @@
 /** Ordinary execution must not retain debugger copies of live state (#520). */
 import cloneDeep from 'lodash/cloneDeep';
-import { FEATURES } from '@/config/features';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import type { FlowEngine, ResolvedNode } from '@/backend/execution/flow/engine/FlowEngine';
 import { ERROR_ACTION, type SharedState } from '@/backend/execution/flow/types';
@@ -20,7 +19,6 @@ jest.mock('@/backend/services/snapshot/snapshotHook', () => ({
 
 const executor = FlowExecutor as unknown as { engine: FlowEngine };
 const originalEngine = executor.engine;
-const originalTrackerFlag = FEATURES.ENABLE_EXECUTION_TRACKER;
 const node: ResolvedNode = { id: 'process', type: 'process', name: 'Process', handle: {} };
 const snapshot: SnapshotContext = {
   roots: ['fixture-root'], start: new Map([['fixture-root', 'before-sha']]),
@@ -48,28 +46,24 @@ function state(debugMode: boolean): SharedState {
 
 beforeEach(() => {
   jest.clearAllMocks();
-  FEATURES.ENABLE_EXECUTION_TRACKER = false;
   jest.mocked(captureBefore).mockResolvedValue(snapshot);
   jest.mocked(captureAfterAndEmit).mockResolvedValue(undefined);
 });
 afterEach(() => {
   executor.engine = originalEngine;
-  FEATURES.ENABLE_EXECUTION_TRACKER = originalTrackerFlag;
   FlowExecutor.conversationStates.delete('trace-allocation');
 });
 
-// Both opt-ins must preserve the debugger, including its exception path.
+// Debug mode must preserve the debugger, including its exception path.
 const modes = [
-  { name: 'disabled', debug: false, tracker: false },
-  { name: 'conversation debug', debug: true, tracker: false },
-  { name: 'global tracker', debug: false, tracker: true },
+  { name: 'disabled', debug: false },
+  { name: 'conversation debug', debug: true },
 ];
 
-it.each(modes)('allocates state snapshots only when tracing is $name', async ({ debug, tracker }) => {
-  FEATURES.ENABLE_EXECUTION_TRACKER = tracker;
+it.each(modes)('allocates state snapshots only when tracing is $name', async ({ debug }) => {
   const shared = state(debug);
   const emit: EmitFn = jest.fn();
-  const tracing = debug || tracker;
+  const tracing = debug;
   executor.engine = {
     resolveNode: async () => node,
     previewModelInput: async () => null,
@@ -106,11 +100,10 @@ it.each(modes)('allocates state snapshots only when tracing is $name', async ({ 
   expect(step.stateAfter.messages).toBeUndefined();
 });
 
-it.each(modes)('preserves error details and requested error traces when tracing is $name', async ({ debug, tracker }) => {
-  FEATURES.ENABLE_EXECUTION_TRACKER = tracker;
+it.each(modes)('preserves error details and requested error traces when tracing is $name', async ({ debug }) => {
   const shared = state(debug);
   const emit: EmitFn = jest.fn();
-  const tracing = debug || tracker;
+  const tracing = debug;
   const error = Object.assign(new Error('provider rejected the request'), { details: { status: 400, code: 'bad_request' } });
   executor.engine = {
     resolveNode: async () => node,

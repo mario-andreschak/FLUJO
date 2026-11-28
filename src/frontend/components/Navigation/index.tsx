@@ -57,7 +57,6 @@ import WorkspaceTabs from '@/frontend/components/Navigation/WorkspaceTabs';
 import LanguageMenu from '@/frontend/components/LanguageMenu';
 import CopyLinkButton from '@/frontend/components/shared/CopyLinkButton';
 import { useI18n } from '@/frontend/contexts/I18nContext';
-import { useStorage } from '@/frontend/contexts/StorageContext';
 import { useTheme } from '@/frontend/contexts/ThemeContext';
 import { useTour } from '@/frontend/contexts/TourContext';
 import type { TranslationKey } from '@/frontend/i18n';
@@ -74,8 +73,6 @@ interface NavLink {
   icon: ElementType;
   aliases?: string[];
   experimental?: boolean;
-  /** An experimental entry with its own switch stays hidden until that switch is on. */
-  experimentalFlag?: 'harnessLabEnabled';
   /** Shown nested under this sibling's path (Roles under Personas). */
   parent?: string;
 }
@@ -118,7 +115,7 @@ const navItems: NavItem[] = [
       },
       { type: 'link', label: 'nav.help', path: '/docs', tour: 'nav-docs', icon: MenuBookRounded },
       { type: 'link', label: 'nav.settings', path: '/settings', tour: 'nav-settings', icon: SettingsRounded },
-      { type: 'link', label: 'harness.title', path: '/harness', tour: 'nav-harness', icon: ScienceRounded, experimental: true, experimentalFlag: 'harnessLabEnabled' },
+      { type: 'link', label: 'harness.title', path: '/harness', tour: 'nav-harness', icon: ScienceRounded, experimental: true },
       {
         type: 'link',
         label: 'nav.personas',
@@ -448,7 +445,6 @@ export default function Navigation() {
   const theme = useMuiTheme();
   const pathname = usePathname();
   const router = useRouter();
-  const { settings, settingsHydrated } = useStorage();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const drawerRef = useRef<HTMLDivElement>(null);
   // Translated labels plus workspace/account controls need more room than the
@@ -457,23 +453,8 @@ export default function Navigation() {
 
   log.debug(`Rendering Navigation component with pathname: ${pathname}`);
 
-  const experimentalEnabled = settingsHydrated && (settings?.experimental?.enabled ?? false);
-  // Harness Lab has its own switch; showing it while that switch is off led to
-  // a page that only says "enable it in Settings" (#1320).
-  const linkVisible = (link: NavLink) => !link.experimental
-    || (experimentalEnabled && (!link.experimentalFlag || settings?.experimental?.[link.experimentalFlag] === true));
-  const visibleNavItems = navItems.reduce<NavItem[]>((visible, item) => {
-    if (item.type === 'link') {
-      if (linkVisible(item)) visible.push(item);
-      return visible;
-    }
 
-    const children = item.children.filter(linkVisible);
-    if (children.length > 0) visible.push({ ...item, children });
-    return visible;
-  }, []);
-
-  const activeNavGroup = visibleNavItems.find(
+  const activeNavGroup = navItems.find(
     (item): item is NavGroup =>
       item.type === 'group' && item.children.some((child) => isActive(child, pathname))
   );
@@ -639,7 +620,7 @@ export default function Navigation() {
             }}
           >
             <NavigationEntries
-              items={visibleNavItems}
+              items={navItems}
               pathname={pathname}
               onNavigate={handleNavClick}
             />
@@ -926,7 +907,7 @@ export default function Navigation() {
 
         <List disablePadding sx={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
           <NavigationEntries
-            items={visibleNavItems}
+            items={navItems}
             pathname={pathname}
             mobile
             onNavigate={handleDrawerNavClick}

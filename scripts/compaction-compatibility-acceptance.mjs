@@ -305,7 +305,7 @@ try {
   const settings = await request('/api/storage?key=speech_settings');
   await request('/api/storage', { key: 'speech_settings', value: { ...settings.value,
     telemetry: { enabled: false, notifyDaily: false }, experimental: { ...settings.value?.experimental,
-      compactionEnabled: true, compactionKeepTokens: 4096, visualCompactionEnabled: false,
+      compactionKeepTokens: 4096,
       ...(protectedMode ? { historyKeepRecentMessages: 2 } : {}) } } });
   const model = await request(resumed ? '/api/model/' + resumed.modelId : '/api/model', { id: resumed?.modelId ?? 'compaction-compatibility-free', name: requestedModel, provider: 'openrouter',
     adapter: 'openai', displayName: 'Existing compaction compatibility acceptance', ApiKey: relayToken, baseUrl: evidence.relay + '/api/v1',

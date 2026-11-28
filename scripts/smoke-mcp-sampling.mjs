@@ -190,7 +190,6 @@ try {
   await Promise.race([ready, delay(60_000, undefined, { ref: false }).then(() => { throw new Error('App readiness timeout'); })]);
   for (const action of ['initialize', 'authenticate']) assert.equal((await api('/api/encryption/secure', { action, password })).success, true);
   for (const generation of ['legacy', 'modern']) {
-    await api('/api/storage', { key: 'speech_settings', value: { experimental: { mcpBetaProtocol: generation === 'modern' } } });
     for (const test of cases) {
       const key = `${generation}:${test.id}`, name = `sampling-${generation}-${test.id}`, modelId = `${name}-model`;
       await api('/api/model', { id: modelId, name: modelName, provider: 'openrouter', adapter: 'openai', ApiKey: relayKey,

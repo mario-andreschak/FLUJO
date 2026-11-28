@@ -180,18 +180,10 @@ test('the production owner-bearer writer publishes an exact package-runner appro
   } finally { owner.restore(); }
 }), caseTimeout);
 
-test('effective runtime-home precedence uses actual workspace settings and server/process preferences', async () => {
-  const inherited = { ...config, runtimeHomeMode: 'inherit' as const };
-  await saveItem(StorageKey.SPEECH_SETTINGS, { experimental: { mcpRuntimeHomeIsolation: true } });
-  try {
-    expect(await resolveRuntimeHomeIsolation(inherited, {})).toBe(true);
-    expect(await resolveRuntimeHomeIsolation({ ...config, runtimeHomeMode: 'host' }, {})).toBe(false);
-    expect(await resolveRuntimeHomeIsolation({ ...config, runtimeHomeMode: 'host' }, { FLUJO_MCP_RUNTIME_HOME_ISOLATION: 'isolated' })).toBe(true);
-    expect(await resolveRuntimeHomeIsolation(config, { FLUJO_MCP_RUNTIME_HOME_ISOLATION: 'host' })).toBe(false);
-    await saveItem(StorageKey.SPEECH_SETTINGS, { experimental: { mcpRuntimeHomeIsolation: false } });
-    expect(await resolveRuntimeHomeIsolation(inherited, {})).toBe(false);
-    expect(await resolveRuntimeHomeIsolation({ ...config, runtimeHomeMode: 'isolated' }, {})).toBe(true);
-  } finally { await saveItem(StorageKey.SPEECH_SETTINGS, {}); }
+test('effective runtime home follows only the server setting', async () => {
+  expect(await resolveRuntimeHomeIsolation({ ...config, runtimeHomeMode: 'inherit' })).toBe(false);
+  expect(await resolveRuntimeHomeIsolation({ ...config, runtimeHomeMode: 'host' })).toBe(false);
+  expect(await resolveRuntimeHomeIsolation({ ...config, runtimeHomeMode: 'isolated' })).toBe(true);
 });
 
 test.each(['v1', 'beta'])('%s refuses an isolated approval requested with host launch mode', async era => {

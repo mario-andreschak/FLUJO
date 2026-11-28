@@ -12,6 +12,7 @@ import {
   type ShippedMcpServerDescriptor,
   shippedMcpAppRoot,
 } from './shippedServers';
+import { moveRetiredRuntimeHomeDefault } from './runtimeHomeIsolation';
 
 const log = createLogger('backend/services/mcp/shippedServerMigration');
 
@@ -457,6 +458,7 @@ export function migrateShippedMcpServers(): Promise<void> {
       await runFlujoRecordRepairMigration();
       await runBashRecordRepairMigration();
       await bindWorkspacePackageCopies();
+      await moveRetiredRuntimeHomeDefault();
     } finally {
       migrationsInFlight.delete(workspace);
     }

@@ -157,7 +157,6 @@ describe('comparison runs', () => {
     process.env.FLUJO_DATA_DIR = dataDir;
     await fs.mkdir(path.join(dataDir, 'workspaces', 'default-workspace', 'db'), { recursive: true });
     await saveItem(StorageKey.MODELS, mockModels);
-    await saveItem(StorageKey.SPEECH_SETTINGS, { speech: {}, experimental: { harnessLabEnabled: true } } as never);
     requests = [];
     script = { small: { say: 'Small answer' }, large: { say: 'Large answer' } };
     mockRealToolCall.mockReset();

@@ -1,6 +1,5 @@
 import { z } from 'zod';
 
-import { FEATURES } from '@/config/features';
 import { supportsEmbeddings } from '@/shared/types/model/embeddings';
 import { createLogger } from '@/utils/logger';
 import { getCurrentWorkspace } from '@/utils/workspace';
@@ -272,8 +271,7 @@ async function createMemoryWithinMutation(
     throw new PersonaDomainConflictError('conflictsWith must reference existing memories owned by this Persona.');
   }
 
-  const automaticTargets = FEATURES.ENABLE_MEMORY_CONFLICT_SURFACING
-    && settings.conflictDetectionEnabled
+  const automaticTargets = settings.conflictDetectionEnabled
     ? await listMemoryItems(record.personaId, {
       statuses: ['active'],
       kinds: [record.kind],
@@ -768,8 +766,6 @@ export async function searchPersonaMemory(
     )).slice(0, limit);
   }
   recordSemanticRecallStage('filter_rank', performance.now() - rankStartedAt);
-  if (!FEATURES.ENABLE_MEMORY_CONFLICT_SURFACING) return ordered;
-
   const conflictIds = [...new Set(ordered.flatMap(
     result => result.item.conflictsWith ?? [],
   ))];
