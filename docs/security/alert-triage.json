@@ -761,6 +761,16 @@
       "reason": "Fixed in #565: the lockfile moves hono from 4.13.13 to 4.13.18 (the same change as Dependabot PR #1403). The alert closes once the fix reaches main.",
       "reviewed": "2026-11-25",
       "revisitBy": "2026-12-25"
+    },
+    {
+      "source": "code-scanning",
+      "number": 433,
+      "rule": "js/file-system-race",
+      "location": "__tests__/mcp/fixtures/trustedHostFingerprint.ts",
+      "decision": "fixed-pending-scan",
+      "reason": "Found by the #578 reassessment. The test fixture checked each file by path and then read it by path again; it now opens each file once and reads its type, mode and bytes through that one handle, with the same fingerprint as before. Test code only, never shipped. The alert closes once the fix reaches main and is scanned.",
+      "reviewed": "2026-11-28",
+      "revisitBy": "2026-12-28"
     }
   ]
 }

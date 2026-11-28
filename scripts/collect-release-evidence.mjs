@@ -48,8 +48,8 @@ export const RELEASE_WORKFLOWS = Object.freeze([
   { path: '.github/workflows/publish-npm.yml', required: true, role: 'Builds, signs and publishes the npm packages' },
   { path: '.github/workflows/publish-image.yml', required: true, role: 'Builds, tests, signs and publishes the Docker image' },
   { path: '.github/workflows/installer.yml', required: true, role: 'Builds, tests on Windows and signs the installer' },
-  { path: '.github/workflows/verify-full.yml', required: false, role: 'Full pull-request checks; started by hand' },
-  { path: '.github/workflows/scorecard-source.yml', required: false, role: 'Scorecard contract and docs link checks; started by hand' },
+  { path: '.github/workflows/verify-full.yml', required: false, role: 'Full pull-request checks; release-evidence.yml starts them on each release tag' },
+  { path: '.github/workflows/scorecard-source.yml', required: false, role: 'Scorecard contract and docs link checks; release-evidence.yml starts them on each release tag' },
 ]);
 
 /** Jest result files the verify workflow uploads, one per test stage. */
@@ -66,13 +66,51 @@ export const STATUS_LABELS = Object.freeze({
 export const SOURCE_METHODS = Object.freeze([
   'latestTag', 'release', 'tagCommit', 'commit', 'mainContains', 'packageVersionAt', 'testBaselineAt', 'runs', 'jobs',
   'artifacts', 'jestSummary', 'releaseAssetText', 'attestations', 'alerts', 'npmVersion', 'npmAttestations', 'hashUrl',
-  'imageDigest',
+  'imageDigest', 'installerSignature',
 ]);
 
 const oneLine = (text) => String(text ?? '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean)[0] ?? 'unknown error';
 
 // ---------------------------------------------------------------------------
 // Small pure helpers (exported for tests)
+
+/** Things that must never appear in published evidence: keys, tokens, passwords and e-mail addresses. */
+const SECRET_PATTERNS = Object.freeze([
+  ['GitHub token', /\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})\b/],
+  ['npm token', /\bnpm_[A-Za-z0-9]{30,}\b/],
+  ['cloud access key', /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/],
+  ['private key', /-----BEGIN [A-Z ]*PRIVATE KEY-----/],
+  ['bearer token', /\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/],
+  ['password in a URL', /\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@"]+:[^\s/@"]+@/i],
+  ['e-mail address', /\b[A-Za-z0-9._%+-]+@(?!users\.noreply\.github\.com\b)[A-Za-z][A-Za-z0-9-]*(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b/],
+]);
+
+/** Name each kind of secret or personal contact found in `text` (empty when clean). */
+export function findSecrets(text) {
+  return SECRET_PATTERNS.filter(([, pattern]) => pattern.test(String(text ?? ''))).map(([name]) => name);
+}
+
+/**
+ * Read a Windows executable's Authenticode slot (the PE certificate table).
+ * `signed` means it holds a PKCS#7 signature; checking the certificate chain
+ * is left to `Get-AuthenticodeSignature` or `signtool verify`.
+ */
+export function authenticodeOf(bytes) {
+  const data = Buffer.from(bytes);
+  const none = (portableExecutable) => ({ portableExecutable, signed: false, certificateBytes: 0 });
+  if (data.length < 0x40 || data.readUInt16LE(0) !== 0x5a4d) return none(false);
+  const header = data.readUInt32LE(0x3c);
+  if (header + 26 > data.length || data.readUInt32LE(header) !== 0x00004550) return none(false);
+  const optional = header + 24;
+  const magic = data.readUInt16LE(optional);
+  if (magic !== 0x10b && magic !== 0x20b) return none(false);
+  const security = optional + (magic === 0x20b ? 112 : 96) + 4 * 8;
+  if (security + 8 > data.length) return none(true);
+  const offset = data.readUInt32LE(security);
+  const size = data.readUInt32LE(security + 4);
+  const signed = size > 8 && offset + size <= data.length && data.readUInt16LE(offset + 6) === 0x0002;
+  return { portableExecutable: true, signed, certificateBytes: signed ? size : 0 };
+}
 
 /** Decode a DSSE envelope payload (base64 JSON) into an in-toto statement. */
 export function decodeStatement(payload) {
@@ -307,6 +345,12 @@ export function liveSources({ repository = REPOSITORY, run = runFile, fetchImpl 
       }
       return { bytes, sha256: sha256.digest('hex'), integrity: `sha512-${sha512.digest('base64')}` };
     },
+    async installerSignature(tag, name) {
+      const response = await http(`https://github.com/${repository}/releases/download/${tag}/${encodeURIComponent(name)}`);
+      if (response.status === 404) return null;
+      if (!response.ok) throw new Error(`release download answered HTTP ${response.status}`);
+      return authenticodeOf(new Uint8Array(await response.arrayBuffer()));
+    },
     async imageDigest(tag) {
       const [host, ...rest] = IMAGE.split('/');
       const name = rest.join('/');
@@ -491,6 +535,7 @@ export async function collectReleaseEvidence({ version, sources, now = new Date(
   const installerAsset = assets.get(INSTALLER_FILE) ?? null;
   const installerSha = assetSha256(installerAsset);
   const installerStatements = installerSha ? await read('installer build records', () => sources.attestations(installerSha), []) : null;
+  const authenticode = installerAsset ? await read('installer code signature', () => sources.installerSignature(tag, installerAsset.name)) : null;
   const installerEvidenceAsset = assets.get(INSTALLER_EVIDENCE_FILE);
   const installerEvidence = installerEvidenceAsset && installerEvidenceAsset.size <= SMALL_ASSET_BYTES
     ? await read(INSTALLER_EVIDENCE_FILE, async () => JSON.parse(await sources.releaseAssetText(installerEvidenceAsset.id))) : null;
@@ -544,6 +589,7 @@ export async function collectReleaseEvidence({ version, sources, now = new Date(
       checksums: installerChecksums,
       evidenceSha256: assetSha256(installerEvidenceAsset),
       provenance: signedBy(provenanceOf(installerStatements)),
+      authenticode,
     },
     alerts,
     readErrors,
@@ -609,7 +655,7 @@ export function assessEvidence(evidence) {
     const matching = evidence.ci.runs.filter((run) => run.path === workflow.path);
     const run = matching.at(-1);
     if (ciError) add(id, piece, 'not-checked', ciError);
-    else if (!run) add(id, piece, 'missing', `Did not run on this commit${workflow.required ? '' : ' (optional; started by hand)'}.`);
+    else if (!run) add(id, piece, 'missing', `Did not run on this commit${workflow.required ? '' : '; release-evidence.yml starts it after each release'}.`);
     else {
       const jobs = run.jobs;
       const jobText = jobs ? `${jobs.passed} of ${jobs.total} jobs passed${jobs.failed.length ? `, failed: ${jobNames(jobs.failed)}` : ''}`
@@ -726,7 +772,16 @@ export function assessEvidence(evidence) {
         { refPattern: new RegExp(`^refs/(?:heads/main|tags/${evidence.tag.replace(/\./g, '\\.')})$`) }));
     }
   }
-  add('installer-code-signing', 'Windows code signing (Authenticode)', 'not-checked', 'This collector does not open the installer file; check it on Windows (see "How to check this yourself").');
+  const authenticode = installer.authenticode;
+  const signingPiece = 'Windows code signing (Authenticode)';
+  if (!installer.asset) add('installer-code-signing', signingPiece, 'missing', 'There is no installer to sign.');
+  else if (!authenticode) add('installer-code-signing', signingPiece, 'not-checked', errorFor(evidence, /^installer code signature$/) ?? 'The installer could not be downloaded.');
+  else if (!authenticode.portableExecutable) add('installer-code-signing', signingPiece, 'mismatch', `${INSTALLER_FILE} is not a Windows program.`);
+  else {
+    add('installer-code-signing', signingPiece, authenticode.signed ? 'ok' : 'missing', authenticode.signed
+      ? `${INSTALLER_FILE} carries an Authenticode signature (${authenticode.certificateBytes} bytes). The collector reads the signature slot; Get-AuthenticodeSignature checks the certificate.`
+      : `${INSTALLER_FILE} has no Authenticode signature, so Windows shows its publisher as unknown. Its bytes are still covered by the signed build record and ${INSTALLER_CHECKSUM_FILE}.`);
+  }
 
   for (const sourceName of ['code-scanning', 'dependabot']) {
     const counts = evidence.alerts[sourceName];
@@ -767,8 +822,8 @@ export function renderEvidencePage(evidence) {
     '',
     `Collected on ${when(evidence.collectedAt)} from public GitHub, npm registry and container`,
     'registry data. This page records facts about one published release. It awards no',
-    'grade; the [reassessment package](../independent-reassessment.md) explains how an',
-    'outside reviewer uses it.',
+    `grade; the [reassessment page](v${evidence.version}.reassessment.md) judges the release against`,
+    '#578 and the nine scorecard rows.',
     '',
     `Re-create it: \`${evidence.command}\``,
     '',
@@ -840,6 +895,7 @@ export function renderEvidencePage(evidence) {
     `- File: ${evidence.installer.asset ? `\`${evidence.installer.asset.name}\`, ${evidence.installer.asset.size} bytes, SHA-256 \`${evidence.installer.asset.sha256}\`` : 'not attached'}`,
     `- \`${INSTALLER_EVIDENCE_FILE}\`: ${evidence.installer.evidence ? `commit ${short(evidence.installer.evidence.revision)}, version ${evidence.installer.evidence.version}, built from ${evidence.installer.evidence.ref}` : 'not attached or not readable'}`,
     `- Build record: ${evidence.installer.provenance ? `commit ${short(evidence.installer.provenance.commit)}, ${evidence.installer.provenance.workflow} at ${evidence.installer.provenance.ref}` : 'none found'}`,
+    `- Authenticode signature: ${!evidence.installer.authenticode ? 'not read' : evidence.installer.authenticode.signed ? `present, ${evidence.installer.authenticode.certificateBytes} bytes` : 'none'}`,
     '- Dependency list: the installer downloads the npm application above, so the npm SBOM lists what it installs.',
     '',
     '## Security alerts',
@@ -943,6 +999,10 @@ export async function main(argv = process.argv.slice(2), { log = console.log } =
   }
   const evidence = await collectReleaseEvidence({ version: options.version, sources, now, hashNpmBytes: options.hashNpmBytes });
   const page = renderEvidencePage(evidence);
+  const secrets = findSecrets([JSON.stringify(evidence), page, answers ? JSON.stringify(answers) : ''].join('\n'));
+  if (secrets.length) {
+    throw new Error(`Refusing to publish evidence that contains: ${secrets.join(', ')}. Find where the collector keeps it and drop that field.`);
+  }
   if (options.out) {
     // The answers file keeps the raw facts the page was built from, so anyone
     // can rebuild the page offline with --replay and see that nothing was edited.

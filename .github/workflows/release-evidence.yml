@@ -1,0 +1,206 @@
+name: Release evidence
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('Release evidence {0}', inputs.version) || format('Release evidence after {0}', github.event.workflow_run.display_title) }}
+
+# After every published npm release, nobody has to start anything (#578):
+#   1. start the full checks (verify-full.yml, scorecard-source.yml) on the release tag;
+#   2. run the 28-day offline Persona soak on the release commit;
+#   3. collect the release evidence and reassess the release against #578 and the nine
+#      scorecard rows, then attach both pages to the GitHub release.
+# It only reads, except for starting the two check workflows and attaching the pages.
+# How to read the pages: docs/quality/release-evidence/README.md.
+
+on:
+  workflow_run:
+    workflows: [Publish npm release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Published FLUJO version to assess again (x.y.z)
+        type: string
+        required: true
+
+concurrency:
+  group: release-evidence-${{ inputs.version || github.event.workflow_run.display_title }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (github.event.workflow_run.conclusion == 'success'
+          && startsWith(github.event.workflow_run.display_title, 'Release FLUJO '))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: write
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      commit: ${{ steps.release.outputs.commit }}
+    steps:
+      - name: Pick the released version and its commit
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
+          RUN_TITLE: ${{ github.event.workflow_run.display_title }}
+        run: |
+          version="${INPUT_VERSION:-$(sed -nE 's/^Release FLUJO ([0-9]+\.[0-9]+\.[0-9]+) at .*/\1/p' <<<"$RUN_TITLE")}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          commit="$(gh api "repos/$GITHUB_REPOSITORY/commits/v$version" --jq .sha)"
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+      - name: Start the full checks on the release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release.outputs.version }}
+          COMMIT: ${{ steps.release.outputs.commit }}
+        run: |
+          for workflow in verify-full.yml scorecard-source.yml; do
+            runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --commit "$COMMIT" --json databaseId --jq length)"
+            if [ "$runs" = 0 ]; then
+              gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref "v$VERSION"
+              echo "Started $workflow on v$VERSION."
+            else
+              echo "$workflow already ran on $COMMIT."
+            fi
+          done
+
+  soak:
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ needs.release.outputs.commit }}
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '22.23.4'
+          cache: npm
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
+      - name: Install, trying again after network failures
+        run: |
+          for attempt in 1 2 3; do
+            if npm ci --include=dev; then exit 0; fi
+            echo "::warning::npm ci failed (try $attempt of 3); trying again."
+            sleep $((attempt * 30))
+          done
+          exit 1
+      - name: Run the 28-day offline Persona soak on the release commit
+        env:
+          COMMIT: ${{ needs.release.outputs.commit }}
+          PERSONA_SOAK_DEBUG: '1'
+        run: >-
+          node scripts/run-persona-soak.mjs
+          --days=28
+          --activities-per-day=20
+          --with-learning
+          --seed=459
+          --commit="$COMMIT"
+          --run-id="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: persona-soak-${{ needs.release.outputs.commit }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: soak-artifacts/
+          if-no-files-found: warn
+          retention-days: 90
+
+  reassess:
+    needs: [release, soak]
+    if: always() && needs.release.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    permissions:
+      contents: read
+      actions: read
+      security-events: read
+      issues: read
+    outputs:
+      written: ${{ steps.reassess.outputs.written }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.release.outputs.version }}
+      COMMIT: ${{ needs.release.outputs.commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '22.23.4'
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
+      - name: Wait for the full checks on the release commit
+        run: node scripts/wait-for-release-checks.mjs --commit "$COMMIT" --workflow verify-full.yml --workflow scorecard-source.yml
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        continue-on-error: true
+        with:
+          name: persona-soak-${{ needs.release.outputs.commit }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/persona-soak
+      - name: Collect the release evidence
+        id: collect
+        run: |
+          set +e
+          OUT="$RUNNER_TEMP/release-evidence"
+          node scripts/collect-release-evidence.mjs --version "$VERSION" --out "$OUT"
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+          test -f "$OUT/v$VERSION.json"
+      - name: Reassess the release
+        id: reassess
+        run: |
+          OUT="$RUNNER_TEMP/release-evidence"
+          mkdir -p "$RUNNER_TEMP/persona-soak"
+          node scripts/release-reassessment.mjs --evidence "$OUT/v$VERSION.json" --source "$COMMIT" \
+            --soak "$RUNNER_TEMP/persona-soak" --out "$OUT"
+          cat "$OUT/v$VERSION.reassessment.md" >> "$GITHUB_STEP_SUMMARY"
+          echo "written=true" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: release-evidence-${{ needs.release.outputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-evidence/
+          if-no-files-found: warn
+          retention-days: 90
+      - name: Show the run as failed when two pieces of evidence contradict each other
+        env:
+          COLLECT_CODE: ${{ steps.collect.outputs.code }}
+        run: test "$COLLECT_CODE" = 0
+
+  # Only this job may write, and it only adds the five pages to the release that already exists.
+  attach:
+    needs: [release, reassess]
+    if: always() && needs.reassess.outputs.written == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.release.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: release-evidence-${{ needs.release.outputs.version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-evidence
+      - name: Attach the evidence and reassessment pages to the release
+        run: |
+          OUT="$RUNNER_TEMP/release-evidence"
+          gh release upload "v$VERSION" --repo "$GITHUB_REPOSITORY" --clobber \
+            "$OUT/v$VERSION.md#Release evidence (page)" "$OUT/v$VERSION.json#Release evidence (data)" \
+            "$OUT/v$VERSION.answers.json#Release evidence (saved answers)" \
+            "$OUT/v$VERSION.reassessment.md#Release reassessment (page)" \
+            "$OUT/v$VERSION.reassessment.json#Release reassessment (data)"

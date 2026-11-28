@@ -3,7 +3,7 @@
   "repository": "mario-andreschak/FLUJO",
   "version": "3.48.10",
   "tag": "v3.48.10",
-  "collectedAt": "2026-11-25T14:53:32.740Z",
+  "collectedAt": "2026-11-28T02:01:02.943Z",
   "command": "npm run evidence:release -- --version 3.48.10 --out docs/quality/release-evidence",
   "options": {
     "hashNpmBytes": true
@@ -41,7 +41,7 @@
     "signatureVerified": true,
     "signatureReason": "valid",
     "main": {
-      "aheadBy": 32,
+      "aheadBy": 36,
       "behindBy": 0,
       "status": "ahead"
     },
@@ -457,6 +457,11 @@
       "repository": "https://github.com/mario-andreschak/FLUJO",
       "run": "https://github.com/mario-andreschak/FLUJO/actions/runs/44865156014/attempts/2",
       "builder": "https://github.com/mario-andreschak/FLUJO/.github/workflows/installer.yml@refs/tags/v3.48.10"
+    },
+    "authenticode": {
+      "portableExecutable": true,
+      "signed": false,
+      "certificateBytes": 0
     }
   },
   "alerts": {
@@ -515,7 +520,7 @@
       "id": "source-main",
       "piece": "Commit is on main",
       "status": "ok",
-      "detail": "main contains the commit (32 newer commits since)."
+      "detail": "main contains the commit (36 newer commits since)."
     },
     {
       "id": "source-version",
@@ -557,13 +562,13 @@
       "id": "ci-verify-full",
       "piece": "CI: verify-full.yml",
       "status": "missing",
-      "detail": "Did not run on this commit (optional; started by hand)."
+      "detail": "Did not run on this commit; release-evidence.yml starts it after each release."
     },
     {
       "id": "ci-scorecard-source",
       "piece": "CI: scorecard-source.yml",
       "status": "missing",
-      "detail": "Did not run on this commit (optional; started by hand)."
+      "detail": "Did not run on this commit; release-evidence.yml starts it after each release."
     },
     {
       "id": "tests-ci",
@@ -646,20 +651,20 @@
     {
       "id": "installer-code-signing",
       "piece": "Windows code signing (Authenticode)",
-      "status": "not-checked",
-      "detail": "This collector does not open the installer file; check it on Windows (see \"How to check this yourself\")."
+      "status": "missing",
+      "detail": "flujo-setup.exe has no Authenticode signature, so Windows shows its publisher as unknown. Its bytes are still covered by the signed build record and installer-SHA256SUMS."
     },
     {
       "id": "alerts-code-scanning",
       "piece": "Open code scanning alerts at release",
       "status": "attention",
-      "detail": "68 open (3 critical, 28 high); 71 open on 2026-11-25."
+      "detail": "68 open (3 critical, 28 high); 71 open on 2026-11-28."
     },
     {
       "id": "alerts-dependabot",
       "piece": "Open dependency alerts at release",
       "status": "ok",
-      "detail": "13 open (0 critical, 0 high); 6 open on 2026-11-25."
+      "detail": "13 open (0 critical, 0 high); 6 open on 2026-11-28."
     }
   ]
 }

@@ -306,6 +306,7 @@ The default installation is for one trusted operator on localhost, without a sig
 | Workspaces and portable workers | Available within their data, authentication and credential-transfer boundaries |
 | Meetings, Personas, Roles, persistent goals and Waves | Experimental; supervision and recovery can be needed |
 | MCP Skills, resumable subflow sessions and selected generators | Opt-in experiments; see their feature flags and guides |
+| Shared or team use (several users on one FLUJO) | Not supported yet: one owner per installation ([#212](https://github.com/mario-andreschak/FLUJO/issues/212)) |
 
 [Project status](docs/project-status.md) · [Release history](CHANGELOG.md) · [Persona acceptance criteria](docs/performance/persona-goal-endurance-acceptance.md)
 

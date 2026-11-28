@@ -10,6 +10,8 @@ This page describes capability maturity and release limits. A package version or
 | Workspaces and portable workers | Available | Logical isolation is not multi-user auth; snapshots can contain credentials |
 | Schedules and triggers | Available | Server must be running; failures and approvals may need owner attention |
 | Personas, Roles, persistent goals | Experimental | Short tests and controlled acceptance do not prove indefinite unattended operation |
+| Meetings and Waves | Experimental | Supervision and recovery can be needed; no long real-model runs are recorded |
+| Shared or team use (several users on one FLUJO) | Not supported | One owner per installation; multi-user ownership and team isolation are deferred ([#212](https://github.com/mario-andreschak/FLUJO/issues/212)) |
 | Conversation-scoped MCP Skills / experimental generator | Opt-in | Feature/server configuration determines availability |
 
 The development source contains an opt-in [owner API bearer policy](security/owner-access-v1.md), [browser login/session/logout](security/owner-browser-session-v1.md), and [first-owner pairing](security/first-owner-pairing-v1.md). Pairing requires a configured literal loopback origin and a private local capability. Unconfigured legacy localhost access remains anonymous; Network/Public startup requires an active owner policy. Worker startup retains its separate bearer requirement. Browser sessions and logical workspaces do not provide multi-user ownership or team isolation.
