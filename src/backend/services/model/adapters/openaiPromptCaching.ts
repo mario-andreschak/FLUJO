@@ -47,7 +47,8 @@ function isAzureOpenAiEndpoint(baseUrl: string | undefined): boolean {
   return Boolean(host && ['.openai.azure.com', '.openai.azure.us'].some(suffix => host.endsWith(suffix)));
 }
 
-function isOfficialOpenAiChatCompletion(model: CacheWireModel): boolean {
+/** True when Chat Completions requests reach OpenAI's own models, which accept system messages anywhere. */
+export function isOfficialOpenAiChatCompletion(model: CacheWireModel): boolean {
   const compatible = !model.adapter || model.adapter === 'openai' || model.adapter === 'openai-responses';
   if (!compatible) return false;
   if (isOfficialOpenAiEndpoint(model.baseUrl)) return true;
