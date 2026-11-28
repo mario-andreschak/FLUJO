@@ -466,14 +466,13 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
       const actualUnlink = fs.promises.unlink.bind(fs.promises);
       const recordName = path.join(workloadDirectory, `${key}.json`);
       let acquired: number | undefined, failedStat = false;
-      const opened = jest.spyOn(fs, 'open').mockImplementation((...args: unknown[]) => {
-        const stack = new Error().stack ?? '';
-        intercept(realFs.open, (openArgs, error, values, done) => {
-          if (!error && String(openArgs[0]) === recordName && typeof openArgs[1] === 'number' && (openArgs[1] & fs.constants.O_RDWR) === 0
-              && acquired === undefined && stack.includes('closeOwnedFile')) acquired = values[0] as number;
-          answer(error, values, done);
-        })(...args);
-      });
+      // Private file checks read through file handles, so the first read-only
+      // descriptor this close opens on the record is its close witness.
+      const opened = jest.spyOn(fs, 'open').mockImplementation(intercept(realFs.open, (openArgs, error, values, done) => {
+        if (!error && String(openArgs[0]) === recordName && typeof openArgs[1] === 'number' && (openArgs[1] & fs.constants.O_RDWR) === 0
+            && (openArgs[1] & fs.constants.O_WRONLY) === 0 && acquired === undefined) acquired = values[0] as number;
+        answer(error, values, done);
+      }));
       const stat = jest.spyOn(fs, 'fstat').mockImplementation((...args: unknown[]) => {
         if (args[0] === acquired && !failedStat) { failedStat = true; (args.at(-1) as FsCallback)(ioFault('Owned acquisition validation fault.')); return; }
         intercept(realFs.fstat, (_args, error, values, done) => answer(error, values, done))(...args);
