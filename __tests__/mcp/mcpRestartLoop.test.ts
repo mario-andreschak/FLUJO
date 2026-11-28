@@ -75,7 +75,7 @@ interface FakeTransport {
 }
 
 function makeTransport(): FakeTransport {
-  return { start: jest.fn(), close: jest.fn(), send: jest.fn() };
+  return { start: jest.fn(), close: jest.fn(async () => {}), send: jest.fn() };
 }
 
 function makeClient() {
@@ -102,6 +102,7 @@ const mockCreateNewClient = createNewClient as jest.Mock;
 const mockCreateTransport = createTransport as jest.Mock;
 const mockShouldRecreate = shouldRecreateClient as jest.Mock;
 const configState = (configModule as unknown as { __configState: { configs: unknown[] } }).__configState;
+const OTHER_WORKSPACE = 'restart-loop-other-workspace';
 
 describe('MCPService restart-loop protection', () => {
   let service: MCPService;
@@ -115,6 +116,7 @@ describe('MCPService restart-loop protection', () => {
     global.__mcp_active_transports?.clear();
     global.__mcp_approval_failures?.clear();
     global.__mcp_workspace_registries?.delete('approval-status-workspace');
+    global.__mcp_workspace_registries?.delete(OTHER_WORKSPACE);
     global.__mcp_starting_up = false;
 
     configState.configs = [SERVER];
@@ -135,6 +137,7 @@ describe('MCPService restart-loop protection', () => {
     jest.useRealTimers();
     global.__mcp_approval_failures?.clear();
     global.__mcp_workspace_registries?.delete('approval-status-workspace');
+    global.__mcp_workspace_registries?.delete(OTHER_WORKSPACE);
   });
 
   it('stops reconnect timers and exposes approval failures as user action', async () => {
@@ -180,19 +183,6 @@ describe('MCPService restart-loop protection', () => {
       .toMatchObject({ status: 'requires_approval', errorCode: 'HOST_CONSENT_REQUIRED' });
   });
 
-  it('stops reconnect timers and exposes approval failures as user action', async () => {
-    await service.connectServer('srv');
-    transports[0].onclose?.();
-    mockCreateTransport.mockImplementation(() => { throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED'); });
-    await jest.advanceTimersByTimeAsync(5000);
-    const attempts = mockCreateTransport.mock.calls.length;
-    await jest.advanceTimersByTimeAsync(300000);
-    expect(mockCreateTransport).toHaveBeenCalledTimes(attempts);
-    expect(await service.getServerStatus('srv')).toMatchObject({
-      status: 'requires_approval', requiresApproval: true, errorCode: 'HOST_CONSENT_REQUIRED',
-    });
-  });
-
   it('ignores a late close event from a replaced (zombie) transport', async () => {
     // Connect, then force a recreate so transport[0] becomes a "zombie" replaced by [1].
     await service.connectServer('srv');
@@ -209,6 +199,64 @@ describe('MCPService restart-loop protection', () => {
 
     expect(service.getClient('srv')).toBe(healthyClient);
     expect(mockCreateNewClient).toHaveBeenCalledTimes(2); // no third connection spawned
+  });
+
+  it('ignores a late error event from a replaced (zombie) transport', async () => {
+    await service.connectServer('srv');
+    mockShouldRecreate.mockReturnValueOnce({ needsNewClient: true, reason: 'test' });
+    await service.connectServer('srv');
+    const healthyClient = service.getClient('srv');
+
+    transports[0].onerror?.(new Error('server process crashed'));
+    await jest.advanceTimersByTimeAsync(60000);
+
+    expect(service.getClient('srv')).toBe(healthyClient);
+    expect(transports[1].close).not.toHaveBeenCalled();
+    expect(mockCreateNewClient).toHaveBeenCalledTimes(2);
+  });
+
+  it('closes and reconnects after a fatal error from the live transport', async () => {
+    await service.connectServer('srv');
+    const failedClient = service.getClient('srv');
+
+    transports[0].onerror?.(new Error('server process crashed'));
+    await jest.advanceTimersByTimeAsync(6000);
+
+    expect(transports[0].close).toHaveBeenCalled();
+    expect(mockCreateNewClient).toHaveBeenCalledTimes(2);
+    expect(service.getClient('srv')).toBeDefined();
+    expect(service.getClient('srv')).not.toBe(failedClient);
+  });
+
+  it('a close in one workspace reconnects that workspace and leaves the same server name elsewhere alone', async () => {
+    await service.connectServer('srv');
+    const defaultClient = service.getClient('srv');
+    await runWithWorkspace(OTHER_WORKSPACE, () => service.connectServer('srv'));
+    const closedClient = runWithWorkspace(OTHER_WORKSPACE, () => service.getClient('srv'));
+    expect(transports).toHaveLength(2);
+
+    // A process exit arrives outside any request, so no workspace is current.
+    transports[1].onclose?.();
+    await jest.advanceTimersByTimeAsync(6000);
+
+    expect(service.getClient('srv')).toBe(defaultClient);
+    const reconnected = runWithWorkspace(OTHER_WORKSPACE, () => service.getClient('srv'));
+    expect(reconnected).toBeDefined();
+    expect(reconnected).not.toBe(closedClient);
+    expect(mockCreateNewClient).toHaveBeenCalledTimes(3);
+  });
+
+  it('a successful retry resets the backoff for the next unexpected close', async () => {
+    await service.connectServer('srv');
+    transports[0].onclose?.();
+    await jest.advanceTimersByTimeAsync(6000); // first retry fires at 5s and succeeds
+    expect(mockCreateNewClient).toHaveBeenCalledTimes(2);
+
+    transports[1].onclose?.();
+    await jest.advanceTimersByTimeAsync(6000); // again at 5s, not at the next backoff step
+
+    expect(mockCreateNewClient).toHaveBeenCalledTimes(3);
+    expect(service.getClient('srv')).toBeDefined();
   });
 
   it('does not schedule a reconnect for a FLUJO-initiated disconnect', async () => {
