@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { assertSpeedSettingsWork, assertTurnsStored, claudeProcesses, median, smokeFlow } from './inside.mjs';
+import { VOICE_LIMITS, assertTurnsStored, assertVoiceLimits, claudeProcesses, describeVoiceLimits, median, smokeFlow } from './inside.mjs';
 import { ANSWERS, CLASSIFY_INSTRUCTION, ORDER_TOOL, TOOL_MARKER, planClaudeReply, startClaudeStandIn, startMcpStandIn } from './stand-ins.mjs';
 
 const tools = [{ name: `mcp__flujo__smoke__${ORDER_TOOL}` }];
@@ -60,27 +60,37 @@ test('stored turns are found in order, and a missing answer is reported', () => 
   assert.throws(() => assertTurnsStored(['user: Q2', 'assistant: A2', 'user: Q1', 'assistant: A1'], turns, 'conversation'), /turn 2 of 2/);
 });
 
-test('the speed settings check needs all three effects, judged by what was observed', () => {
-  const series = (on, { claimed = on, mcpLists = on ? 0 : 2, saves = on ? 3 : 8, parked = on ? 1 : 0 } = {}) => ({
-    on, scenarios: Object.fromEntries(['direct', 'tool', 'continue'].map((scenario) => [scenario, {
-      parkedAfter: parked, runs: Array.from({ length: 4 }, (_, index) => ({ claimed: index > 0 && claimed, mcpLists, saves })) }])) });
-  const off = series(false);
-  assert.doesNotThrow(() => assertSpeedSettingsWork(off, series(true)));
-  assert.throws(() => assertSpeedSettingsWork(off, series(true, { claimed: false })), /only 0 of 3 later direct requests took a prepared Claude Code process/);
-  assert.throws(() => assertSpeedSettingsWork(off, series(true, { mcpLists: 2 })), /MCP lists were not reused/);
-  assert.throws(() => assertSpeedSettingsWork(off, series(true, { saves: 8 })), /did not save fewer times/);
-  assert.throws(() => assertSpeedSettingsWork(off, series(true, { parked: 0 })), /no Claude Code process waited/);
-  assert.throws(() => assertSpeedSettingsWork(series(false, { claimed: true }), series(true)), /with the settings off, 9 requests took a prepared/);
-  assert.throws(() => assertSpeedSettingsWork(series(false, { parked: 1 }), series(true)), /with the settings off, 1 Claude Code processes stayed/);
-  // One miss in three is allowed by design; a resumed conversation starts its own process.
-  const oneMiss = series(true);
+test('the voice check holds the always-on path to the #1408 limits, judged by what was observed', () => {
+  const measured = { direct: { mcpLists: 0, saves: 0 }, tool: { mcpLists: 1, saves: 3 }, continue: { mcpLists: 0, saves: 2 } };
+  const series = ({ parked = 1, ...overrides } = {}) => ({
+    scenarios: Object.fromEntries(Object.entries(measured).map(([scenario, counts]) => [scenario, {
+      parkedAfter: parked,
+      runs: Array.from({ length: 4 }, (_, index) => ({ claimed: index > 0 && scenario !== 'continue', ...counts, ...overrides[scenario] })),
+    }])),
+  });
+  assert.deepEqual(VOICE_LIMITS, { readyProcessMissesAllowed: 1, mcpListsPerToolTurn: 1, saves: { tool: 3, continue: 2 } });
+  assert.doesNotThrow(() => assertVoiceLimits(series()));
+  assert.throws(() => assertVoiceLimits(series({ direct: { claimed: false } })), /only 0 of 3 later direct calls took the ready Claude Code process/);
+  assert.throws(() => assertVoiceLimits(series({ tool: { mcpLists: 2 } })), /a tool turn sent 2 MCP list requests, the limit is 1/);
+  assert.throws(() => assertVoiceLimits(series({ tool: { saves: 4 } })), /a tool turn saved the conversation 4 times, the limit is 3/);
+  assert.throws(() => assertVoiceLimits(series({ continue: { saves: 3 } })), /a continued turn saved the conversation 3 times, the limit is 2/);
+  assert.throws(() => assertVoiceLimits(series({ parked: 0 })), /no Claude Code process waited ready after the direct calls/);
+  // Fewer lists or saves than measured pass; one missed ready process in three is allowed by design.
+  assert.doesNotThrow(() => assertVoiceLimits(series({ tool: { mcpLists: 0, saves: 2 }, continue: { saves: 1 } })));
+  const oneMiss = series();
   oneMiss.scenarios.tool.runs[2] = { ...oneMiss.scenarios.tool.runs[2], claimed: false, spareMiss: 'options' };
-  assert.doesNotThrow(() => assertSpeedSettingsWork(off, oneMiss));
+  assert.doesNotThrow(() => assertVoiceLimits(oneMiss));
   oneMiss.scenarios.tool.runs[3] = { ...oneMiss.scenarios.tool.runs[3], claimed: false, spareMiss: 'options' };
-  assert.throws(() => assertSpeedSettingsWork(off, oneMiss), /only 1 of 3 later tool requests .*\(differing: options\)/);
-  const resumed = series(true);
-  resumed.scenarios.continue.runs = resumed.scenarios.continue.runs.map((run) => ({ ...run, claimed: false }));
-  assert.doesNotThrow(() => assertSpeedSettingsWork(off, resumed));
+  assert.throws(() => assertVoiceLimits(oneMiss), /only 1 of 3 later tool turns .*\(differing: options\)/);
+  // One list refresh in three later tool turns (the list's age limit) stays within the median.
+  const refreshed = series();
+  refreshed.scenarios.tool.runs[2] = { ...refreshed.scenarios.tool.runs[2], mcpLists: 2 };
+  assert.doesNotThrow(() => assertVoiceLimits(refreshed));
+  // A series without later runs never passes.
+  const short = series();
+  for (const scenario of Object.values(short.scenarios)) scenario.runs = scenario.runs.slice(0, 1);
+  assert.throws(() => assertVoiceLimits(short), /only 0 of 0 later direct calls.*unmeasured number of MCP list requests.*unmeasured number of times/);
+  assert.match(describeVoiceLimits(), /at most 1 MCP list request and saves at most 3 times; a continued turn saves at most 2 times/);
   assert.equal(median([3, 1, 2]), 2);
   assert.equal(median([4, 1, 2, 3]), 2.5);
 });

@@ -3,8 +3,8 @@
 // 2 GB), checks that it ships the declared Node version from the recorded official base, that its
 // own health check turns healthy and that its published port answers. Then
 // scripts/container-smoke/inside.mjs runs, inside the container, a first chat and the voice-app
-// check (Claude subscription model through the bundled Claude Code, one MCP tool, the speed
-// settings off and on) against local stand-ins. Finally the container is killed and started
+// check (Claude subscription model through the bundled Claude Code and one MCP tool, held to fixed
+// limits) against local stand-ins. Finally the container is killed and started
 // again, and every finished turn must still be there. No account, key or outside service is used
 // beyond the registry the image was built from.
 //
@@ -16,7 +16,7 @@ import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { RESULT_PREFIX, STAND_IN_PORTS, TRACE_FILE, median } from './container-smoke/inside.mjs';
+import { RESULT_PREFIX, STAND_IN_PORTS, TRACE_FILE, describeVoiceLimits, median } from './container-smoke/inside.mjs';
 import { delay, unusedPort } from './packaged-acceptance/targets.mjs';
 import { assertContainerBaseIndex, containerBaseRecord, shippedNodeRuntimes } from './verify-ci-node.mjs';
 
@@ -127,20 +127,19 @@ export function summarize(report) {
   const lines = [`## Container smoke: ${report.result}`, '',
     `Image ${report.imageId ?? report.image}, Node ${report.node ?? '?'}, ${MACHINE.cpus} CPU, ${MACHINE.memory} memory.`, ''];
   for (const check of report.checks) lines.push(`- ${check.result === 'passed' ? 'PASS' : 'FAIL'} ${check.title}${check.error ? `: ${check.error.split('\n')[0]}` : ''}`);
-  const voice = report.phases?.voice?.series;
-  if (voice) {
+  const voice = report.phases?.voice;
+  if (voice?.scenarios) {
     lines.push('', 'Voice check (Claude subscription model through the bundled Claude Code, stand-in model service; ms, median of runs 2 and later):', '',
-      '| turn | settings | first run | later runs | until the model request | ready Claude process taken | MCP list requests | conversation saves |',
-      '|---|---|---:|---:|---:|---:|---:|---:|');
+      '| turn | first run | later runs | until the model request | ready Claude process taken | MCP list requests | conversation saves |',
+      '|---|---:|---:|---:|---:|---:|---:|');
     for (const scenario of ['direct', 'tool', 'continue']) {
-      for (const key of ['off', 'on']) {
-        const runs = voice[key]?.scenarios?.[scenario]?.runs ?? [];
-        const later = runs.slice(1);
-        lines.push(`| ${scenario} | ${key} | ${fmt(runs[0]?.totalMs)} | ${fmt(median(later.map((run) => run.totalMs)))} | `
-          + `${fmt(median(later.map((run) => run.beforeModelMs)))} | ${later.filter((run) => run.claimed).length} of ${later.length} | `
-          + `${fmt(median(later.map((run) => run.mcpLists)))} | ${fmt(median(later.map((run) => run.saves)))} |`);
-      }
+      const runs = voice.scenarios[scenario]?.runs ?? [];
+      const later = runs.slice(1);
+      lines.push(`| ${scenario} | ${fmt(runs[0]?.totalMs)} | ${fmt(median(later.map((run) => run.totalMs)))} | `
+        + `${fmt(median(later.map((run) => run.beforeModelMs)))} | ${later.filter((run) => run.claimed).length} of ${later.length} | `
+        + `${fmt(median(later.map((run) => run.mcpLists)))} | ${fmt(median(later.map((run) => run.saves)))} |`);
     }
+    if (voice.limits) lines.push('', `Limits: ${describeVoiceLimits(voice.limits)}.`);
   }
   return `${lines.join('\n')}\n`;
 }
@@ -199,7 +198,7 @@ export async function main(argv = process.argv.slice(2)) {
     });
     await check('The published port answers', () => publishedPortAnswers(port));
     await phase('A first chat answers through a flow and directly', 'first-chat');
-    await phase('The voice check answers with the speed settings off and on', 'voice');
+    await phase('The voice check answers within its fixed limits', 'voice');
     await check('A hard stop and a new start keep every finished turn', async () => {
       await dockerOk(['kill', name]);
       await dockerOk(['start', name]);

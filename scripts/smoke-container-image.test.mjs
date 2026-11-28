@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
-import { RESULT_PREFIX } from './container-smoke/inside.mjs';
+import { RESULT_PREFIX, VOICE_LIMITS } from './container-smoke/inside.mjs';
 import { checkContainerBase, parseOptions, readPhaseResult, summarize } from './smoke-container-image.mjs';
 import { containerBaseRecord } from './verify-ci-node.mjs';
 
@@ -44,14 +44,16 @@ test('the registry check reads the pinned index from the mirror, then Docker Hub
   await assert.rejects(checkContainerBase({ fetchImpl: async () => { throw new Error('offline'); }, pause: async () => {} }), /could not be read from any registry/);
 });
 
-test('the summary lists every check and the voice timings', () => {
+test('the summary lists every check, the voice timings and the limits they were held to', () => {
   const run = (totalMs, beforeModelMs, mcpLists, saves, claimed = false) => ({ totalMs, beforeModelMs, mcpLists, saves, claimed });
-  const series = (on) => ({ scenarios: Object.fromEntries(['direct', 'tool', 'continue'].map((scenario) => [scenario,
-    { runs: [run(3000, 1500, 2, 8), run(on ? 900 : 2800, on ? 200 : 1400, on ? 0 : 2, on ? 3 : 8, on), run(on ? 800 : 2700, on ? 180 : 1300, on ? 0 : 2, on ? 3 : 8)] }])) });
+  const scenarios = Object.fromEntries(['direct', 'tool', 'continue'].map((scenario) => [scenario,
+    { runs: [run(3000, 1500, 2, 8), run(900, 200, 1, 3, true), run(800, 180, 1, 3)] }]));
   const text = summarize({ result: 'passed', imageId: 'sha256:1', node: 'v24.22.1', checks: [{ title: 'Health', result: 'passed' }, { title: 'Chat', result: 'failed', error: 'no answer\nlogs' }],
-    phases: { voice: { series: { off: series(false), on: series(true) } } } });
+    phases: { voice: { scenarios, limits: VOICE_LIMITS } } });
   assert.match(text, /PASS Health/);
   assert.match(text, /FAIL Chat: no answer\n/);
-  assert.match(text, /\| direct \| off \| 3000 \| 2750 \| 1350 \| 0 of 2 \| 2 \| 8 \|/);
-  assert.match(text, /\| tool \| on \| 3000 \| 850 \| 190 \| 1 of 2 \| 0 \| 3 \|/);
+  assert.match(text, /\| turn \| first run \| later runs \|/);
+  assert.match(text, /\| tool \| 3000 \| 850 \| 190 \| 1 of 2 \| 1 \| 3 \|/);
+  assert.match(text, /Limits: later direct calls and tool turns take the ready Claude process \(1 miss allowed\); .* continued turn saves at most 2 times\./);
+  assert.doesNotMatch(summarize({ result: 'failed', checks: [], phases: {} }), /Voice check/);
 });
