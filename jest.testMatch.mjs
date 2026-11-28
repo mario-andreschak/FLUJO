@@ -89,6 +89,8 @@ export const ISOLATED_TEST_FILES = [
   '__tests__/mcp/mcpClientConformance.test.ts',
   '__tests__/mcp/browserCaptureRecording.test.ts',
   '__tests__/packages/workspaceMcpTransfer.test.ts',
+  // Real local servers with a secret setting, across a restart and the approval update (#1337).
+  '__tests__/mcp/secretEnvApprovalPath.test.ts',
   '__tests__/snapshot/ShadowRepoService.test.ts',
   // Real bundled Codex processes; the cancellation checks count processes.
   '__tests__/model/codexStandIn.test.ts',

@@ -801,6 +801,14 @@ jobs:
         env:
           FLUJO_DRIVE_HOME: ${{ runner.temp }}/flujo-drive
         run: npm run journey:first-use -- --viewport 390x844
+      # In-chat app views through a signed-in front door (#1336): the same build
+      # in Localhost mode with the documented front door settings, behind a local
+      # HTTPS gateway that needs a sign-in cookie. A browser signs in, opens a chat
+      # and must see the app view render from the gateway's sandbox address.
+      - name: Show an app view in a chat through a signed-in front door
+        env:
+          FLUJO_DRIVE_HOME: ${{ runner.temp }}/flujo-drive
+        run: npm run journey:front-door
       # Connect a 128-tool app over Streamable HTTP and SSE through the screens,
       # reach its last tool by keyboard and test it with a filled-in form.
       - name: Reach every tool of a 128-tool app on the same build
@@ -821,6 +829,7 @@ jobs:
           name: first-use-journey-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/flujo-drive/evidence/first-journey/
+            ${{ runner.temp }}/flujo-drive/evidence/front-door/
             test-results/features-first-use/
             feature-first-use-artifacts/
             test-results/features/

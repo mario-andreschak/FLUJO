@@ -343,18 +343,43 @@ describe('invalid hosted settings fall back safely with a clear message', () => 
 });
 
 describe('startup log', () => {
-  it('writes the settings line once per process', async () => {
-    const sandbox = loadSandboxModule(await frontDoorEnv({ [PUBLIC_URL_ENV]: 'not a url' }));
+  // The operator reads the server's own output, where the app logger prints
+  // only errors; a line sent through it never reached a real deployment's log.
+  it('writes the settings line once per process to the server output', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const info = jest.spyOn(console, 'info').mockImplementation(() => undefined);
+    try {
+      const sandbox = loadSandboxModule(await frontDoorEnv({ [PUBLIC_URL_ENV]: 'not a url' }));
 
-    sandbox.startSandboxServer();
-    sandbox.startSandboxServer();
-    await sandbox.ensureSandboxForOriginKey('');
+      sandbox.startSandboxServer();
+      sandbox.startSandboxServer();
+      await sandbox.ensureSandboxForOriginKey('');
 
-    const settingsLines = mockLog.warn.mock.calls
-      .map(([message]) => String(message))
-      .filter(message => message.startsWith('MCP Apps sandbox (localhost mode):'));
-    expect(settingsLines).toHaveLength(1);
-    expect(mockLog.info.mock.calls.map(([message]) => String(message)))
-      .not.toContainEqual(expect.stringMatching(/^MCP Apps sandbox \(/));
+      const settingsLines = warn.mock.calls
+        .map(([message]) => String(message))
+        .filter(message => message.startsWith('[FLUJO] MCP Apps sandbox (localhost mode):'));
+      expect(settingsLines).toHaveLength(1);
+      expect(info.mock.calls.map(([message]) => String(message)))
+        .not.toContainEqual(expect.stringMatching(/MCP Apps sandbox \(/));
+      expect([...mockLog.info.mock.calls, ...mockLog.warn.mock.calls].map(([message]) => String(message)))
+        .not.toContainEqual(expect.stringMatching(/MCP Apps sandbox \(/));
+    } finally {
+      warn.mockRestore();
+      info.mockRestore();
+    }
+  });
+
+  it('writes a valid front door setup as one information line', async () => {
+    const info = jest.spyOn(console, 'info').mockImplementation(() => undefined);
+    try {
+      const sandbox = loadSandboxModule(await frontDoorEnv({}));
+      sandbox.startSandboxServer();
+      await sandbox.ensureSandboxForOriginKey('');
+      expect(info.mock.calls.map(([message]) => String(message))
+        .filter(message => message.startsWith('[FLUJO] MCP Apps sandbox (localhost mode): requests through the front door use')))
+        .toHaveLength(1);
+    } finally {
+      info.mockRestore();
+    }
   });
 });
