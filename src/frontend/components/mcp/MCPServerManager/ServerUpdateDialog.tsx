@@ -36,6 +36,7 @@ import {
   buildServer,
 } from './Modals/ServerModal/utils/buildUtils';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
 
 const log = createLogger('frontend/components/mcp/MCPServerManager/ServerUpdateDialog');
 
@@ -71,7 +72,7 @@ const ServerUpdateDialog: React.FC<ServerUpdateDialogProps> = ({
   onUpdated,
 }) => {
   const { t, tp } = useI18n();
-  const [preview, setPreview] = useState<UpdateCommitsPreview | null>(null);
+  const [loadedPreview, setLoadedPreview] = useState<{ key: string; preview: UpdateCommitsPreview | null } | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [running, setRunning] = useState(false);
   const [finished, setFinished] = useState(false);
@@ -91,31 +92,31 @@ const ServerUpdateDialog: React.FC<ServerUpdateDialogProps> = ({
   ];
 
   // Reset transient state whenever the dialog is (re)opened for a server.
-  useEffect(() => {
-    if (open) {
-      setConfirmDiscard(false);
-      setRunning(false);
-      setFinished(false);
-      setErrorMessage(null);
-      setStepStates({});
-      setOutput('');
-    }
-  }, [open, serverName]);
+  useResetOnChange(open ? serverName : null, (openedFor) => {
+    if (openedFor === null) return;
+    setConfirmDiscard(false);
+    setRunning(false);
+    setFinished(false);
+    setErrorMessage(null);
+    setStepStates({});
+    setOutput('');
+  });
 
   // Best-effort "what's new" preview for GitHub remotes.
+  const { remoteUrl, localSha, remoteSha } = updateInfo;
+  const previewKey = open && remoteUrl && localSha && remoteSha ? `${remoteUrl} ${localSha} ${remoteSha}` : null;
+  const preview = loadedPreview && loadedPreview.key === previewKey ? loadedPreview.preview : null;
   useEffect(() => {
-    if (open && updateInfo.remoteUrl && updateInfo.localSha && updateInfo.remoteSha) {
-      let cancelled = false;
-      fetchUpdateCommitsPreview(updateInfo.remoteUrl, updateInfo.localSha, updateInfo.remoteSha)
-        .then((p) => {
-          if (!cancelled) setPreview(p);
-        });
-      return () => {
-        cancelled = true;
-      };
-    }
-    setPreview(null);
-  }, [open, updateInfo.remoteUrl, updateInfo.localSha, updateInfo.remoteSha]);
+    if (!previewKey || !remoteUrl || !localSha || !remoteSha) return;
+    let cancelled = false;
+    fetchUpdateCommitsPreview(remoteUrl, localSha, remoteSha)
+      .then((p) => {
+        if (!cancelled) setLoadedPreview({ key: previewKey, preview: p });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [previewKey, remoteUrl, localSha, remoteSha]);
 
   const setStep = useCallback((key: StepKey, status: StepStatus) => {
     setStepStates((prev) => ({ ...prev, [key]: status }));

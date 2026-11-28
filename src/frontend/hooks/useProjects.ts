@@ -1,6 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useLatest } from '@/frontend/hooks/useLatest';
+import { useResetOnChange } from './useResetOnChange';
+import { useInterval } from './timing';
 
 /** Git state of a project folder, as reported by `/api/projects`. */
 export interface ProjectGitInfo {
@@ -83,6 +86,12 @@ export function switchableBranches(git: ProjectGitInfo | null): string[] {
  * and the chat input chip never disagree, and polls while the page is visible
  * because the branch can also change from a terminal.
  */
+async function readProjects(conversationId: string | null | undefined) {
+  const response = await fetch(projectsUrl(conversationId));
+  const data = await response.json().catch(() => ({})) as ProjectsState & { error?: string };
+  return { response, data };
+}
+
 export function useProjects(conversationId?: string | null): {
   state: ProjectsState | null;
   loading: boolean;
@@ -93,34 +102,37 @@ export function useProjects(conversationId?: string | null): {
   const [state, setState] = useState<ProjectsState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const conversationRef = useRef(conversationId);
-  conversationRef.current = conversationId;
+  const conversationRef = useLatest(conversationId);
   // Identifies this instance's change events: it already holds the answer.
   const instanceRef = useRef({});
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(() => {
     const requested = conversationRef.current;
-    try {
-      const response = await fetch(projectsUrl(requested));
-      const data = await response.json().catch(() => ({})) as ProjectsState & { error?: string };
-      if (requested !== conversationRef.current) return;
-      if (!response.ok) {
-        setError(data.error || 'Projects are unavailable.');
-        return;
-      }
-      setState({ projects: data.projects ?? [], activeProject: data.activeProject ?? null, chat: data.chat ?? null });
-      setError(null);
-    } catch {
-      /* transient: keep the last known state */
-    } finally {
-      if (requested === conversationRef.current) setLoading(false);
-    }
-  }, []);
+    return readProjects(requested)
+      .then(({ response, data }) => {
+        if (requested !== conversationRef.current) return;
+        if (!response.ok) {
+          setError(data.error || 'Projects are unavailable.');
+          return;
+        }
+        setState({ projects: data.projects ?? [], activeProject: data.activeProject ?? null, chat: data.chat ?? null });
+        setError(null);
+      })
+      .catch(() => { /* transient: keep the last known state */ })
+      .finally(() => {
+        if (requested === conversationRef.current) setLoading(false);
+      });
+  }, [conversationRef]);
 
+  // Another conversation shows the loading state until its projects arrive.
+  useResetOnChange(conversationId, () => setLoading(true));
   useEffect(() => {
-    setLoading(true);
     void refresh();
   }, [conversationId, refresh]);
+
+  useInterval(() => {
+    if (document.visibilityState === 'visible') void refresh();
+  }, REFRESH_INTERVAL_MS);
 
   useEffect(() => {
     const onChanged = (event: Event) => {
@@ -130,14 +142,10 @@ export function useProjects(conversationId?: string | null): {
     };
     const onFocus = () => { void refresh(); };
     const onVisible = () => { if (document.visibilityState === 'visible') void refresh(); };
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === 'visible') void refresh();
-    }, REFRESH_INTERVAL_MS);
     window.addEventListener(CHANGED_EVENT, onChanged);
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onVisible);
     return () => {
-      window.clearInterval(timer);
       window.removeEventListener(CHANGED_EVENT, onChanged);
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisible);

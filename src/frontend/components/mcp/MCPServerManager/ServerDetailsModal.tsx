@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   Dialog,
   DialogTitle,
@@ -20,6 +20,7 @@ import EnvEditor from '../MCPEnvManager/EnvEditor';
 import { EnvVarValue } from '@/shared/types/mcp';
 import { createLogger } from '@/utils/logger';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
 
 const log = createLogger('frontend/components/mcp/MCPServerManager/ServerDetailsModal');
 
@@ -67,9 +68,9 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
   const [tab, setTab] = useState<DetailsTab>('tools');
 
   // Reset to the Tools tab whenever a different server is opened.
-  useEffect(() => {
-    if (server) setTab('tools');
-  }, [server?.name]);
+  useResetOnChange(server?.name, (name) => {
+    if (name) setTab('tools');
+  });
 
   const open = server !== null;
   const serverName = server?.name || '';

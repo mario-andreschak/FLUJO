@@ -1,6 +1,6 @@
 'use client';
 
-import React, { memo, useEffect, useState } from 'react';
+import React, { memo } from 'react';
 import { Box, ButtonBase, Stack, Typography } from '@mui/material';
 import { alpha, useTheme } from '@mui/material/styles';
 import AutoAwesomeRoundedIcon from '@mui/icons-material/AutoAwesomeRounded';
@@ -18,6 +18,7 @@ import type {
   ConversationChainNodeStatus,
 } from '@/shared/types/conversationChain';
 import { formatChainToolName } from './presentation';
+import { useReachedAt } from '@/frontend/hooks/timing';
 
 type StatusTone = 'primary' | 'warning' | 'secondary' | 'success' | 'error' | 'default';
 
@@ -100,29 +101,10 @@ function ChainConversationCardComponent({
     : previewRole === 'user'
       ? PersonRoundedIcon
       : AutoAwesomeRoundedIcon;
-  const [completedPreviewHidden, setCompletedPreviewHidden] = useState(() => (
-    conversation.status === 'completed'
-    && conversation.updatedAt > 0
-    && Date.now() >= conversation.updatedAt + COMPLETED_PREVIEW_GRACE_MS
-  ));
-
-  useEffect(() => {
-    if (conversation.status !== 'completed') {
-      setCompletedPreviewHidden(false);
-      return;
-    }
-    const remaining = Math.max(
-      0,
-      conversation.updatedAt + COMPLETED_PREVIEW_GRACE_MS - Date.now(),
-    );
-    if (remaining === 0) {
-      setCompletedPreviewHidden(true);
-      return;
-    }
-    setCompletedPreviewHidden(false);
-    const timer = window.setTimeout(() => setCompletedPreviewHidden(true), remaining);
-    return () => window.clearTimeout(timer);
-  }, [conversation.status, conversation.updatedAt]);
+  // A completed conversation keeps its preview for a grace period, then hides it.
+  const completedPreviewHidden = useReachedAt(
+    conversation.status === 'completed' ? conversation.updatedAt + COMPLETED_PREVIEW_GRACE_MS : undefined,
+  );
 
   return (
     <Stack

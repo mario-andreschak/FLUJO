@@ -186,6 +186,7 @@ export function withWorkspaceRoute<
 >(handler: H): H {
   const invoke = async (...args: unknown[]): Promise<Response> => {
     try {
+      // eslint-disable-next-line flujo/no-double-cast -- the wrapper forwards each route's own arguments; a generic handler type cannot be called with them without widening through unknown
       return await (handler as unknown as (...a: unknown[]) => Promise<Response>)(...args);
     } catch (error) {
       if (!(error instanceof ConversationLogReadPressureError)) throw error;
@@ -195,6 +196,7 @@ export function withWorkspaceRoute<
       });
     }
   };
+  // eslint-disable-next-line flujo/no-double-cast -- the wrapper takes the same arguments as the route it wraps, which TypeScript cannot state for a generic handler
   return (async (request: Request | undefined, ...rest: unknown[]) => {
     // A number of route unit tests (and a few internal callers) invoke handlers
     // such as GET()/PUT() with no argument. Normalize before workspace parsing

@@ -45,21 +45,18 @@ export default function RegistryAccountSettings() {
   const [baseUrl, setBaseUrl] = useState('');
   const [defaultUrl, setDefaultUrl] = useState('');
 
-  const refresh = useCallback(async () => {
-    try {
-      const [s, settings] = await Promise.all([
-        registryService.getStatus(),
-        registryService.getSettings(),
-      ]);
-      setStatus(s);
-      setDefaultUrl(settings.defaultUrl);
-      setBaseUrl(settings.usingDefault ? '' : settings.baseUrl);
-    } catch (err) {
-      log.warn('Failed to load registry account status', err);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const refresh = useCallback(() => Promise.all([
+    registryService.getStatus(),
+    registryService.getSettings(),
+  ]).then(([s, settings]) => {
+    setStatus(s);
+    setDefaultUrl(settings.defaultUrl);
+    setBaseUrl(settings.usingDefault ? '' : settings.baseUrl);
+  }).catch((err) => {
+    log.warn('Failed to load registry account status', err);
+  }).finally(() => {
+    setLoading(false);
+  }), []);
 
   useEffect(() => {
     void refresh();
@@ -73,6 +70,7 @@ export default function RegistryAccountSettings() {
     const params = new URLSearchParams(window.location.search);
     const outcome = params.get('registry_oauth');
     if (!outcome) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the sign-in outcome is read from the address bar once and then removed from it, so it cannot be worked out while rendering
     setMessage(
       outcome === 'success'
         ? { type: 'success', text: t('packages.account.signedIn') }

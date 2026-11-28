@@ -37,6 +37,7 @@ import {
   type GlobalMcpAppLaunchRequest,
 } from '@/frontend/utils/quickActions';
 import { createLogger } from '@/utils/logger';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
 
 const log = createLogger('frontend/components/Navigation/QuickActionsMenu');
 
@@ -105,21 +106,19 @@ export default function QuickActionsMenu({
   });
 
   // A route change means the menu's context is gone; close it.
-  useEffect(() => {
+  useResetOnChange(pathname, () => {
     setAnchorEl(null);
     setToolsMenu(null);
-  }, [pathname]);
+  });
 
   // Always reopen at the top of the hierarchy.
-  useEffect(() => {
-    if (!open) setView('root');
-  }, [open]);
+  useResetOnChange(open, (isOpen) => {
+    if (!isOpen) setView('root');
+  });
 
   // A refresh can remove a server, app, or tool. Never leave a child menu
   // anchored to the stale discovery snapshot while the new result arrives.
-  useEffect(() => {
-    setToolsMenu(null);
-  }, [discoveryId]);
+  useResetOnChange(discoveryId, () => setToolsMenu(null));
 
   // Keep the keyboard inside the menu when the user drills in or back out:
   // the previously focused item unmounts with the view it belonged to.

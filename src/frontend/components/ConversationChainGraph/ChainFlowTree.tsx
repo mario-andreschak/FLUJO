@@ -157,6 +157,8 @@ export default function ChainFlowTree({
     };
   }, [fullscreen]);
 
+  const pendingZoomFocus = useRef<{ contentX: number; contentY: number; x: number; y: number } | null>(null);
+
   /** Preserve the content under the pointer/viewport centre while scaling. */
   const changeZoom = useCallback((requestedZoom: number, focalX?: number, focalY?: number) => {
     const viewport = treeViewportRef.current;
@@ -165,13 +167,23 @@ export default function ChainFlowTree({
 
     const x = focalX ?? viewport.clientWidth / 2;
     const y = focalY ?? viewport.clientHeight / 2;
-    const contentX = (viewport.scrollLeft + x) / zoom;
-    const contentY = (viewport.scrollTop + y) / zoom;
+    pendingZoomFocus.current = {
+      contentX: (viewport.scrollLeft + x) / zoom,
+      contentY: (viewport.scrollTop + y) / zoom,
+      x,
+      y,
+    };
     setZoom(nextZoom);
-    window.requestAnimationFrame(() => {
-      viewport.scrollLeft = Math.max(0, contentX * nextZoom - x);
-      viewport.scrollTop = Math.max(0, contentY * nextZoom - y);
-    });
+  }, [zoom]);
+
+  // Once the new zoom is laid out, scroll so the focal point stays put.
+  useLayoutEffect(() => {
+    const focus = pendingZoomFocus.current;
+    const viewport = treeViewportRef.current;
+    if (!focus || !viewport) return;
+    pendingZoomFocus.current = null;
+    viewport.scrollLeft = Math.max(0, focus.contentX * zoom - focus.x);
+    viewport.scrollTop = Math.max(0, focus.contentY * zoom - focus.y);
   }, [zoom]);
 
   const handleWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {

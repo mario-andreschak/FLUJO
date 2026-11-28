@@ -59,6 +59,8 @@ import {
   Chip,
 } from "@mui/material";
 import { useI18n } from "@/frontend/contexts/I18nContext";
+import { useResetOnChange, useStateFromProp } from "@/frontend/hooks/useResetOnChange";
+import { useInterval, useLater, useTimeout } from "@/frontend/hooks/timing";
 
 interface ServerCardProps {
   name: string;
@@ -179,7 +181,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
   const [toastSeverity, setToastSeverity] = useState<"success" | "error">(
     "success",
   );
-  const [isPolling, setIsPolling] = useState(false);
+  const [retryPending, setRetryPending] = useState(false);
   const [isResettingTokens, setIsResettingTokens] = useState(false);
   const [isPreparingAuthorization, setIsPreparingAuthorization] =
     useState(false);
@@ -187,33 +189,15 @@ const ServerCard: React.FC<ServerCardProps> = ({
     useState<AuthorizationPromptState | null>(null);
   const authorizationPromptRef = useRef<AuthorizationPromptState | null>(null);
   const authorizationPrepareAbortRef = useRef<AbortController | null>(null);
-  const authorizationPollRef = useRef<ReturnType<typeof setInterval> | null>(
-    null,
-  );
-  // Local optimistic state for the "expose as MCP server" toggle (#17A).
-  const [exposed, setExposed] = useState(exposeAsMcpServer);
-  // Local optimistic state for the "MCP Apps" opt-in toggle (#97).
-  const [appsEnabled, setAppsEnabled] = useState(enableMcpApps);
-  const [skillsEnabled, setSkillsEnabled] = useState(enableMcpSkills);
+  // Local optimistic state for the "expose as MCP server" (#17A), "MCP Apps"
+  // (#97) and skills toggles. Each starts over when the parent reloads configs.
+  const [exposed, setExposed] = useStateFromProp(exposeAsMcpServer);
+  const [appsEnabled, setAppsEnabled] = useStateFromProp(enableMcpApps);
+  const [skillsEnabled, setSkillsEnabled] = useStateFromProp(enableMcpSkills);
   const muiTheme = useTheme();
-
-  // Keep the toggle in sync if the parent reloads configs.
-  useEffect(() => {
-    setExposed(exposeAsMcpServer);
-  }, [exposeAsMcpServer]);
-
-  useEffect(() => {
-    setAppsEnabled(enableMcpApps);
-  }, [enableMcpApps]);
-
-  useEffect(() => {
-    setSkillsEnabled(enableMcpSkills);
-  }, [enableMcpSkills]);
 
   useEffect(
     () => () => {
-      if (authorizationPollRef.current)
-        clearInterval(authorizationPollRef.current);
       authorizationPrepareAbortRef.current?.abort();
       const prompt = authorizationPromptRef.current;
       if (prompt) {
@@ -334,67 +318,34 @@ const ServerCard: React.FC<ServerCardProps> = ({
   }[status];
 
   // Poll for status updates when server is connecting or initializing
-  useEffect(() => {
-    if (
-      (status === "connecting" || status === "initialization") &&
-      enabled &&
-      !pickerMode
-    ) {
-      setIsPolling(true);
-      const timer = setTimeout(() => {
-        log.debug(`Polling status for server: ${name}`);
-        onRetry();
-      }, 2000);
-
-      return () => {
-        clearTimeout(timer);
-        setIsPolling(false);
-      };
-    } else if (status !== "connecting" && status !== "initialization") {
-      setIsPolling(false);
-    }
-  }, [status, enabled, name, onRetry]);
-
-  // Reference to store the timeout ID
-  const [retryTimeoutId, setRetryTimeoutId] = useState<ReturnType<
-    typeof setTimeout
-  > | null>(null);
-
-  // Clear the timeout when component unmounts or when status changes
-  useEffect(() => {
-    return () => {
-      if (retryTimeoutId) {
-        clearTimeout(retryTimeoutId);
-      }
-    };
-  }, [retryTimeoutId]);
+  const autoPolling =
+    (status === "connecting" || status === "initialization") &&
+    enabled &&
+    !pickerMode;
+  // A manual retry shows the spinner until the status moves on or 10 s pass.
+  useResetOnChange(status, () => setRetryPending(false));
+  const isPolling = autoPolling || retryPending;
+  useTimeout(() => {
+    log.debug(`Polling status for server: ${name}`);
+    onRetry();
+  }, autoPolling ? 2000 : null, `${status}:${name}`);
+  const retrySpinnerLater = useLater();
+  const retrySoon = useLater();
+  const restartLater = useLater();
 
   // Handle retry button click
   const handleRetryClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     log.debug(`Retry button clicked for server: ${name}`);
 
-    // Clear any existing timeout
-    if (retryTimeoutId) {
-      clearTimeout(retryTimeoutId);
-    }
-
     // Set polling immediately to show spinner right away
-    setIsPolling(true);
+    setRetryPending(true);
 
     // Then call the retry function
     onRetry();
 
     // If status doesn't change to 'connecting' or 'initialization' within 10 seconds, stop showing spinner
-    const timeoutId = setTimeout(() => {
-      if (status !== "connecting" && status !== "initialization") {
-        setIsPolling(false);
-      }
-      setRetryTimeoutId(null);
-    }, 10000);
-
-    // Store the timeout ID
-    setRetryTimeoutId(timeoutId);
+    retrySpinnerLater(() => setRetryPending(false), 10000);
   };
 
   // Handle reset OAuth tokens button click
@@ -426,9 +377,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
       setShowToast(true);
 
       // Trigger a retry to update the server status
-      setTimeout(() => {
-        onRetry();
-      }, 500);
+      retrySoon(onRetry, 500);
     } catch (error) {
       log.error(`Failed to reset OAuth tokens for ${name}`, error);
       setToastMessage(
@@ -453,26 +402,16 @@ const ServerCard: React.FC<ServerCardProps> = ({
     stdioOAuth?.blockingAuthorization,
   );
 
-  const startAuthorizationStatusPolling = () => {
-    if (authorizationPollRef.current)
-      clearInterval(authorizationPollRef.current);
-    let attempts = 0;
-    authorizationPollRef.current = setInterval(() => {
-      attempts += 1;
-      onRetry();
-      if (attempts >= 60 && authorizationPollRef.current) {
-        clearInterval(authorizationPollRef.current);
-        authorizationPollRef.current = null;
-      }
-    }, 2_000);
-  };
-
-  useEffect(() => {
-    if (!pendingAuthorization && authorizationPollRef.current) {
-      clearInterval(authorizationPollRef.current);
-      authorizationPollRef.current = null;
-    }
-  }, [pendingAuthorization]);
+  // While an authorization is pending, look at the server status every 2 s, up to 60 times.
+  const [authorizationChecksLeft, setAuthorizationChecksLeft] = useState(0);
+  const startAuthorizationStatusPolling = () => setAuthorizationChecksLeft(60);
+  useResetOnChange(Boolean(pendingAuthorization), (pending) => {
+    if (!pending) setAuthorizationChecksLeft(0);
+  });
+  useInterval(() => {
+    onRetry();
+    setAuthorizationChecksLeft((left) => Math.max(0, left - 1));
+  }, pendingAuthorization && authorizationChecksLeft > 0 ? 2_000 : null);
 
   const handleAuthenticate = async () => {
     log.debug(`Authenticate button clicked for server: ${name}`);
@@ -671,7 +610,7 @@ const ServerCard: React.FC<ServerCardProps> = ({
     onToggle(false);
 
     // Wait a short time for the disconnect to complete
-    setTimeout(() => {
+    restartLater(() => {
       // Enable the server
       onToggle(true);
       log.info(`Server ${name} restarted`);

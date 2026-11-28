@@ -33,6 +33,8 @@ import {
   clearMeetingLaunchIntent,
   parseMeetingLaunchIntent,
 } from './meetingLaunchIntent';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
+import { useDebouncedCallback } from '@/frontend/hooks/timing';
 
 const log = createLogger('frontend/components/Meetings');
 
@@ -66,7 +68,6 @@ export default function MeetingsManager() {
   const [streamConnected, setStreamConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [wizardError, setWizardError] = useState<string | null>(null);
-  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!launchIntent || typeof window === 'undefined') return;
@@ -79,58 +80,62 @@ export default function MeetingsManager() {
     );
   }, [launchIntent]);
 
-  const loadList = useCallback(async () => {
-    setListLoading(true);
-    try {
-      const items = await meetingsService.list();
+  /** Fetches the meeting list; the list starts loading, and loadList shows it again. */
+  const fetchList = useCallback(() => meetingsService.list()
+    .then((items) => {
       setMeetings(items.slice().sort((a, b) => b.updatedAt - a.updatedAt));
       setError(null);
-    } catch (loadError) {
+    })
+    .catch((loadError) => {
       log.warn('Failed to load meetings', loadError);
       setError(loadError instanceof Error ? loadError.message : t('meetings.error.load'));
-    } finally {
-      setListLoading(false);
-    }
-  }, [t]);
+    })
+    .finally(() => setListLoading(false)), [t]);
 
-  const loadDetail = useCallback(async (id: string, foreground = false) => {
-    if (foreground) setDetailLoading(true);
-    try {
-      const next = await meetingsService.get(id);
+  const loadList = useCallback(() => {
+    setListLoading(true);
+    return fetchList();
+  }, [fetchList]);
+
+  /** `foreground` ends the loading state that choosing a meeting started. */
+  const loadDetail = useCallback((id: string, foreground = false) => meetingsService.get(id)
+    .then((next) => {
       setDetail((current) => ({
         meeting: next.meeting,
         events: mergeEvents(current?.meeting.id === id ? current.events : [], next.events),
       }));
       setError(null);
-    } catch (loadError) {
+    })
+    .catch((loadError) => {
       log.warn('Failed to load meeting', { id, loadError });
       setError(loadError instanceof Error ? loadError.message : t('meetings.error.loadOne'));
-    } finally {
+    })
+    .finally(() => {
       if (foreground) setDetailLoading(false);
-    }
-  }, [t]);
+    }), [t]);
 
   useEffect(() => {
-    void loadList();
-  }, [loadList]);
+    void fetchList();
+  }, [fetchList]);
 
+  // A burst of live events reloads the meeting once.
+  const refreshDetailSoon = useDebouncedCallback((id: string) => void loadDetail(id), 220);
+
+  useResetOnChange(selectedId, (id) => {
+    if (!id) setDetail(null);
+    setDetailLoading(Boolean(id));
+  });
   useEffect(() => {
-    if (!selectedId) {
-      setDetail(null);
-      setDetailLoading(false);
-      return;
-    }
-    void loadDetail(selectedId, true);
+    if (selectedId) void loadDetail(selectedId, true);
   }, [loadDetail, selectedId]);
 
   const activeStatus = detail?.meeting.id === selectedId
     && detail.meeting.status === 'running';
 
+  // A new live stream (or none) starts disconnected until it opens.
+  useResetOnChange(selectedId && activeStatus ? selectedId : null, () => setStreamConnected(false));
   useEffect(() => {
-    if (!selectedId || !activeStatus) {
-      setStreamConnected(false);
-      return;
-    }
+    if (!selectedId || !activeStatus) return;
 
     const source = meetingsService.subscribe(selectedId, {
       onOpen: () => setStreamConnected(true),
@@ -139,17 +144,16 @@ export default function MeetingsManager() {
         setDetail((current) => current?.meeting.id === selectedId
           ? { ...current, events: mergeEvents(current.events, [event]) }
           : current);
-        if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-        refreshTimerRef.current = setTimeout(() => void loadDetail(selectedId), 220);
+        refreshDetailSoon(selectedId);
       },
     }, detail?.events.at(-1) ? detail.events.at(-1)!.seq + 1 : undefined);
 
     return () => {
       source.close();
       setStreamConnected(false);
-      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+      refreshDetailSoon.cancel();
     };
-  }, [activeStatus, loadDetail, selectedId]);
+  }, [activeStatus, refreshDetailSoon, selectedId]);
 
   const selectMeeting = (id: string | null) => {
     setSelectedId(id);

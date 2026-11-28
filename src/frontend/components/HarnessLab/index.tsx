@@ -65,11 +65,11 @@ export default function HarnessLab() {
     return data as T;
   }, [workspace]);
 
-  const refresh = useCallback(async (signal?: AbortSignal) => {
-    const data = await api<{ models: ModelOption[]; runs: RunSummary[] }>('', undefined, signal);
-    setModels(data.models); setHistory(data.runs);
-    setModelId(current => current || data.models[0]?.id || '');
-  }, [api]);
+  const refresh = useCallback((signal?: AbortSignal) => api<{ models: ModelOption[]; runs: RunSummary[] }>('', undefined, signal)
+    .then((data) => {
+      setModels(data.models); setHistory(data.runs);
+      setModelId(current => current || data.models[0]?.id || '');
+    }), [api]);
 
   useEffect(() => {
     const initial = new AbortController();

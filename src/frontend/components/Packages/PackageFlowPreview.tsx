@@ -58,6 +58,31 @@ const edgeTypes = {
 /** Hard cap: past this a package graph is outlined textually, never rendered. */
 const MAX_PREVIEW_NODES = 400;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** A package graph node that React Flow can draw: an id and a position; other fields pass through. */
+function previewNode(value: unknown): Node | null {
+  if (!isRecord(value) || typeof value.id !== 'string' || !isRecord(value.position)) return null;
+  const { x, y } = value.position;
+  if (typeof x !== 'number' || typeof y !== 'number') return null;
+  return {
+    ...value,
+    id: value.id,
+    position: { x, y },
+    data: isRecord(value.data) ? value.data : {},
+    type: typeof value.type === 'string' ? value.type : undefined,
+  };
+}
+
+/** A package graph edge that React Flow can draw: an id, a source and a target. */
+function previewEdge(value: unknown): Edge | null {
+  if (!isRecord(value) || typeof value.id !== 'string'
+    || typeof value.source !== 'string' || typeof value.target !== 'string') return null;
+  return { ...value, id: value.id, source: value.source, target: value.target };
+}
+
 interface Props {
   flow: PackageFlowInfo;
   /** Start collapsed to the textual outline (large packages stay responsive). */
@@ -75,17 +100,14 @@ export default function PackageFlowPreview({ flow, defaultTextual = false }: Pro
       return { nodes: [] as Node[], edges: [] as Edge[], error: 'too many nodes' };
     }
     try {
-      const nodes = (flow.graph.nodes ?? [])
-        .filter((n): n is Record<string, unknown> => Boolean(n) && typeof n === 'object')
-        .map((n) => ({
-          ...(n as unknown as Node),
-          draggable: false,
-          selectable: false,
-          connectable: false,
-        })) as Node[];
-      const edges = (flow.graph.edges ?? [])
-        .filter((e): e is Record<string, unknown> => Boolean(e) && typeof e === 'object')
-        .map((e) => ({ ...(e as unknown as Edge), selectable: false })) as Edge[];
+      const nodes = (flow.graph.nodes ?? []).flatMap((n) => {
+        const node = previewNode(n);
+        return node ? [{ ...node, draggable: false, selectable: false, connectable: false }] : [];
+      });
+      const edges = (flow.graph.edges ?? []).flatMap((e) => {
+        const edge = previewEdge(e);
+        return edge ? [{ ...edge, selectable: false }] : [];
+      });
       return { nodes, edges, error: null as string | null };
     } catch (err) {
       return {

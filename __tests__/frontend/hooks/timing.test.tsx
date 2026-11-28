@@ -1,10 +1,12 @@
 import { act, renderHook } from '@testing-library/react';
 import {
+  frameLoop,
   useAnimationFrame,
   useBatchedCallback,
   useDebouncedCallback,
   useDebouncedValue,
   useInterval,
+  useLater,
   useReachedAt,
   useTimeout,
 } from '@/frontend/hooks/timing';
@@ -197,5 +199,66 @@ describe('timing hooks', () => {
     unmount();
     act(() => jest.advanceTimersByTime(20));
     expect(leftOver).not.toHaveBeenCalled();
+  });
+
+  it('useLater runs one pending callback, replaces it on a new call and drops it on unmount', () => {
+    const first = jest.fn();
+    const second = jest.fn();
+    const { result, unmount } = renderHook(() => useLater());
+    const later = result.current;
+
+    act(() => {
+      later(first, 100);
+      later(second, 100);
+      jest.advanceTimersByTime(100);
+    });
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      later(first, 'frame');
+      later.cancel();
+      jest.advanceTimersByTime(100);
+    });
+    expect(first).not.toHaveBeenCalled();
+
+    later(first, 100);
+    unmount();
+    expect(jest.getTimerCount()).toBe(0);
+    expect(result.current).toBe(later);
+  });
+
+  it('frameLoop paints every frame until its tick says stop, and can start again', () => {
+    const frames: Array<(now: number) => void> = [];
+    const request = jest.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    const cancel = jest.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {});
+    try {
+      let keepGoing = true;
+      const tick = jest.fn(() => keepGoing);
+      const loop = frameLoop(tick);
+      loop.start();
+      loop.start();
+      expect(frames).toHaveLength(1);
+
+      frames.shift()!(16);
+      expect(tick).toHaveBeenLastCalledWith(16);
+      expect(frames).toHaveLength(1);
+
+      keepGoing = false;
+      frames.shift()!(32);
+      expect(frames).toHaveLength(0);
+
+      keepGoing = true;
+      loop.start();
+      expect(frames).toHaveLength(1);
+      loop.stop();
+      expect(cancel).toHaveBeenCalledTimes(1);
+    } finally {
+      request.mockRestore();
+      cancel.mockRestore();
+    }
   });
 });

@@ -55,6 +55,7 @@ import { writeWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
 import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useAskFlujoPage } from '@/frontend/contexts/AskFlujoContext';
+import { useTimeout } from '@/frontend/hooks/timing';
 
 const log = createLogger('app/flows/page');
 
@@ -168,6 +169,15 @@ const FlowsPage = () => {
     severity: 'info'
   });
 
+  const showSnackbar = useCallback((message: string, severity: 'success' | 'error' | 'info' | 'warning' = 'info') => {
+    log.debug('Showing snackbar', { message, severity });
+    setSnackbar({
+      open: true,
+      message,
+      severity
+    });
+  }, []);
+
   // Load flows on component mount and when selected flow changes
   useEffect(() => {
     let cancelled = false;
@@ -275,16 +285,6 @@ const FlowsPage = () => {
     currentUrl: selectedFlow ? magicLinkPath({ kind: 'flow-editor', id: selectedFlow }) : '/flows',
   });
 
-  // Show snackbar notification (declared before its first useCallback consumer)
-  const showSnackbar = useCallback((message: string, severity: 'success' | 'error' | 'info' | 'warning' = 'info') => {
-    log.debug('Showing snackbar', { message, severity });
-    setSnackbar({
-      open: true,
-      message,
-      severity
-    });
-  }, []);
-
   // Handle back to dashboard — routed through the builder's navigation
   // guard so unsaved changes get a Save/Discard dialog first.
   const handleBackToDashboard = useCallback(() => {
@@ -330,13 +330,11 @@ const FlowsPage = () => {
 
   // Auto-dismiss the banner after a few seconds (re-armed whenever a new
   // message is shown). Errors stay until dismissed so they aren't missed.
-  useEffect(() => {
-    if (!snackbar.open || snackbar.severity === 'error') return;
-    const timer = setTimeout(() => {
-      setSnackbar(prev => ({ ...prev, open: false }));
-    }, 6000);
-    return () => clearTimeout(timer);
-  }, [snackbar.open, snackbar.message, snackbar.severity]);
+  useTimeout(
+    () => setSnackbar(prev => ({ ...prev, open: false })),
+    snackbar.open && snackbar.severity !== 'error' ? 6000 : null,
+    `${snackbar.severity}:${snackbar.message}`,
+  );
 
   // Validate flow name
   const validateFlowName = useCallback((name: string): string | null => {
@@ -824,6 +822,7 @@ const FlowsPage = () => {
     // editor URL via enterEditor() — no separate replace needed to drop
     // `?create=assistant` (a replace here would just clear the mode=edit we
     // just pushed).
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the arrival link is read from the address bar once the flow list has loaded, and opening the editor replaces that address, so it can only be taken once, after mount
     createNewFlow('guided');
   }, [createNewFlow, isLoading]);
 

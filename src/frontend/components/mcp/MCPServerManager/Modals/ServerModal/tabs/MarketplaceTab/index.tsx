@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useLatest } from '@/frontend/hooks/useLatest';
 import { TabProps, MessageState } from '../../types';
 import {
   RegistryListResponse,
@@ -68,6 +69,7 @@ import TuneIcon from '@mui/icons-material/Tune';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import Trans from '@/frontend/components/shared/Trans';
 import { getSelectedWorkspace, onWorkspaceChanged } from '@/frontend/utils/workspaceSelection';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
 
 const PAGE_SIZE = 30;
 type DiscoveryCoverage = { bounded: boolean; partial: boolean; truncated: boolean };
@@ -100,24 +102,25 @@ const MarketplaceTab: React.FC<TabProps & { active?: boolean }> = ({
   // Monotonic id so stale fetch responses (rapid re-searches) can't clobber newer ones
   const fetchIdRef = useRef(0);
   const fetchRequest = useRef<AbortController | null>(null);
-  const activeRef = useRef(active);
-  activeRef.current = active;
+  const activeRef = useLatest(active);
   const cancelFetch = useCallback(() => {
     fetchIdRef.current++;
     fetchRequest.current?.abort();
     fetchRequest.current = null;
   }, []);
   useEffect(() => () => cancelFetch(), [cancelFetch]);
+  // Leaving the tab stops a running search and says so.
+  useResetOnChange(active, (isActive) => {
+    if (isActive) return;
+    const interrupted = isLoading || isLoadingMore;
+    setIsLoading(false);
+    setIsLoadingMore(false);
+    setOpenFilter(null);
+    if (interrupted) setMessage({ type: 'info', text: t('mcp.marketplace.searchInterrupted') });
+  });
   useEffect(() => {
-    if (!active) {
-      const interrupted = fetchRequest.current !== null;
-      cancelFetch();
-      setIsLoading(false);
-      setIsLoadingMore(false);
-      setOpenFilter(null);
-      if (interrupted) setMessage({ type: 'info', text: t('mcp.marketplace.searchInterrupted') });
-    }
-  }, [active, cancelFetch, t]);
+    if (!active) cancelFetch();
+  }, [active, cancelFetch]);
   const resetSelection = registryInstall.close;
   useEffect(() => onWorkspaceChanged(() => {
     cancelFetch();

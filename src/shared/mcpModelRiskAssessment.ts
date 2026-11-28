@@ -2,7 +2,9 @@ import type { Model } from '@/shared/types/model';
 import { resolveModelAdapter } from '@/shared/types/model/provider';
 
 /** A repository prompt must never reach an agent or a dedicated media route. */
-export function supportsMcpModelRiskAssessment(model: Model): boolean {
+export function supportsMcpModelRiskAssessment(
+  model: Pick<Model, 'provider' | 'adapter' | 'outputModalities'> & { fallbackPolicy?: unknown },
+): boolean {
   const adapter = resolveModelAdapter(model.provider, model.adapter);
   const outputs = (model.outputModalities ?? []).filter(value => typeof value === 'string').map(value => value.trim().toLowerCase());
   return !model.fallbackPolicy && ['openai', 'openai-responses', 'azure', 'anthropic', 'gemini'].includes(adapter)

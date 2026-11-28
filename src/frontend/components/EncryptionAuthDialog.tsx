@@ -35,6 +35,13 @@ import { useInterval } from '@/frontend/hooks/timing';
 /** While the system key store does not answer, look again this often so the dialog closes once FLUJO got the key. */
 const SYSTEM_KEY_RECHECK_MS = 10_000;
 
+async function readEncryptionStatus(workspace: string) {
+  const response = await fetch(withWorkspaceUrl('/api/encryption/secure', workspace), { method: 'POST',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'status' }) });
+  if (!response.ok) throw new Error('Encryption status unavailable');
+  return response.json();
+}
+
 export default function EncryptionAuthDialog() {
   const { verifyKey } = useStorage();
   const { t } = useI18n();
@@ -54,18 +61,14 @@ export default function EncryptionAuthDialog() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isCheckingStatus, setIsCheckingStatus] = useState(true);
 
-  // Check if user encryption is enabled on component mount
-  const checkEncryptionStatus = useCallback(async () => {
+  // Check if user encryption is enabled on component mount. The checking state
+  // starts on; recheckEncryptionStatus shows it again for later checks.
+  const checkEncryptionStatus = useCallback(() => {
       const generation = ++statusGeneration.current;
       const current = () => mounted.current && generation === statusGeneration.current;
       log.debug('Checking encryption status');
-      try {
-        setIsCheckingStatus(true);
-        
-        const response = await fetch(withWorkspaceUrl('/api/encryption/secure', workspace), { method: 'POST',
-          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'status' }) });
-        if (!response.ok) throw new Error('Encryption status unavailable');
-        const status = await response.json();
+      return readEncryptionStatus(workspace)
+      .then((status) => {
         if (!current()) return;
         if (status.protection === 'migration-pending' && status.initialized === true && status.locked === true) {
           setMigrationPending(true); setOperatorUnavailable(false);
@@ -116,15 +119,20 @@ export default function EncryptionAuthDialog() {
         log.info('User encryption enabled and not authenticated, showing dialog');
         setIsOpen(true);
         setIsCheckingStatus(false);
-      } catch (error) {
+      })
+      .catch(() => {
         if (!current()) return;
         log.error('Failed to check encryption status');
         setIsCheckingStatus(false);
         setError('encryption.unlock.error');
         setIsAuthenticated(false);
         setIsOpen(true);
-      }
+      });
     }, [workspace]);
+  const recheckEncryptionStatus = useCallback(() => {
+    setIsCheckingStatus(true);
+    return checkEncryptionStatus();
+  }, [checkEncryptionStatus]);
   useEffect(() => {
     mounted.current = true;
     void checkEncryptionStatus();
@@ -141,11 +149,11 @@ export default function EncryptionAuthDialog() {
       setIsAuthenticated(false);
       setIsCheckingStatus(false);
       setIsOpen(true);
-      void checkEncryptionStatus();
+      void recheckEncryptionStatus();
     };
     window.addEventListener(ENCRYPTION_LOCKED_EVENT, onLocked);
     return () => window.removeEventListener(ENCRYPTION_LOCKED_EVENT, onLocked);
-  }, [checkEncryptionStatus]);
+  }, [recheckEncryptionStatus]);
 
   const handleVerify = async () => {
     if (verifyBusy.current || migrationPending || operatorUnavailable) return;
@@ -192,7 +200,7 @@ export default function EncryptionAuthDialog() {
     }
   };
 
-  useInterval(() => { if (!verifyBusy.current) void checkEncryptionStatus(); },
+  useInterval(() => { if (!verifyBusy.current) void recheckEncryptionStatus(); },
     systemKey && isOpen && !isAuthenticated ? SYSTEM_KEY_RECHECK_MS : null);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -219,7 +227,7 @@ export default function EncryptionAuthDialog() {
           <Typography variant="h6">{t('encryption.unlock.title')}</Typography>
         </Box>
       </DialogTitle>
-      {migrationPending ? <DialogContent><CredentialMigrationRecovery workspace={workspace} onSettled={checkEncryptionStatus} /></DialogContent> : <>
+      {migrationPending ? <DialogContent><CredentialMigrationRecovery workspace={workspace} onSettled={recheckEncryptionStatus} /></DialogContent> : <>
       <DialogContent>
         {error && (
           <Alert severity="error" sx={{ mb: 2 }}>

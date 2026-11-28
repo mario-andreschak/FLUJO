@@ -121,7 +121,8 @@ export default function PersonaRecoverySettings() {
     const link = document.createElement('a');
     link.href = url; link.download = `flujo-persona-recovery-${backup.summary.captureId}.zip`;
     document.body.appendChild(link); link.click(); link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1_000);
+    // The click has handed the file to the browser's download, like every other download here.
+    URL.revokeObjectURL(url);
     setBackup(null);
   };
   const contents = (counts: Record<string, number>) => t('settings.personaRecovery.contents', {

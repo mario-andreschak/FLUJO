@@ -10,6 +10,7 @@ import {
   resolveScrollBehavior,
   resolveScrollElement,
 } from '@/frontend/hooks/scrollTarget';
+import { useLater } from './timing';
 
 /** Tolerance (px) used when picking the previous/next anchor so repeated clicks advance. */
 const ANCHOR_TOLERANCE = 8;
@@ -100,23 +101,9 @@ export function useScrollNav<T extends HTMLElement = HTMLDivElement>(
     );
   }, [resolveEl, topThreshold, bottomThreshold]);
 
-  // rAF-throttled scroll handling; also used as the exported `onScroll`.
-  const frameRef = useRef(0);
-  const scheduleMeasure = useCallback(() => {
-    if (typeof window === 'undefined') {
-      measure();
-      return;
-    }
-    if (typeof window.requestAnimationFrame !== 'function') {
-      measure();
-      return;
-    }
-    if (frameRef.current) window.cancelAnimationFrame(frameRef.current);
-    frameRef.current = window.requestAnimationFrame(() => {
-      frameRef.current = 0;
-      measure();
-    });
-  }, [measure]);
+  // Scroll and resize bursts measure once per animation frame.
+  const measureLater = useLater();
+  const scheduleMeasure = useCallback(() => measureLater(measure, 'frame'), [measureLater, measure]);
 
   const onScroll = useCallback(() => {
     measure();
@@ -140,25 +127,23 @@ export function useScrollNav<T extends HTMLElement = HTMLDivElement>(
       if (el.firstElementChild) observer.observe(el.firstElementChild);
     }
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the scroll position and sizes exist only once the browser has laid the surface out, so they are measured here, not while rendering
     measure();
 
     return () => {
-      if (frameRef.current && typeof window.cancelAnimationFrame === 'function') {
-        window.cancelAnimationFrame(frameRef.current);
-        frameRef.current = 0;
-      }
+      measureLater.cancel();
       el?.removeEventListener('scroll', handler);
       window.removeEventListener('scroll', handler);
       window.removeEventListener('resize', handler);
       observer?.disconnect();
     };
      
-  }, [scheduleMeasure, measure, ref]);
+  }, [scheduleMeasure, measure, measureLater, ref]);
 
   // Re-measure when the caller's content changes (async load, load-more, filter).
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- new content changes the scroll sizes only after the browser lays it out, so it is measured here, not while rendering
     measure();
-     
   }, deps);
 
   const scrollTo = useCallback(

@@ -41,10 +41,9 @@ export default function SpeechRecognitionSettings() {
     [settings?.speech],
   );
 
+  // Runs once on mount; the models start out loading.
   useEffect(() => {
     let cancelled = false;
-    setModelsLoading(true);
-
     void modelService.loadModels()
       .then((loaded) => {
         if (!cancelled) {

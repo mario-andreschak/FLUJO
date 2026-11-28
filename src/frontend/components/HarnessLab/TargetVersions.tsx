@@ -11,6 +11,13 @@ interface ProfileView extends Omit<HarnessProfile, 'versions'> {
   versions: Omit<HarnessVersion, 'flow'>[];
   queue: { pendingTasks: number; experimentId?: string; nextRunAt?: number };
 }
+async function readTargets(workspace: string, signal?: AbortSignal): Promise<{ targets: TargetOption[]; profiles: ProfileView[] }> {
+  const response = await fetch(withWorkspaceUrl('/api/harness/profiles', workspace), { signal });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Could not load improvement targets.');
+  return data as { targets: TargetOption[]; profiles: ProfileView[] };
+}
+
 export default function TargetVersions({ workspace, enabled, models, onSelect, onExperiment }: {
   workspace: string; enabled: boolean; models: Array<{ id: string; label: string }>;
   onSelect: (option: TargetOption | undefined) => void; onExperiment: (id: string) => void;
@@ -25,13 +32,11 @@ export default function TargetVersions({ workspace, enabled, models, onSelect, o
   const [inspected, setInspected] = useState<string>();
   const profile = profiles.find(item => item.id === selected);
   const option = targets.find(item => item.id === selected);
-  const refresh = useCallback(async (signal?: AbortSignal) => {
-    const response = await fetch(withWorkspaceUrl('/api/harness/profiles', workspace), { signal });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || 'Could not load improvement targets.');
-    setTargets(data.targets); setProfiles(data.profiles);
-    return data as { targets: TargetOption[]; profiles: ProfileView[] };
-  }, [workspace]);
+  const refresh = useCallback((signal?: AbortSignal) => readTargets(workspace, signal)
+    .then((data) => {
+      setTargets(data.targets); setProfiles(data.profiles);
+      return data;
+    }), [workspace]);
   useEffect(() => {
     const controller = new AbortController();
     void refresh(controller.signal).then(data => {

@@ -9,6 +9,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { useLatest } from '@/frontend/hooks/useLatest';
 import { usePathname } from 'next/navigation';
 import type {
   AskFlujoActionHandler,
@@ -139,10 +140,8 @@ export function useAskFlujoPage(
 ) {
   const { registerPage } = useAskFlujo();
   const id = useRef(Symbol('ask-flujo-page'));
-  const contextRef = useRef(context);
-  const handlerRef = useRef(handleAction);
-  contextRef.current = context;
-  handlerRef.current = handleAction;
+  const contextRef = useLatest(context);
+  const handlerRef = useLatest(handleAction);
 
   useEffect(() => registerPage(
     id.current,

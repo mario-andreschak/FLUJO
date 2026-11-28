@@ -48,12 +48,26 @@ import { magicLinkPath } from '@/frontend/utils/magicLink';
 import { navigateWorkspaceRoute } from '@/frontend/utils/workspaceNavigation';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import FallbackPolicyDialog from '@/frontend/components/models/FallbackPolicyDialog';
+import { useHydrated } from '@/frontend/hooks/useBrowserValue';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
 
 const log = createLogger('app/models/ModelClient');
 
 function errorMessage(error: unknown): string | undefined {
   return error instanceof Error ? error.message : undefined;
 }
+
+const blankModelDraft = (): Model => ({
+  id: uuidv4(),
+  name: '',
+  displayName: '',
+  description: '',
+  ApiKey: '',
+  baseUrl: '',
+  provider: 'openai',
+  promptTemplate: '',
+  temperature: '0.0',
+} as Model);
 
 export default function ModelClient() {
   const { t } = useI18n();
@@ -67,7 +81,8 @@ export default function ModelClient() {
   const searchInputRef = useAutoFocusSearch();
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [serviceReady, setServiceReady] = useState(false);
+  // The model service lives in the browser: it is ready once this page has hydrated.
+  const serviceReady = useHydrated();
   const [addMenuAnchor, setAddMenuAnchor] = useState<HTMLElement | null>(null);
   const [conversionModel, setConversionModel] = useState<
     Pick<Model, 'id' | 'name' | 'displayName'> | null
@@ -76,7 +91,9 @@ export default function ModelClient() {
   // In-memory draft for a brand-new model (add mode). It is NOT persisted to disk until the
   // user clicks Save, which replaces the old approach of writing a "preliminary" model record
   // immediately and cleaning it up on cancel.
-  const [newModelDraft, setNewModelDraft] = useState<Model | null>(null);
+  const [newModelDraft, setNewModelDraft] = useState<Model | null>(
+    () => searchParams.get('add') === 'manual' ? blankModelDraft() : null,
+  );
   const [policyDraft, setPolicyDraft] = useState<Model | null>(null);
   // #374: whether THIS instance pushed the current `?edit=`/`?add=` history
   // entry (vs. it being present on initial load from a deep link) — lets
@@ -106,48 +123,10 @@ export default function ModelClient() {
   const isManualAddMode = addMode === 'manual';
 
   // Create the draft once when entering add mode; clear it when leaving.
-  useEffect(() => {
-    if (isManualAddMode) {
-      setNewModelDraft(prev => prev ?? ({
-        id: uuidv4(),
-        name: '',
-        displayName: '',
-        description: '',
-        ApiKey: '',
-        baseUrl: '',
-        provider: 'openai',
-        promptTemplate: '',
-        temperature: '0.0',
-      } as Model));
-    } else {
-      setNewModelDraft(null);
-    }
-  }, [isManualAddMode]);
+  useResetOnChange(isManualAddMode, (manual) => {
+    setNewModelDraft(prev => manual ? prev ?? blankModelDraft() : null);
+  });
 
-  // Ensure service is ready before using it
-  useEffect(() => {
-    try {
-      const service = getModelService();
-      if (service && typeof service.loadModels === 'function') {
-        setServiceReady(true);
-        log.debug('Model service is ready');
-      }
-    } catch (error) {
-      log.warn('Model service not ready, retrying...', error);
-      const timer = setTimeout(() => {
-        try {
-          const service = getModelService();
-          if (service && typeof service.loadModels === 'function') {
-            setServiceReady(true);
-            log.debug('Model service is now ready');
-          }
-        } catch (retryError) {
-          log.warn('Model service still not ready', retryError);
-        }
-      }, 100);
-      return () => clearTimeout(timer);
-    }
-  }, []);
 
   // Models must be loaded by the browser only after WorkspaceBootstrap has
   // installed the selected workspace on fetch. Server components have no

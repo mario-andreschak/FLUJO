@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { MCPServerConfig, MCPStdioConfig, MCPWebSocketConfig, MCPSSEConfig, MCPStreamableConfig, EnvVarValue } from '@/shared/types/mcp/mcp';
 import { MessageState } from '../../../types';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
 
 // Type guards
 export const isStdioConfig = (config: MCPServerConfig): config is MCPStdioConfig => {
@@ -22,13 +23,36 @@ export const isStreamableConfig = (config: MCPServerConfig): config is MCPStream
   return config.transport === 'streamable';
 };
 
+const defaultServerConfig = (): MCPStdioConfig => ({
+  name: '',
+  command: '',
+  args: [],
+  env: {},
+  disabled: false,
+  rootPath: '',
+  transport: 'stdio',
+  _buildCommand: '',
+  _installCommand: ''
+});
+
+/** The form fields for an existing server's config. */
+function fieldsFromConfig(config: MCPServerConfig) {
+  return {
+    localConfig: { ...config, rootPath: config.rootPath || '' },
+    buildCommand: config._buildCommand || '',
+    installCommand: config._installCommand || '',
+    websocketUrl: config.transport === 'websocket' ? config.websocketUrl || '' : '',
+    serverUrl: config.transport === 'sse' || config.transport === 'streamable' ? config.serverUrl || '' : '',
+  };
+}
+
 interface UseLocalServerStateProps {
   initialConfig?: MCPServerConfig | null;
   isOpen?: boolean;
 }
 
 export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalServerStateProps) => {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   // Track which sections are expanded
   const [expandedSections, setExpandedSections] = useState({
     define: true,
@@ -36,25 +60,16 @@ export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalSe
     run: true
   });
 
-  // Initialize with stdio transport by default
-  const [localConfig, setLocalConfig] = useState<MCPServerConfig>({
-    name: '',
-    command: '',
-    args: [],
-    env: {},
-    disabled: false,
-    rootPath: '',
-    transport: 'stdio',
-    _buildCommand: '',
-    _installCommand: ''
-  } as MCPStdioConfig);
-  
+  // A server opened for editing starts from its config, a new one from the stdio defaults.
+  const [openedFields] = useState(() => isOpen && initialConfig ? fieldsFromConfig(initialConfig) : null);
+  const [localConfig, setLocalConfig] = useState<MCPServerConfig>(() => openedFields?.localConfig ?? defaultServerConfig());
+
   // State for URLs
-  const [websocketUrl, setWebsocketUrl] = useState<string>('');
-  const [serverUrl, setServerUrl] = useState<string>('');
-  
-  const [buildCommand, setBuildCommand] = useState<string>('');
-  const [installCommand, setInstallCommand] = useState<string>('');
+  const [websocketUrl, setWebsocketUrl] = useState<string>(openedFields?.websocketUrl ?? '');
+  const [serverUrl, setServerUrl] = useState<string>(openedFields?.serverUrl ?? '');
+
+  const [buildCommand, setBuildCommand] = useState<string>(openedFields?.buildCommand ?? '');
+  const [installCommand, setInstallCommand] = useState<string>(openedFields?.installCommand ?? '');
   const [message, setMessage] = useState<MessageState | null>(null);
   const [buildMessage, setBuildMessage] = useState<MessageState | null>(null);
   const [isBuilding, setIsBuilding] = useState<boolean>(false);
@@ -223,76 +238,46 @@ export const useLocalServerState = ({ initialConfig, isOpen = true }: UseLocalSe
   };
 
   // Reset state when modal is opened or initialConfig changes
-  useEffect(() => {
-    // Default state for a new server
-    const defaultConfig: MCPStdioConfig = {
-      name: '',
-      command: '',
-      args: [],
-      env: {},
-      disabled: false,
-      rootPath: '',
-      transport: 'stdio',
-      _buildCommand: '',
-      _installCommand: ''
-    };
-    
-    // Reset all state values when modal is opened
-    if (isOpen) {
-      if (initialConfig) {
-        // Extract rootPath if it exists
-        const rootPath = initialConfig.rootPath || '';
-              
-        // Create a new config with the extracted rootPath
-        const configWithRootPath = {
-          ...initialConfig,
-          rootPath
-        };
-        
-        setLocalConfig(configWithRootPath);
-        
-        // Set build and install commands from config if available
-        setBuildCommand(initialConfig._buildCommand || '');
-        setInstallCommand(initialConfig._installCommand || '');
-        
-        // Set URLs based on transport type
-        if (initialConfig.transport === 'websocket') {
-          setWebsocketUrl((initialConfig as MCPWebSocketConfig).websocketUrl || '');
-          setServerUrl('');
-        } else if (initialConfig.transport === 'sse' || initialConfig.transport === 'streamable') {
-          setServerUrl((initialConfig as MCPSSEConfig | MCPStreamableConfig).serverUrl || '');
-          setWebsocketUrl('');
-        } else {
-          setWebsocketUrl('');
-          setServerUrl('');
-        }
-      } else {
-        // Reset to default values if no initialConfig
-        setLocalConfig(defaultConfig);
-        setBuildCommand('');
-        setInstallCommand('');
-        setWebsocketUrl('');
-        setMessage(null);
-        setBuildMessage(null);
-        setIsBuilding(false);
-        setIsInstalling(false);
-        setBuildCompleted(false);
-        setInstallCompleted(false);
-        setIsParsingReadme(false);
-        setIsParsingEnv(false);
-        setConsoleOutput('');
-        setIsConsoleVisible(false);
-        setIsRunning(false);
-        setRunCompleted(false);
-        setConsoleTitle(t('mcp.local.console.output'));
-        setExpandedSections({
-          define: true,
-          build: true,
-          run: true
-        });
-      }
+  const resetForOpening = () => {
+    if (!isOpen) return;
+    if (initialConfig) {
+      const fields = fieldsFromConfig(initialConfig);
+      setLocalConfig(fields.localConfig);
+      // Set build and install commands from config if available
+      setBuildCommand(fields.buildCommand);
+      setInstallCommand(fields.installCommand);
+      // Set URLs based on transport type
+      setWebsocketUrl(fields.websocketUrl);
+      setServerUrl(fields.serverUrl);
+      return;
     }
-  }, [isOpen, initialConfig, t]);
+    // Reset to default values if no initialConfig
+    setLocalConfig(defaultServerConfig());
+    setBuildCommand('');
+    setInstallCommand('');
+    setWebsocketUrl('');
+    setMessage(null);
+    setBuildMessage(null);
+    setIsBuilding(false);
+    setIsInstalling(false);
+    setBuildCompleted(false);
+    setInstallCompleted(false);
+    setIsParsingReadme(false);
+    setIsParsingEnv(false);
+    setConsoleOutput('');
+    setIsConsoleVisible(false);
+    setIsRunning(false);
+    setRunCompleted(false);
+    setConsoleTitle(t('mcp.local.console.output'));
+    setExpandedSections({
+      define: true,
+      build: true,
+      run: true
+    });
+  };
+  useResetOnChange(isOpen, resetForOpening);
+  useResetOnChange(initialConfig, resetForOpening);
+  useResetOnChange(locale, resetForOpening);
 
   return {
     // State

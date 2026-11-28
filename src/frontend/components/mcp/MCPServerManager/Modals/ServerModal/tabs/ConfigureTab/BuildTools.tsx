@@ -13,6 +13,7 @@ import {
 } from '@mui/material';
 import { MessageState } from '../../types';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useInterval } from '@/frontend/hooks/timing';
 
 interface BuildToolsProps {
   installCommand: string;
@@ -70,39 +71,9 @@ const BuildTools: React.FC<BuildToolsProps> = ({
   const [installMessageIndex, setInstallMessageIndex] = useState(0);
   const [buildMessageIndex, setBuildMessageIndex] = useState(0);
   
-  // Effect to rotate messages every 3 seconds when installing
-  useEffect(() => {
-    let intervalId: NodeJS.Timeout;
-    
-    if (isInstalling) {
-      intervalId = setInterval(() => {
-        setInstallMessageIndex(prevIndex => (prevIndex + 1) % installMessages.length);
-      }, 3000);
-    }
-    
-    return () => {
-      if (intervalId) {
-        clearInterval(intervalId);
-      }
-    };
-  }, [isInstalling, installMessages.length]);
-  
-  // Effect to rotate messages every 3 seconds when building
-  useEffect(() => {
-    let intervalId: NodeJS.Timeout;
-    
-    if (isBuilding) {
-      intervalId = setInterval(() => {
-        setBuildMessageIndex(prevIndex => (prevIndex + 1) % buildMessages.length);
-      }, 3000);
-    }
-    
-    return () => {
-      if (intervalId) {
-        clearInterval(intervalId);
-      }
-    };
-  }, [isBuilding, buildMessages.length]);
+  // Rotate the progress messages every 3 seconds while installing or building
+  useInterval(() => setInstallMessageIndex(prevIndex => (prevIndex + 1) % installMessages.length), isInstalling ? 3000 : null);
+  useInterval(() => setBuildMessageIndex(prevIndex => (prevIndex + 1) % buildMessages.length), isBuilding ? 3000 : null);
   return (
     <Stack spacing={3}>
       {/* Error message display */}

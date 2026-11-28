@@ -9,6 +9,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useTour } from '@/frontend/contexts/TourContext';
 import { TOUR_STEPS, TourStep } from '@/frontend/components/Tour/tourSteps';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useInterval } from '@/frontend/hooks/timing';
 
 const SPOTLIGHT_PADDING = 8;
 const CARD_WIDTH = 360;
@@ -124,18 +125,14 @@ export default function TourOverlay() {
 
   // Track the target element's position. Polls while the step is active so the
   // spotlight follows layout shifts, scrolling, and post-navigation mounts.
+  // Off the step's page no spotlight is drawn, so a rect measured earlier is ignored.
+  // The target is measured at once and then every 200 ms.
+  const remeasure = useRef<(() => void) | undefined>(undefined);
+  useInterval(() => remeasure.current?.(), step && pathname === step.path ? 200 : null);
   useLayoutEffect(() => {
-    if (!step) {
-      setRect(null);
-      return;
-    }
     // Don't try to locate the target until we're on the right page.
-    if (pathname !== step.path) {
-      setRect(null);
-      return;
-    }
+    if (!step || pathname !== step.path) return;
 
-    let raf = 0;
     let scrolledIntoView = false;
 
     const measure = () => {
@@ -165,11 +162,11 @@ export default function TourOverlay() {
       } else {
         setRect(null);
       }
-      raf = window.setTimeout(measure, 200) as unknown as number;
     };
 
     measure();
-    return () => window.clearTimeout(raf);
+    remeasure.current = measure;
+    return () => { remeasure.current = undefined; };
   }, [step, pathname, stepIndex]);
 
   if (!isActive || !step) {

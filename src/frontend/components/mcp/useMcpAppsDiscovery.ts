@@ -10,6 +10,7 @@ import {
   isUiResourceUri,
 } from '@/shared/utils/mcpApps';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
 
 /**
  * Shared MCP App discovery (#396).
@@ -99,148 +100,191 @@ export const readableError = (error: unknown, fallback: string): string => {
   return fallback;
 };
 
+interface DiscoveryRequest extends Required<Omit<UseMcpAppsDiscoveryOptions, 'active'>> {
+  refresh: boolean;
+  t: ReturnType<typeof useI18n>['t'];
+  /** False once a newer run started; the run then stops early and its result is dropped. */
+  isCurrent: () => boolean;
+}
+
+interface DiscoveryOutcome {
+  servers: McpServerDiscovery[];
+  error: string | null;
+}
+
+/** One discovery run. Never throws: failures come back as `error`. */
+async function discoverMcpApps({
+  refresh,
+  includeAllServers,
+  favoritesOnly,
+  requireApps,
+  t,
+  isCurrent,
+}: DiscoveryRequest): Promise<DiscoveryOutcome | null> {
+  try {
+    const configsResult = await mcpService.loadServerConfigs();
+    if (!isCurrent()) return null;
+    if (!Array.isArray(configsResult)) {
+      return {
+        servers: [],
+        error: readableError(
+          (configsResult as { error?: unknown } | null)?.error,
+          t('mcp.apps.configFailed'),
+        ),
+      };
+    }
+
+    const eligible = (configsResult as MCPServerConfig[]).filter((server) => (
+      server.disabled !== true
+      && (includeAllServers || mcpAppsEnabled(server))
+      && (!favoritesOnly || server.favorite === true)
+    ));
+
+    const discoveries = await Promise.all(eligible.map(async (server): Promise<McpServerDiscovery> => {
+      // Ordinary MCP servers are valid Persona/Role choices. They have no App
+      // UI to discover, so keep their config without making unsupported
+      // resources/list calls or describing that absence as an error.
+      if (!mcpAppsEnabled(server)) {
+        return { name: server.name, config: server, apps: [] };
+      }
+      if (refresh) {
+        mcpService.clearCapabilitiesCache(server.name);
+        mcpService.clearToolsCache(server.name);
+      }
+
+      const [resourceResult, toolResult] = await Promise.all([
+        mcpService.listServerResources(server.name),
+        mcpService.listServerTools(server.name),
+      ]);
+      const toolsByResource = new Map<string, string[]>();
+      for (const tool of Array.isArray(toolResult?.tools) ? toolResult.tools : []) {
+        const uri = extractUiResourceUri(tool?._meta);
+        if (!uri || typeof tool?.name !== 'string' || !tool.name.trim()) continue;
+        const linked = toolsByResource.get(uri) || [];
+        // A server may advertise the same tool twice (paging/duplicates);
+        // the menu renders one entry per tool, so deduplicate here.
+        if (!linked.includes(tool.name)) linked.push(tool.name);
+        toolsByResource.set(uri, linked);
+      }
+
+      if (resourceResult?.error && toolsByResource.size === 0) {
+        return {
+          name: server.name,
+          config: server,
+          apps: [],
+          error: readableError(resourceResult.error, t('mcp.apps.discoveryUnavailable')),
+        };
+      }
+
+      const appsByUri = new Map<string, McpDiscoveredApp>();
+      for (const resource of Array.isArray(resourceResult?.resources) ? resourceResult.resources : []) {
+        if (!isUiResourceUri(resource?.uri) || !isMcpAppMimeType(resource?.mimeType)) continue;
+        const title = typeof resource.title === 'string' && resource.title.trim()
+          ? resource.title.trim()
+          : typeof resource.name === 'string' && resource.name.trim()
+            ? resource.name.trim()
+            : resource.uri;
+        // Keyed by URI, so a resource listed twice yields a single app.
+        appsByUri.set(resource.uri, {
+          serverName: server.name,
+          uri: resource.uri,
+          name: title,
+          description: typeof resource.description === 'string' && resource.description.trim()
+            ? resource.description.trim()
+            : undefined,
+          mimeType: resource.mimeType ?? MCP_APP_MIME_TYPE,
+          toolNames: toolsByResource.get(resource.uri) || [],
+          listedResource: true,
+        });
+      }
+
+      // MCP Apps are primarily discovered through tool metadata, and the
+      // extension explicitly permits servers to omit UI-only resources from
+      // resources/list. Include those linked URIs as launchable candidates;
+      // McpAppFrame still performs the authoritative resources/read MIME,
+      // URI, CSP, and HTML validation before anything is rendered.
+      for (const [uri, toolNames] of toolsByResource) {
+        if (appsByUri.has(uri)) continue;
+        appsByUri.set(uri, {
+          serverName: server.name,
+          uri,
+          name: appNameFromUri(uri),
+          mimeType: MCP_APP_MIME_TYPE,
+          toolNames,
+          listedResource: false,
+        });
+      }
+
+      return {
+        name: server.name,
+        config: server,
+        apps: Array.from(appsByUri.values()),
+      };
+    }));
+
+    // #396: "publishes apps" is a discovery outcome, not just configuration
+    // intent — a favorited, opted-in server that yields nothing is dropped.
+    // Servers that failed keep their error so the surface can scope it.
+    return {
+      servers: requireApps
+        ? discoveries.filter((server) => server.apps.length > 0 || server.error)
+        : discoveries,
+      error: null,
+    };
+  } catch (caught) {
+    return { servers: [], error: readableError(caught, t('mcp.apps.discoveryFailed')) };
+  }
+}
+
 export function useMcpAppsDiscovery({
   active,
   includeAllServers = false,
   favoritesOnly = false,
   requireApps = false,
 }: UseMcpAppsDiscoveryOptions): McpAppsDiscoveryState {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [servers, setServers] = useState<McpServerDiscovery[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(active);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [discoveryId, setDiscoveryId] = useState(0);
   const requestIdRef = useRef(0);
   const lastReturnRefreshAtRef = useRef(0);
 
-  const discover = useCallback(async (refresh = false) => {
-    const requestId = ++requestIdRef.current;
+  /** Runs discovery as request `requestId` and applies the result while it is still the newest. */
+  const run = useCallback((requestId: number, refresh: boolean) => discoverMcpApps({
+    refresh,
+    includeAllServers,
+    favoritesOnly,
+    requireApps,
+    t,
+    isCurrent: () => requestId === requestIdRef.current,
+  }).then((outcome) => {
+    if (!outcome || requestId !== requestIdRef.current) return;
+    setServers(outcome.servers);
+    setError(outcome.error);
+  }).finally(() => {
+    if (requestId === requestIdRef.current) {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }), [favoritesOnly, includeAllServers, requireApps, t]);
+
+  const discover = useCallback((refresh = false) => {
     setDiscoveryId((current) => current + 1);
     setError(null);
     if (refresh) setRefreshing(true);
     else setLoading(true);
+    return run(++requestIdRef.current, refresh);
+  }, [run]);
 
-    try {
-      const configsResult = await mcpService.loadServerConfigs();
-      if (requestId !== requestIdRef.current) return;
-      if (!Array.isArray(configsResult)) {
-        setServers([]);
-        setError(readableError(
-          (configsResult as { error?: unknown } | null)?.error,
-          t('mcp.apps.configFailed'),
-        ));
-        return;
-      }
-
-      const eligible = (configsResult as MCPServerConfig[]).filter((server) => (
-        server.disabled !== true
-        && (includeAllServers || mcpAppsEnabled(server))
-        && (!favoritesOnly || server.favorite === true)
-      ));
-
-      const discoveries = await Promise.all(eligible.map(async (server): Promise<McpServerDiscovery> => {
-        // Ordinary MCP servers are valid Persona/Role choices. They have no App
-        // UI to discover, so keep their config without making unsupported
-        // resources/list calls or describing that absence as an error.
-        if (!mcpAppsEnabled(server)) {
-          return { name: server.name, config: server, apps: [] };
-        }
-        if (refresh) {
-          mcpService.clearCapabilitiesCache(server.name);
-          mcpService.clearToolsCache(server.name);
-        }
-
-        const [resourceResult, toolResult] = await Promise.all([
-          mcpService.listServerResources(server.name),
-          mcpService.listServerTools(server.name),
-        ]);
-        const toolsByResource = new Map<string, string[]>();
-        for (const tool of Array.isArray(toolResult?.tools) ? toolResult.tools : []) {
-          const uri = extractUiResourceUri(tool?._meta);
-          if (!uri || typeof tool?.name !== 'string' || !tool.name.trim()) continue;
-          const linked = toolsByResource.get(uri) || [];
-          // A server may advertise the same tool twice (paging/duplicates);
-          // the menu renders one entry per tool, so deduplicate here.
-          if (!linked.includes(tool.name)) linked.push(tool.name);
-          toolsByResource.set(uri, linked);
-        }
-
-        if (resourceResult?.error && toolsByResource.size === 0) {
-          return {
-            name: server.name,
-            config: server,
-            apps: [],
-            error: readableError(resourceResult.error, t('mcp.apps.discoveryUnavailable')),
-          };
-        }
-
-        const appsByUri = new Map<string, McpDiscoveredApp>();
-        for (const resource of Array.isArray(resourceResult?.resources) ? resourceResult.resources : []) {
-          if (!isUiResourceUri(resource?.uri) || !isMcpAppMimeType(resource?.mimeType)) continue;
-          const title = typeof resource.title === 'string' && resource.title.trim()
-            ? resource.title.trim()
-            : typeof resource.name === 'string' && resource.name.trim()
-              ? resource.name.trim()
-              : resource.uri;
-          // Keyed by URI, so a resource listed twice yields a single app.
-          appsByUri.set(resource.uri, {
-            serverName: server.name,
-            uri: resource.uri,
-            name: title,
-            description: typeof resource.description === 'string' && resource.description.trim()
-              ? resource.description.trim()
-              : undefined,
-            mimeType: resource.mimeType ?? MCP_APP_MIME_TYPE,
-            toolNames: toolsByResource.get(resource.uri) || [],
-            listedResource: true,
-          });
-        }
-
-        // MCP Apps are primarily discovered through tool metadata, and the
-        // extension explicitly permits servers to omit UI-only resources from
-        // resources/list. Include those linked URIs as launchable candidates;
-        // McpAppFrame still performs the authoritative resources/read MIME,
-        // URI, CSP, and HTML validation before anything is rendered.
-        for (const [uri, toolNames] of toolsByResource) {
-          if (appsByUri.has(uri)) continue;
-          appsByUri.set(uri, {
-            serverName: server.name,
-            uri,
-            name: appNameFromUri(uri),
-            mimeType: MCP_APP_MIME_TYPE,
-            toolNames,
-            listedResource: false,
-          });
-        }
-
-        return {
-          name: server.name,
-          config: server,
-          apps: Array.from(appsByUri.values()),
-        };
-      }));
-
-      if (requestId !== requestIdRef.current) return;
-      // #396: "publishes apps" is a discovery outcome, not just configuration
-      // intent — a favorited, opted-in server that yields nothing is dropped.
-      // Servers that failed keep their error so the surface can scope it.
-      setServers(requireApps
-        ? discoveries.filter((server) => server.apps.length > 0 || server.error)
-        : discoveries);
-    } catch (caught) {
-      if (requestId === requestIdRef.current) {
-        setServers([]);
-        setError(readableError(caught, t('mcp.apps.discoveryFailed')));
-      }
-    } finally {
-      if (requestId === requestIdRef.current) {
-        setLoading(false);
-        setRefreshing(false);
-      }
-    }
-  }, [favoritesOnly, includeAllServers, requireApps, t]);
-
+  // Opening the surface (or new discovery options while open) starts a run.
+  useResetOnChange(active ? JSON.stringify([favoritesOnly, includeAllServers, requireApps, locale]) : null, (current) => {
+    if (current === null) return;
+    setDiscoveryId((id) => id + 1);
+    setError(null);
+    setLoading(true);
+  });
   useEffect(() => {
     if (!active) {
       // Abandon in-flight results so a late response cannot repopulate a
@@ -248,8 +292,8 @@ export function useMcpAppsDiscovery({
       requestIdRef.current += 1;
       return;
     }
-    void discover(false);
-  }, [active, discover]);
+    void run(++requestIdRef.current, false);
+  }, [active, run]);
 
   useEffect(() => {
     if (!active) return;

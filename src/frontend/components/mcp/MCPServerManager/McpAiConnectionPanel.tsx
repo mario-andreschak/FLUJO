@@ -88,11 +88,10 @@ export default function McpAiConnectionPanel({
   const installingRef = useRef(false);
   const modelsLoadingRef = useRef(true);
 
+  // Loading starts claimed (initial state, or the retry button), so a request
+  // cannot be submitted against a missing model while this runs.
   useEffect(() => {
     let cancelled = false;
-    modelsLoadingRef.current = true;
-    setModelsLoading(true);
-    setModelsFailed(false);
     modelService.tryLoadModels()
       .then((loaded) => {
         if (cancelled) return;
@@ -322,6 +321,7 @@ export default function McpAiConnectionPanel({
               // cannot submit a missing model while the retry is starting.
               modelsLoadingRef.current = true;
               setModelsLoading(true);
+              setModelsFailed(false);
               setModelLoadAttempt((attempt) => attempt + 1);
             }} disabled={working || installing} sx={{ minHeight: 44 }}>
               {t('mcp.ai.retryModels')}
