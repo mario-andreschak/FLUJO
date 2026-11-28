@@ -76,7 +76,7 @@ function AdmittedPhoneHost({ children, fallback }: { children: ReactNode; fallba
   if (transport) return <PhoneHostContext.Provider value={transport}>{children}</PhoneHostContext.Provider>;
   if (!failed) return fallback;
   return <div className="app-loading" role="alert"><div className="premium-surface" style={{ width: 'min(92vw, 520px)', padding: 28, textAlign: 'center' }}>
-    <h2>{t('shell.error.title')}</h2><p>{t('shell.error.body')}</p>
+    <h2>{t('shell.error.title')}</h2><p>{t('shell.error.healing')}</p>
     <button type="button" style={{ minHeight: 48, padding: '0 24px' }} onClick={() => { setFailed(false); setRetry(value => value + 1); }}>{t('shell.error.reload')}</button>
   </div></div>;
 }

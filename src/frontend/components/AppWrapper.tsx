@@ -99,14 +99,15 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, Error
     if (!failure) return this.props.children;
     return (
       <>
-        <AppErrorFallback />
+        <AppErrorFallback healing={isChunkLoadError(failure.error)} />
         {isChunkLoadError(failure.error) && <HealAfterChunkFailure onHealed={this.healed} />}
       </>
     );
   }
 }
 
-function AppErrorFallback() {
+/** `healing`: the page brings the workspace back by itself, and says so. */
+export function AppErrorFallback({ healing }: { healing: boolean }) {
   const { t } = useI18n();
   return (
     <div className="app-loading">
@@ -126,7 +127,7 @@ function AppErrorFallback() {
           {t('shell.error.title')}
         </h2>
         <p style={{ margin: '0 auto 24px', maxWidth: 380, color: 'var(--text-secondary)' }}>
-          {t('shell.error.body')}
+          {t(healing ? 'shell.error.healing' : 'shell.error.body')}
         </p>
         <button
           onClick={() => window.location.reload()}
