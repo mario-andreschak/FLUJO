@@ -5,7 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import YAML from 'yaml';
-import { PACKAGED_ACCEPTANCE_TESTS, assertContributorGuideJob, assertFullWorkflowContract, assertReleaseSweepReportsOnly, assertReleaseSweepRunsByDefault, assertWorkflowContract } from './workflow-contract.mjs';
+import {
+  assertContainerSmoke, assertContributorGuideJob, assertFullWorkflowContract, assertReleaseSweepReportsOnly, assertReleaseSweepRunsByDefault, assertWorkflowContract, CONTAINER_SMOKE_COMMAND, PACKAGED_ACCEPTANCE_TESTS, RELEASE_CONTAINER_SMOKE_COMMAND,
+} from './workflow-contract.mjs';
 
 const directory = new URL('../.github/workflows/', import.meta.url);
 const readWorkflows = () => Object.fromEntries(readdirSync(directory).filter((file) => /\.ya?ml$/.test(file) && file !== 'verify.yml')
@@ -542,5 +544,37 @@ for (const [label, change, expected] of [
     const files = readWorkflows();
     change(files);
     assert.throws(() => assertFullWorkflowContract(files), expected);
+  });
+}
+
+const containerSteps = (files) => files['verify.yml'].jobs.test.steps;
+const containerStep = (files, test) => containerSteps(files).find(test);
+const releaseSteps = (files) => files['publish-image.yml'].jobs.candidate.steps;
+for (const [label, change, where] of [
+  ['no container smoke on a main-target change', files => { files['verify.yml'].jobs.test.steps = containerSteps(files).filter(step => step.run !== CONTAINER_SMOKE_COMMAND); }, /verify\.yml\/test/],
+  ['a skipped container smoke', files => { containerStep(files, step => step.run === CONTAINER_SMOKE_COMMAND).if = 'false'; }, /verify\.yml\/test/],
+  ['a tolerated container smoke failure', files => { containerStep(files, step => step.run === CONTAINER_SMOKE_COMMAND)['continue-on-error'] = true; }, /verify\.yml\/test/],
+  ['a container smoke on a pulled image', files => { containerStep(files, step => step.uses?.startsWith('docker/build-push-action@')).with.tags = 'ghcr.io/mario-andreschak/flujo:latest'; }, /verify\.yml\/test/],
+  ['a container smoke before the image is built', files => {
+    const steps = containerSteps(files);
+    const [build] = steps.splice(steps.findIndex(step => step.uses?.startsWith('docker/build-push-action@')), 1);
+    steps.push(build);
+  }, /verify\.yml\/test/],
+  ['a container smoke report kept only on success', files => { delete containerStep(files, step => step.with?.path === '${{ runner.temp }}/container-smoke/').if; }, /verify\.yml\/test/],
+  ['a release image pushed without the container smoke', files => {
+    files['publish-image.yml'].jobs.candidate.steps = releaseSteps(files).filter(step => step.run !== RELEASE_CONTAINER_SMOKE_COMMAND);
+  }, /publish-image\.yml\/candidate/],
+  ['a release container smoke after the push', files => {
+    const steps = releaseSteps(files);
+    const [smoke] = steps.splice(steps.findIndex(step => step.run === RELEASE_CONTAINER_SMOKE_COMMAND), 1);
+    steps.push(smoke);
+  }, /publish-image\.yml\/candidate/],
+  ['a release container smoke on another image', files => { releaseSteps(files).find(step => step.run === RELEASE_CONTAINER_SMOKE_COMMAND).env.TESTED_IMAGE_ID = 'flujo:latest'; }, /publish-image\.yml\/candidate/],
+]) {
+  test(`the container smoke contract refuses ${label} (#1408)`, () => {
+    const files = readWorkflows();
+    assertContainerSmoke(files);
+    change(files);
+    assert.throws(() => assertFullWorkflowContract(files), where);
   });
 }

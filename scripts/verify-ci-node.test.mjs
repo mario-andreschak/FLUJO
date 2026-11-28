@@ -17,7 +17,8 @@ function readHistoricalInput(url, encoding) {
 }
 import { gzipSync } from 'node:zlib';
 import {
-  CI_NODE_PROFILES, archiveMember, assertCiContainerContract, assertShippedInstallerSources, shippedNodeRuntimes, verifyCiNode,
+  CI_NODE_PROFILES, archiveMember, assertCiContainerContract, assertContainerBaseIndex, assertShippedInstallerSources,
+  containerBaseRecord, shippedNodeRuntimes, verifyCiNode,
 } from './verify-ci-node.mjs';
 
 function fixture(t) {
@@ -196,10 +197,8 @@ test('pinned binary manifest retains actual signed checksums, signatures, key so
     return result;
   }
   const original = loadEvidence(manifest.evidence, manifest.evidenceSha256);
-  const containerBytes = readHistoricalInput(new URL(manifest.containerBase.metadataFile, root));
-  assert.equal(sha(containerBytes), manifest.containerBase.metadataSha256);
-  const metadata = JSON.parse(containerBytes.toString().replace(/^\uFEFF/, ''));
-  assert.equal(manifest.containerBase.reference, `mirror.gcr.io/library/node:${metadata.name}@${metadata.digest}`);
+  const base = containerBaseRecord(manifest);
+  assert.equal(manifest.containerBase.reference, `mirror.gcr.io/library/node:${base.name}@${base.digest}`);
   assert.deepEqual(Object.keys(manifest.runtimes), [...new Set(Object.values(CI_NODE_PROFILES))]);
   for (const version of Object.values(CI_NODE_PROFILES)) {
     const entry = manifest.runtimes[version];
@@ -236,10 +235,38 @@ test('pinned binary manifest retains actual signed checksums, signatures, key so
 
 test('container packaging retains pinned bases, official binary checks and canonical guard files', () => {
   const source = readFileSync(new URL('../Dockerfile', import.meta.url), 'utf8');
+  const { container } = shippedNodeRuntimes();
   assertCiContainerContract(source);
-  assert.throws(() => assertCiContainerContract(source.replace(/node:22\.23\.4-bookworm-slim@sha256:[a-f0-9]{64}/g, 'node:22-bookworm-slim')), /exact observed/);
+  const pinned = new RegExp(`node:${container.replaceAll('.', '\\.')}-bookworm-slim@sha256:[a-f0-9]{64}`, 'g');
+  assert.throws(() => assertCiContainerContract(source.replace(pinned, `node:${container.split('.')[0]}-bookworm-slim`)), /exact observed/);
   assert.throws(() => assertCiContainerContract(source.replace('COPY --from=builder /app/bin ./bin', '# omitted canonical guard')), /ship the canonical guard/);
-  assert.throws(() => assertCiContainerContract(source.replace('RUN node scripts/verify-ci-node.mjs 22.23.4 --binary-only', '# omitted binary verification')), /verify its official Node binary/);
+  assert.throws(() => assertCiContainerContract(source.replace(`RUN node scripts/verify-ci-node.mjs ${container} --binary-only`, '# omitted binary verification')), /verify its official Node binary/);
+});
+
+test('the container base is the observed official index of the shipped container Node (#1408)', () => {
+  const manifest = JSON.parse(readFileSync(new URL('./ci-node-binaries.json', import.meta.url), 'utf8'));
+  const record = containerBaseRecord(manifest);
+  assert.equal(record.name, `${manifest.shipped.container}-bookworm-slim`);
+  const change = (patch, observed = {}) => ({ ...manifest, containerBase: { ...manifest.containerBase, ...patch,
+    observed: { ...manifest.containerBase.observed, ...observed } } });
+  assert.throws(() => containerBaseRecord(change({}, { name: '22.23.4-bookworm-slim' })), /observed official node:24\.22\.1-bookworm-slim/);
+  assert.throws(() => containerBaseRecord(change({}, { digest: `sha256:${'0'.repeat(64)}` })), /observed official/);
+  assert.throws(() => containerBaseRecord(change({ reference: record.reference.replace('mirror.gcr.io/', 'example.com/') })), /observed official/);
+  assert.throws(() => containerBaseRecord(change({}, { linuxAmd64: 'latest' })), /observed official/);
+  assert.throws(() => containerBaseRecord(change({ observedAt: '2026-01-01T00:00:00Z' })), /observed official/);
+  assert.throws(() => shippedNodeRuntimes({ ...manifest, shipped: { installer: '24.22.1', container: '22.23.4', containerBehind: 'reason' } }), /node:22\.23\.4-bookworm-slim/);
+
+  // Registry bytes are checked by their digest and the platform they name.
+  const index = (amd64) => Buffer.from(JSON.stringify({ schemaVersion: 2, mediaType: record.mediaType, manifests: [
+    { mediaType: 'application/vnd.oci.image.manifest.v1+json', digest: amd64, size: 1, platform: { os: 'linux', architecture: 'amd64' } },
+    { mediaType: 'application/vnd.oci.image.manifest.v1+json', digest: `sha256:${'1'.repeat(64)}`, size: 1, platform: { os: 'linux', architecture: 'arm64', variant: 'v8' } },
+  ] }));
+  const bytes = index(record.linuxAmd64);
+  const digestOf = (value) => `sha256:${createHash('sha256').update(value).digest('hex')}`;
+  assert.equal(assertContainerBaseIndex(bytes, { ...record, digest: digestOf(bytes) }), record.linuxAmd64);
+  assert.throws(() => assertContainerBaseIndex(bytes, record), /differs from the pinned container base digest/);
+  const other = index(`sha256:${'2'.repeat(64)}`);
+  assert.throws(() => assertContainerBaseIndex(other, { ...record, digest: digestOf(other) }), /recorded linux\/amd64 image/);
 });
 
 test('installers and the container ship the declared Node runtimes from signed archives (#1408)', () => {

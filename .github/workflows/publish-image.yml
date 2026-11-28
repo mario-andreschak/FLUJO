@@ -108,6 +108,14 @@ jobs:
           node scripts/smoke-mcp-artifacts.mjs --proxy-only http://127.0.0.1:4200
           echo "image_id=$image_id" >> "$GITHUB_OUTPUT"
           mkdir -p "$IMAGE_EVIDENCE_DIR"
+      # First chat, voice check and a hard stop on the exact tested image (#1408).
+      - name: Check the exact image's health, first chat and voice settings
+        env:
+          TESTED_IMAGE_ID: ${{ steps.smoke.outputs.image_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/smoke-container-image.mjs --image "$TESTED_IMAGE_ID"
       # The published image writes the data on a volume, the tested image takes it over.
       - name: Back up, restart, upgrade and restore with the exact image
         env:

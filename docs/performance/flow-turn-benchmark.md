@@ -104,6 +104,18 @@ the server under test:
 With `FLUJO_TURN_TRACE_FILE` set, `persist.snapshot` counts the full
 conversation saves and `lock.catalogAdmit` the catalog registrations of a turn.
 
+## In the container, on every CI run
+
+The container smoke (`scripts/smoke-container-image.mjs`, see
+[CI runtime identity](../operations/ci-node-runtime-verification.md#container-smoke))
+runs the production image on 1 CPU and 2 GB, the size of the voice app's cloud
+machine. Its voice check sends direct calls, tool turns and a continued
+conversation through a Claude subscription model (the bundled Claude Code
+against a stand-in of Anthropic's API) with the three speed settings off and
+then on, and prints first-run and later-run times, the time until the model
+request, MCP list requests and conversation saves per turn in the CI job
+summary. It needs no Claude token and replaces the manual check on that machine.
+
 ## What the columns mean
 
 | step | meaning |

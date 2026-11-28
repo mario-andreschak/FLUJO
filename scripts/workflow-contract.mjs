@@ -390,6 +390,43 @@ export function assertPackagedAcceptance(workflows, { mainIntegration = false } 
   }
 }
 
+export const CONTAINER_SMOKE_TAG = 'flujo-container-smoke:${{ github.sha }}';
+export const CONTAINER_SMOKE_COMMAND = 'set -euo pipefail\nnode scripts/smoke-container-image.mjs --image "flujo-container-smoke:${GITHUB_SHA}" --report "$RUNNER_TEMP/container-smoke/report.json"\n';
+export const RELEASE_CONTAINER_SMOKE_COMMAND = 'set -euo pipefail\nnode scripts/smoke-container-image.mjs --image "$TESTED_IMAGE_ID"\n';
+
+/**
+ * The container image is built from every main-target change and from the release candidate,
+ * and that exact image must pass the container smoke (#1408): its declared Node, its health
+ * check and published port, a first chat and the voice check against local stand-ins, and a
+ * hard stop that loses no finished turn.
+ */
+export function assertContainerSmoke(workflows) {
+  const fail = (where, what) => {
+    throw new Error(`${where} must ${what}. Run "${CONTAINER_SMOKE_COMMAND.split('\n')[1]}" right after building the image, `
+      + 'with nothing optional; see docs/operations/ci-node-runtime-verification.md, section "Container smoke".');
+  };
+  const optional = step => step.if !== undefined || step['continue-on-error'];
+  const steps = workflows['verify.yml']?.jobs?.test?.steps ?? [];
+  const build = steps.findIndex(step => step.uses?.startsWith('docker/build-push-action@'));
+  const smoke = steps.findIndex(step => step.run === CONTAINER_SMOKE_COMMAND);
+  const keep = steps.findIndex(step => step.uses?.startsWith('actions/upload-artifact@') && step.with?.path === '${{ runner.temp }}/container-smoke/');
+  const options = steps[build]?.with ?? {};
+  if (build < 0 || optional(steps[build]) || options.context !== '.' || options.load !== true || options.push !== false
+      || options.platforms !== 'linux/amd64' || options.tags !== CONTAINER_SMOKE_TAG) {
+    fail('verify.yml/test', `build the image from this checkout (context ".", linux/amd64, load, no push) as ${CONTAINER_SMOKE_TAG}`);
+  }
+  if (smoke <= build || optional(steps[smoke]) || steps[smoke].shell !== 'bash') fail('verify.yml/test', 'run the container smoke on the image it built');
+  if (keep <= smoke || steps[keep].if !== 'always()') fail('verify.yml/test', 'keep the container smoke report even after a failure');
+  const candidate = workflows['publish-image.yml']?.jobs?.candidate?.steps ?? [];
+  const tested = candidate.findIndex(step => step.id === 'smoke');
+  const release = candidate.findIndex(step => step.run === RELEASE_CONTAINER_SMOKE_COMMAND);
+  const push = candidate.findIndex(step => step.run === 'node scripts/image-release.mjs candidate');
+  if (tested < 0 || release <= tested || push <= release || optional(candidate[release]) || candidate[release].shell !== 'bash'
+      || candidate[release].env?.TESTED_IMAGE_ID !== '${{ steps.smoke.outputs.image_id }}') {
+    fail('publish-image.yml/candidate', 'run the container smoke on the exact tested image before it is pushed');
+  }
+}
+
 /**
  * The Codex a shipped FLUJO runs is checked where it is installed: the Windows
  * installer's fresh install runs one conversation, a restart and a cancel with
@@ -478,6 +515,7 @@ export function assertFullWorkflowContract(workflows, { mainIntegration = false 
   assertReleaseVerificationGates(workflows);
   assertPackagedAcceptance(workflows, { mainIntegration });
   assertPackagedCodexAcceptance(workflows);
+  assertContainerSmoke(workflows);
   const releaseSteps = workflows['verify.yml']?.jobs?.['release-safety']?.steps ?? [];
   const installerDecisions = releaseSteps.find(step => step.name === 'Verify Windows installer decisions before publication');
   if (releaseSteps.find(step => step.uses?.startsWith('actions/checkout@'))?.with?.['fetch-depth'] !== 0

@@ -11,7 +11,7 @@
 # which is why HOME points at a writable, owned directory.
 
 # ---- Builder --------------------------------------------------------------
-FROM mirror.gcr.io/library/node:22.23.4-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d AS builder
+FROM mirror.gcr.io/library/node:24.22.1-bookworm-slim@sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c AS builder
 WORKDIR /app
 ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
 
@@ -27,17 +27,17 @@ RUN npm ci --include=dev
 
 # Build the Next.js production output.
 COPY . .
-RUN node scripts/verify-ci-node.mjs 22.23.4 --binary-only
+RUN node scripts/verify-ci-node.mjs 24.22.1 --binary-only
 RUN node scripts/build-smoke-owner-issuer.mjs
 ARG FLUJO_EXECUTION_ADAPTER_MODULE=""
 RUN FLUJO_EXECUTION_ADAPTER_MODULE="$FLUJO_EXECUTION_ADAPTER_MODULE" NODE_OPTIONS=--max-old-space-size=4096 npm run build
 
 # ---- Runtime --------------------------------------------------------------
-FROM mirror.gcr.io/library/node:22.23.4-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d AS runtime
+FROM mirror.gcr.io/library/node:24.22.1-bookworm-slim@sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c AS runtime
 WORKDIR /app
 COPY --from=builder /app/bin ./bin
 COPY --from=builder /app/scripts/verify-ci-node.mjs /app/scripts/ci-node-binaries.json ./scripts/
-RUN node scripts/verify-ci-node.mjs 22.23.4 --binary-only
+RUN node scripts/verify-ci-node.mjs 24.22.1 --binary-only
 
 # CI supplies these from the checked-out source before building. Empty defaults
 # deliberately do not claim compatibility or a published revision for an

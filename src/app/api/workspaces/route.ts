@@ -142,7 +142,9 @@ function workspaceChangeRefused(person: SignedIn | null, name: unknown, changesR
 }
 
 /** Installation-wide discovery; the filesystem remains the source of truth. */
-export async function GET(request?: Request) {
+export function GET(): Promise<Response>;
+export function GET(request: Request): Promise<Response>;
+export async function GET(request: Request = new Request('http://localhost/api/workspaces')) {
   const unavailable = await waitForLayout();
   if (unavailable) return unavailable;
 

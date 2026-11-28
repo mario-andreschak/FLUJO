@@ -3,3 +3,4 @@
 Enforced by:
 - `scripts/verify-ci-node.test.mjs`
 - `shippedNodeRuntimes` in `scripts/verify-ci-node.mjs`
+- `containerBaseRecord` in `scripts/verify-ci-node.mjs`
