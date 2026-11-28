@@ -256,6 +256,10 @@ await out('sample.zip', await zip({
   'photo.png': png,
   'tool.bin': Buffer.from([0, 1, 2, 3, 254, 255]),
 }));
+// 40 MiB of text in about 40 KB: the reader must stop at its limit instead of unpacking it all.
+await out('bomb.docx', await zip({
+  'word/document.xml': `<w:document><w:body><w:p><w:r><w:t>${'a'.repeat(40 * 1024 * 1024)}</w:t></w:r></w:p></w:body></w:document>`,
+}));
 await out('sample.tar.gz', gzipSync(tar({ 'readme.md': '# Seeds\nKeep them dry.', 'src/app.ts': 'export const plots = 12;\n' })));
 await out('sample.bmp', bmp());
 await out('sample.tiff', await square().tiff().toBuffer());

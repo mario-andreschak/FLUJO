@@ -42,11 +42,26 @@ it('sends a recognized chat to its conversation with only the new message', asyn
 
   await send({ model: 'flow-Test', messages: history });
 
+  // No requireApproval in the request: the conversation keeps its saved "Require tool approvals" box (#1284).
   expect(processChatCompletion).toHaveBeenCalledWith(
     expect.objectContaining({ messages: [history[2]], appendMessages: true }),
-    false, false, false, 'conversation-a', false, true, undefined, expect.anything(), continued,
+    false, undefined, false, 'conversation-a', false, true, undefined, expect.anything(), continued,
   );
   expect(continued.release).not.toHaveBeenCalled();
+});
+
+it.each([
+  ['true', true],
+  ['false', false],
+])('passes a recognized chat its explicit requireApproval "%s"', async (value, expected) => {
+  const continued = turn({ conversationId: 'conversation-a', messages: [history[2]] });
+  jest.mocked(beginExternalChatTurn).mockResolvedValue(continued as never);
+
+  await send({ model: 'flow-Test', messages: history, metadata: { requireApproval: value } });
+
+  const [, , requireApproval, , conversationId] = jest.mocked(processChatCompletion).mock.calls[0];
+  expect(requireApproval).toBe(expected);
+  expect(conversationId).toBe('conversation-a');
 });
 
 it('runs an unrecognized chat from its full history as a new conversation', async () => {
