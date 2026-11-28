@@ -37,6 +37,7 @@ import BoltRoundedIcon from '@mui/icons-material/BoltRounded';
 import HistoryRoundedIcon from '@mui/icons-material/HistoryRounded';
 import {
   normalizeStartRestrictions,
+  PlannedExecution,
   RunRecord,
   RunRecordStatus,
 } from '@/shared/types/plannedExecution';
@@ -128,11 +129,11 @@ interface ExecutionCardProps {
   paused: boolean;
   onEdit: () => void;
   onDelete: () => void;
-  onToggleEnabled: (enabled: boolean) => void;
+  onToggleEnabled: (execution: PlannedExecution, enabled: boolean) => void;
   /** Existing folder names offered by the shared folder picker. */
   folders: string[];
   /** Assign or clear this execution's organizing folder. */
-  onSetFolder: (folder: string | undefined) => void;
+  onSetFolder: (execution: PlannedExecution, folder: string | undefined) => void;
   /** Called after a manual run finishes so the list can refresh lastRun. */
   onRanNow: () => void;
 }
@@ -538,7 +539,7 @@ const ExecutionCard = ({
               <Box sx={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
                 <Switch
                   checked={execution.enabled}
-                  onChange={(event) => onToggleEnabled(event.target.checked)}
+                  onChange={(event) => onToggleEnabled(execution, event.target.checked)}
                   size="small"
                   slotProps={{ input: {
                     'aria-label': execution.enabled
@@ -730,7 +731,7 @@ const ExecutionCard = ({
         >
           <Switch
             checked={execution.enabled}
-            onChange={(e) => onToggleEnabled(e.target.checked)}
+            onChange={(e) => onToggleEnabled(execution, e.target.checked)}
           />
         </Tooltip>
         <Tooltip title={t('automations.card.edit')}>
@@ -865,7 +866,7 @@ const ExecutionCard = ({
         currentFolder={execution.folder}
         folders={folders}
         onClose={() => setFolderAnchorEl(null)}
-        onAssign={onSetFolder}
+        onAssign={(folder) => onSetFolder(execution, folder)}
       />
 
       <Dialog open={detail !== null} onClose={() => setDetail(null)} maxWidth="md" fullWidth>

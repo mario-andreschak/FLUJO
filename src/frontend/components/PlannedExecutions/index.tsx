@@ -366,13 +366,13 @@ const PlannedExecutionsManager = () => {
           key={entry.execution.id}
           entry={entry}
           folders={folders}
-          onSetFolder={(folder) => void handleSetFolder(entry.execution, folder)}
+          onSetFolder={handleSetFolder}
           onEdit={() => {
             setEditing(entry.execution);
             setModalOpen(true);
           }}
           onDelete={() => { failedDeleteId.current = null; setDeleteError(false); setDeleting(entry.execution); }}
-          onToggleEnabled={(enabled) => handleToggleEnabled(entry.execution, enabled)}
+          onToggleEnabled={handleToggleEnabled}
           onRanNow={() => void refresh()}
           paused={paused}
         />

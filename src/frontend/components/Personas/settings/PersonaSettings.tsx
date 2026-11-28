@@ -160,7 +160,9 @@ export default function PersonaSettings({
 
   const dirty = normalized(form) !== normalized(baseline);
   const dirtyRef = useRef(dirty);
-  dirtyRef.current = dirty;
+  useEffect(() => {
+    dirtyRef.current = dirty;
+  }, [dirty]);
   const valid = form.name.trim().length > 0 && form.name.trim().length <= 160;
 
   if (syncedPersona.id !== detail.persona.id) {

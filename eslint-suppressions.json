@@ -749,11 +749,6 @@
       "count": 1
     }
   },
-  "src/frontend/components/Personas/settings/PersonaSettings.tsx": {
-    "react-hooks/refs": {
-      "count": 1
-    }
-  },
   "src/frontend/components/PhoneHostBoundary.tsx": {
     "flujo/no-raw-timers": {
       "count": 1
@@ -780,9 +775,6 @@
   "src/frontend/components/PlannedExecutions/index.tsx": {
     "flujo/no-raw-timers": {
       "count": 1
-    },
-    "react-hooks/refs": {
-      "count": 2
     }
   },
   "src/frontend/components/Projects/BranchDialog.tsx": {
