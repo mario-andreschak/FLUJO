@@ -646,11 +646,6 @@
       "count": 1
     }
   },
-  "src/frontend/components/Flow/FlowManager/FlowBuilder/Modals/StaticNodePropertiesModal.tsx": {
-    "flujo/no-double-cast": {
-      "count": 2
-    }
-  },
   "src/frontend/components/Flow/FlowManager/FlowBuilder/NodePalette.tsx": {
     "flujo/no-raw-timers": {
       "count": 1
@@ -863,20 +858,7 @@
       "count": 1
     }
   },
-  "src/frontend/components/Waves/PlaygroundNodes.tsx": {
-    "flujo/no-double-cast": {
-      "count": 5
-    }
-  },
-  "src/frontend/components/Waves/TriggerChainNode.tsx": {
-    "flujo/no-double-cast": {
-      "count": 1
-    }
-  },
   "src/frontend/components/Waves/WaveCanvas.tsx": {
-    "flujo/no-double-cast": {
-      "count": 1
-    },
     "flujo/no-raw-timers": {
       "count": 2
     }

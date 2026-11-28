@@ -179,7 +179,7 @@ function ModelDecisionEditor({ entry, onChange }: {
   }, []);
   const question = entry.question;
   const setQuestion = (patch: Partial<DecisionQuestion>) => onChange({ question: { ...question, ...patch } });
-  const problems = modelDecisionIssues(entry as unknown as Record<string, unknown>, '').map((issue) => issue.message.replace(/^: /, ''));
+  const problems = modelDecisionIssues(entry, '').map((issue) => issue.message.replace(/^: /, ''));
   return (
     <Stack spacing={2}>
       <TextField
@@ -896,7 +896,7 @@ export const StaticNodePropertiesModal = ({ open, node, onClose, onSave }: Stati
       !entry.text.trim() || (!!entry.captureVariable && !isValidRunVarName(entry.captureVariable.trim()))
     ))
     || entries.some((entry) => entry.kind === 'modelDecision' && (
-      !entry.boundModel || modelDecisionIssues(entry as unknown as Record<string, unknown>, '').some((issue) => issue.severity === 'error')
+      !entry.boundModel || modelDecisionIssues(entry, '').some((issue) => issue.severity === 'error')
     ))
     || rulesInvalid
     || (!!nodeData?.properties?.decisionVariable && !isValidRunVarName(nodeData.properties.decisionVariable));

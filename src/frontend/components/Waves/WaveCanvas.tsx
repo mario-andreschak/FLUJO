@@ -36,8 +36,7 @@ const AXIS_Y = BASE_Y - 48;
  * label above a short mark. Rendered as a React Flow node so it shares the card
  * coordinate space and stays aligned under pan/zoom.
  */
-function TimeAxisTick({ data }: NodeProps) {
-  const { label } = data as unknown as { label: string };
+function TimeAxisTick({ data: { label } }: NodeProps<Node<{ label: string }>>) {
   return (
     <Box
       sx={{
