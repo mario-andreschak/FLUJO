@@ -31,14 +31,14 @@ Pages: [evidence](release-evidence/v3.48.10.md) ·
 | --- | --- | --- |
 | Evidence is reproducible, redacted, tied to the release commit, and keeps source tests, shipped-artifact checks, simulations, live runs and human use apart | **Met** | Met |
 | No open critical regression or unresolved high-severity finding | **Not met**: 3 critical and 28 high code-scanning alerts were open when it shipped, with no written reasons | Fixed or reasoned: all 77 open alerts have a fix or a current written reason; they close on GitHub once the bundle is released and scanned |
-| All nine rows at A− or above | **Not met**: 0 of 9 | Not met: 0 of 9 (see the rows below) |
+| All nine rows at A− or above | **Not met**: 0 of 9 | Not met: 2 of 9 in a preview (feature surface, docs honesty); the first release built from the bundle confirms or refutes this with its own run |
 | Product-fit, feature and docs grades kept without marketing claims or hidden scope cuts | **Met** | Met |
 | Experimental capabilities and unsupported profiles visible | **Not met**: the project status page did not mark Meetings and Waves as experimental, and the README never said shared or team use is not supported | **Fixed** in this bundle |
 
 | #578 scope item | Verdict for 3.48.10 | On the cleanup bundle |
 | --- | --- | --- |
 | Source, npm, image and installer provenance; full CI; installed-artifact checks | Not met: the full checks never ran on the release commit, the SBOM was not on the release page, no installed-artifact checks in the release workflows, installer not code-signed | Release workflows now run the installed checks (#570), attach the SBOM (#565) and start the full checks (this change). Code signing is still missing |
-| Full offline soak and validator pass at the assessed commit | Not met: never run on 3.48.10 | Runs on every release now; see "The offline soak" below |
+| Full offline soak and validator pass at the assessed commit | Not met: never run on 3.48.10 | Passed on `main` at `36d5ef5d` on the reference runner; runs on every release commit now. See "The offline soak" below |
 | Live runs with real models (bounded smoke, then 7 and 28 days) | Not met: not allowed, the contract's spend limit is 0 USD | Unchanged; Personas stay marked experimental |
 | README, project status and security docs follow the evidence | Not met: no scorecard status page at the release commit | Met |
 
@@ -51,7 +51,7 @@ allows.
 | Row | Audit | Machine verdict | Grade today | Why | What would raise it |
 | --- | --- | --- | --- | --- | --- |
 | Idea / product fit | A− | A− not confirmed (2 of 3 checks not met) | A− (not confirmed) | MCP-first local hub is still a real niche and no claim overstates it. But no one outside the project has recorded repeated use: the pilot sheets are empty, and 1 outside person merged a change in 90 days | Ten pilot users for eight weeks and 8 of 10 new users finishing a first run within 15 minutes, recorded in the pilot sheets |
-| Feature surface | A− | A− not confirmed (1 of 3) | A− (not confirmed) | Every audited feature is still in the README and the release CI passed (13,473 of 13,486 tests, 0 failed). The installed npm, image and installer forms were not exercised by 3.48.10's release workflows | The next release passes the installed checks the bundle adds to all three release workflows |
+| Feature surface | A− | A− not confirmed (1 of 3) | A− (not confirmed for 3.48.10; the bundle preview meets all three checks) | Every audited feature is still in the README and the release CI passed (13,473 of 13,486 tests, 0 failed). The installed npm, image and installer forms were not exercised by 3.48.10's release workflows; on the bundle all three release workflows run them | The next release passes the installed checks the bundle adds to all three release workflows |
 | Engineering discipline | B+ | Below A− (5 of 6 not met) | B+ | Strong: every shipped byte carries a signed build record naming one commit, and the evidence page proves it. Weak: `main` accepts merges with 0 approvals and 0 required checks, the full checks were started by hand and never ran on the release, no named security responder | Required checks on `main`; full checks on every release (now automatic); a responder and backup named in SECURITY.md |
 | Code health | B− | Below A− (3 of 4 not met) | B− | Lint exceptions fell from 802 to 635 on the bundle, but the audit's hot spots grew: runFlow.ts 4,048 lines, ModelHandler.ts 5,274, mcp/index.ts 4,294 on the bundle (3,540 / 4,375 / 3,577 when the split was planned). No one outside the project has changed the core | The #571 split lands and the hot spots shrink below their planned sizes; a second person changes the execution or MCP core |
 | Security | C+ | Below A− (4 of 4 not met) | C+ | 3 critical and 28 high alerts were open at release; the installer has no Windows code signature; no outside security review exists. On the bundle every open alert has a fix or a written reason, and one more real alert found here was fixed | A release with no open critical or high alert; a code-signed installer; a published outside review listed in SECURITY.md |
@@ -60,8 +60,10 @@ allows.
 | Docs honesty | A | A not confirmed (2 of 4 not met) | A− for 3.48.10, A on the bundle | No unsupported claim, and the evidence page is exact. But at 3.48.10 two limits were not shown where readers look (Meetings and Waves not marked experimental in the project status; shared use not named as unsupported in the README), and there was no status page | Fixed in the bundle; the docs check now runs on every push |
 | Production readiness | C− | Below A− (3 of 3 not met) | C− | Single owner only; shared or team use is deferred (#212); installed checks absent from 3.48.10's release; installer unsigned | Installed checks passing on a release (automatic now); a signed installer; #212 for shared use |
 
-**Overall:** no row can be shown at A− today, for 3.48.10 or for the bundle.
-#578's own rule keeps epic #563 open while any row is below A−.
+**Overall:** no row is shown at A− for 3.48.10. A preview of the cleanup bundle
+(files read at the bundle commit, shipped-artifact facts still from 3.48.10)
+meets the A− checks of two rows, feature surface and docs honesty; seven rows
+stay below A−. #578's own rule keeps epic #563 open while any row is below A−.
 
 ## What this review fixed
 
@@ -85,18 +87,26 @@ allows.
 ## The offline soak
 
 The full 28-day Persona soak (20 activities a day, seed 459, learning on) and its
-validator are the contract's offline gate. It last passed in CI on 2026-10-25 and
-never ran on 3.48.10. This review ran it on the bundle:
+validator are the contract's offline gate. Before this review it last ran in CI on
+2026-10-25, and never on 3.48.10. This review ran it three ways:
 
-- On this Windows machine (shared by about a dozen agent sessions), it stopped on
-  simulated day 1: "Dispatch batch ... pump exceeded 30000 ms of wall-clock time".
-  A shorter run showed each step finishing normally but slowly; the same 30-second
-  limit per batch holds on the Linux runner the contract names.
-- On Linux (WSL, like the CI runner), the result is in the #578 status comment of
-  2026-11-28.
-
-From the next release on, the workflow runs the soak on the release commit and the
-reassessment page shows its numbers (worst daily append p95, peak memory, growth).
+- **On GitHub's reference runner, for `main` at `36d5ef5d`** (3.48.10 plus 36
+  commits), with the project's own `persona-soak.yml`:
+  [run 46102013382](https://github.com/mario-andreschak/FLUJO/actions/runs/46102013382).
+  **Passed**, checked again with the soak's validator: 28 of 28 days measured,
+  worst daily append p95 32.6 ms (limit 150 ms), worst recall p95 5.2 ms, peak
+  memory 512 MB (limit 768 MB), growth 62 MB (limit 256 MB). The whole run took
+  under 5 minutes.
+- **On the cleanup bundle, on this shared Windows PC and in its Linux subsystem**
+  (about a dozen agent sessions running at once): both stopped on simulated day 1
+  at the harness's 30-second limit per batch of four steps. A one-day run in the
+  same Linux subsystem passed all 24 soak tests; it showed every step finishing,
+  1 to 8 seconds apart. So the local failures come from the loaded machine, not
+  from a hang. The bundle cannot run on the reference runner until it reaches
+  `main`.
+- **From the next release on**, `release-evidence.yml` runs the soak on the
+  release commit on the reference runner, and the reassessment page shows its
+  numbers. That run is the verdict for the bundle's code.
 
 ## What code cannot supply
 
@@ -132,7 +142,8 @@ npm run reassess:release -- --evidence docs/quality/release-evidence/v3.48.10.js
 npm run reassess:release -- --evidence docs/quality/release-evidence/v3.48.10.json --source <bundle commit>   # the "cleanup bundle" column
 npm run check:docs-claims          # found the three missing limits, then passed
 npm run check:security-response    # 77 open alerts, all with a current written reason
-node scripts/run-persona-soak.mjs --days=28 --activities-per-day=20 --with-learning --seed=459 --commit=<bundle commit>
+node scripts/run-persona-soak.mjs --days=28 --activities-per-day=20 --with-learning --seed=459 --commit=<bundle commit>   # Windows and WSL: stopped on day 1 (loaded machine)
+gh workflow run persona-soak.yml --ref main -f commit_sha=36d5ef5dafb93c297c630c319985521f1804a8a8 -f seed=459    # passed, run 46102013382
 ```
 
 ## Rerun it

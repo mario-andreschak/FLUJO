@@ -248,12 +248,13 @@ export async function readSoak(directory, commit) {
 function soakNumbers(report) {
   const metrics = Array.isArray(report?.metrics) ? report.metrics : [];
   const rss = metrics.map((metric) => metric.residentMemoryBytes).filter(Number.isFinite);
+  const worst = (key) => (metrics.length ? Math.round(Math.max(...metrics.map((metric) => metric[key])) * 10) / 10 : null);
   return {
     days: report?.runIdentity?.days ?? null,
     activitiesPerDay: report?.runIdentity?.activitiesPerDay ?? null,
     measuredDays: metrics.length,
-    maxAppendP95Ms: metrics.length ? Math.max(...metrics.map((metric) => metric.eventAppendP95Ms)) : null,
-    maxRecallP95Ms: metrics.length ? Math.max(...metrics.map((metric) => metric.recallP95Ms)) : null,
+    maxAppendP95Ms: worst('eventAppendP95Ms'),
+    maxRecallP95Ms: worst('recallP95Ms'),
     peakRssBytes: rss.length ? Math.max(...rss) : null,
     rssGrowthBytes: rss.length ? rss.at(-1) - rss[0] : null,
     startedAt: report?.runIdentity?.startedAt ?? null,
