@@ -13,6 +13,9 @@ import {
   type FlujoPromptTool,
   type FlujoSystemPromptContext,
 } from '@/shared/utils/flujoSystemPrompt';
+import { buildDefaultFlujoAgent } from '@/backend/services/flow/defaultAgent';
+
+jest.mock('@/backend/services/flow/index', () => ({ flowService: {} }));
 
 const served = (originalName: string): FlujoPromptTool => ({
   name: `mcp_${originalName}_x1`,
@@ -259,6 +262,31 @@ describe('design-time estimate from the flow graph', () => {
     expect(plan.people.join('\n')).toContain('`handoff_to_review`');
     expect(plan.flujoTools.join('\n')).toContain('`read_conversation` reads one');
     expect(plan.storedResults).not.toEqual([]);
+  });
+
+  it('reads apps wired to the step by edges, as the built-in agent is saved (#1231)', () => {
+    const saved = buildDefaultFlujoAgent();
+    const step = saved.nodes.find((node) => node.type === 'process')!;
+    expect(step.data.properties?.mcpNodes).toBeUndefined();
+    const plan = planFlujoSystemPromptSections(estimateFlujoSystemPromptContext(saved, step.id));
+    expect(plan.flujoTools.join('\n')).toContain('`discover_capabilities` searches all servers and flows');
+    expect(plan.flujoTools.join('\n')).toContain('`execute_flow` runs one and returns its answer');
+    expect(plan.storedResults).not.toEqual([]);
+    expect(plan.workflow.join('\n')).not.toContain('workflow with other agents');
+  });
+
+  it('counts an app listed on the step and wired by an edge once', () => {
+    const wired = {
+      nodes: [
+        { id: 'p', type: 'process', data: { properties: { mcpNodes: [{ id: 'm', properties: { boundServer: 'flujo', enabledTools: ['kv_get'] } }] } } },
+        { id: 'm', type: 'mcp', data: { properties: { boundServer: 'flujo', enabledTools: ['kv_get'] } } },
+      ],
+      edges: [{ source: 'p', target: 'm', data: { edgeType: 'mcp' } }],
+    };
+    expect(estimateFlujoSystemPromptContext(wired, 'p').tools).toEqual([
+      { name: 'read_resource' },
+      { name: 'kv_get', originalName: 'kv_get', server: 'flujo' },
+    ]);
   });
 
   it('gives an unknown node only the basic rules', () => {

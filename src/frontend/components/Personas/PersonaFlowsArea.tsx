@@ -307,7 +307,7 @@ export default function PersonaFlowsArea({
     label: flow.name,
     searchText: `${flow.name} ${flow.description ?? ''}`,
     content: (
-      <Stack spacing={1.25} sx={{ height: '100%' }}>
+      <Stack role="group" aria-label={flow.name} spacing={1.25} sx={{ height: '100%' }}>
         <FlowCard flow={flow} selected={false} pickerMode selectionManaged onSelect={() => {}} />
         {flow.personaOwnership && <Typography variant="body2">{t('personas.behaviors.ownedCopyHelp')}</Typography>}
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>

@@ -38,19 +38,46 @@ describe('workspace frontend selection (#406)', () => {
 });
 
 describe('workspace-aware page navigation', () => {
-  it('uses a full navigation when the mounted page has an explicit workspace', () => {
+  it('uses a full navigation to another page or workspace when the mounted page has an explicit workspace', () => {
     const push = jest.fn();
     const assign = jest.fn();
+    const pushState = jest.fn();
 
     navigateWorkspaceRoute(
       { push },
       '/flows?flow=default-agent-flujo&mode=edit&workspace=game-dev',
+      { href: 'http://localhost/models?workspace=game-dev', assign },
+      { pushState },
+    );
+    navigateWorkspaceRoute(
+      { push },
+      '/flows?flow=default-agent-flujo&mode=edit&workspace=team-space',
       { href: 'http://localhost/flows?workspace=game-dev', assign },
+      { pushState },
     );
 
-    expect(assign).toHaveBeenCalledWith(
-      '/flows?flow=default-agent-flujo&mode=edit&workspace=game-dev',
+    expect(assign.mock.calls).toEqual([
+      ['/flows?flow=default-agent-flujo&mode=edit&workspace=game-dev'],
+      ['/flows?flow=default-agent-flujo&mode=edit&workspace=team-space'],
+    ]);
+    expect(push).not.toHaveBeenCalled();
+    expect(pushState).not.toHaveBeenCalled();
+  });
+
+  it('stays on the page in the same workspace, so an unsaved new agent is not thrown away', () => {
+    const push = jest.fn();
+    const assign = jest.fn();
+    const pushState = jest.fn();
+
+    navigateWorkspaceRoute(
+      { push },
+      '/flows?flow=new-draft&mode=edit&workspace=game-dev',
+      { href: 'http://localhost/flows?workspace=game-dev', assign },
+      { pushState },
     );
+
+    expect(pushState).toHaveBeenCalledWith(null, '', '/flows?flow=new-draft&mode=edit&workspace=game-dev');
+    expect(assign).not.toHaveBeenCalled();
     expect(push).not.toHaveBeenCalled();
   });
 

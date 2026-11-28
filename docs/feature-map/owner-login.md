@@ -26,6 +26,7 @@ Preconditions: a throwaway instance from the verify-flujo skill. A real sign-in 
 
 - **Open the page**: `node scripts/flujo-drive.mjs open /owner/login` → heading "Owner sign in", the credential field, "Sign in", "Sign out" and the "Pair the first owner" section.
 - **Check the refusal**: use `steps /owner/login --file <steps.json>`: fill "Owner credential" with a made-up value, click button "Sign in", `expect-text` "not authorized", then `aria` → a status message explains why sign-in was refused.
+- **Two people, each in a private workspace** (needs sign-in for several people turned on with two members; `npm run journey:multi-user` sets this up): `node scripts/check-multi-user.mjs --url <throwaway FLUJO> --browser-steps <folder>` checks over HTTP that each person sees only their own workspace and that every kind of request to the other's answers like a workspace that does not exist, then signs Ben in on this page ("Sign in to FLUJO" → his own workspace) and opens Anna's workspace link as Ben → "Unknown workspace: <Anna's workspace>". It turns sign-in off again at the end.
 - **Proof**: an ARIA snapshot and a screenshot of the page with the status message.
 
 ## Gotchas

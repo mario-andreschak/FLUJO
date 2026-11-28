@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { checkFeatureMap, pageRoutes, parseEntry, SECTIONS } from './check-feature-map.mjs';
+import { checkFeatureMap, checkStepFiles, pageRoutes, parseEntry, SECTIONS } from './check-feature-map.mjs';
 
 const entry = (title, routes, sections = SECTIONS) => [
   `# ${title}`,
@@ -48,4 +48,17 @@ test('stale routes, duplicates, missing links and wrong sections fail', () => {
   assert.ok(problems.some((problem) => /\/ is already covered by docs\/feature-map\/home\.md/.test(problem)));
   assert.ok(problems.some((problem) => /use exactly these sections/.test(problem)));
   assert.ok(problems.some((problem) => /link agents\.md/.test(problem)));
+});
+
+test('step files run only through the one bullet that names them, and must be valid', () => {
+  const driving = (...bullets) => entry('Apps', ['/mcp']).replace('## Driving it with flujo-drive\n\n- item', ['## Driving it with flujo-drive', '', ...bullets].join('\n'));
+  const named = (label, file) => `- **${label}**: \`node scripts/flujo-drive.mjs steps /mcp --file docs/feature-map/steps/${file}\` → "Done".`;
+  const valid = () => [{ do: 'click', role: 'button', name: 'Go' }];
+  assert.deepEqual(checkStepFiles([{ name: 'apps.md', content: driving(named('Drop', 'drop.json')) }], ['drop.json'], valid), []);
+  const [unnamed] = checkStepFiles([{ name: 'apps.md', content: driving() }], ['drop.json'], valid);
+  assert.match(unnamed, /drop\.json is not named by any "Driving it with flujo-drive" bullet, so nothing runs it/);
+  const twice = checkStepFiles([{ name: 'apps.md', content: driving(named('One', 'drop.json'), named('Two', 'drop.json')) }], ['drop.json'], valid);
+  assert.match(twice.join('\n'), /is named by .*\("One"\) and .*\("Two"\)/);
+  const broken = checkStepFiles([{ name: 'apps.md', content: driving(named('Drop', 'gone.json')) }], [], () => { throw new Error('the step file does not exist'); });
+  assert.match(broken.join('\n'), /apps\.md \("Drop"\): the step file does not exist/);
 });

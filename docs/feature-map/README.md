@@ -52,6 +52,11 @@ fails when an entry has no bullet the sweep can run.
   button and picks that file in the file dialog it opens), and
   `shot` or `aria`, which the sweep skips because it saves its own proof. A
   `steps` command with `--file` puts the list after "The steps:".
+- A step file: `` `node scripts/flujo-drive.mjs steps /route --file docs/feature-map/steps/<name>.json` ``
+  runs the steps in that file, which check their own results; the words after
+  `→` then only describe them. Each file in `docs/feature-map/steps/` is named
+  by exactly one bullet, and `npm run check:feature-map` fails on a file no
+  bullet names or whose steps are not valid.
 - `click switch "X"` and `click checkbox "X"` mean "make sure it is on", so
   walking several entries in a row never turns it off again.
 - After `→`, a leading `heading "X"`, `dialog "X"` or `"quoted text"` is
@@ -97,6 +102,28 @@ answers first and open the conversation again. Like the first-use journey it
 drives a `launch` instance while one runs, or else starts its own FLUJO from the
 production build and removes it afterwards. Evidence lands in
 `human-step-journey/`. The steps are listed in [Agents](agents.md).
+
+## Step files and the two-person journey
+
+`npm run journey:feature-steps` (after `npm run build`) runs every step file
+the entries name, on throwaway FLUJOs from the production build, in the order
+of the feature list. A bullet marked `(needs …)` gets its precondition from
+`scripts/feature-steps/setups.mjs` first (the local stand-in model, a launch
+setting such as `NODE_EXTRA_CA_CERTS`, saved agents, a Persona, a package
+from a local stand-in registry); the run fails when a step file needs
+something no setup provides. Each check saves a screenshot and an ARIA
+snapshot, plus `report.json`, under `feature-steps/` in the evidence folder.
+
+`npm run journey:multi-user` checks several people on one FLUJO: the HTTP and
+browser checks of `scripts/check-multi-user.mjs` on one fresh FLUJO, then a
+team in two browsers at once on another (sign-in turned on in Settings, a
+person added, a team with a team workspace and an agent, both editing it,
+"Someone else saved first", "Who changed what", copying into the team,
+removing a member, sign-in turned off again). Evidence goes to `multi-user/`.
+
+The `First-use journey` job of `verify-full.yml` runs both on the production
+build; `scripts/workflow-contract.mjs` refuses removing, skipping or
+narrowing them.
 
 ## Scripted pilot
 

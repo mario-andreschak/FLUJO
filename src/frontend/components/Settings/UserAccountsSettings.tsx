@@ -544,7 +544,7 @@ function AddPersonForm({ reload }: { reload: () => void }) {
   return (
     <Stack spacing={1.5}>
       <Typography variant="h6" component="h3">Add a person</Typography>
-      <Box component="form" onSubmit={submit} sx={{ display: 'flex', flexDirection: 'column', gap: 2, maxWidth: 480 }}>
+      <Box component="form" aria-label="Add a person" onSubmit={submit} sx={{ display: 'flex', flexDirection: 'column', gap: 2, maxWidth: 480 }}>
         <TextField label="Sign-in name" value={name} disabled={busy} autoComplete="off"
           helperText="Lower-case letters, digits, dots, dashes or underscores."
           onChange={event => setName(event.target.value)} />

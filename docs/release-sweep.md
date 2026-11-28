@@ -17,7 +17,8 @@ never opens pull requests.
 3. Walks the feature map in the order of the list in
    `docs/feature-map/README.md`. Every driving step written in the sweep's
    grammar (see "Steps the release sweep can run" in that README) becomes one
-   check, run in a fresh browser session. Steps that need something a fresh
+   check, run in a fresh browser session; a bullet that names a step file in
+   `docs/feature-map/steps/` runs that file's steps. Steps that need something a fresh
    FLUJO does not have (an AI model, a saved agent) or that are prose only are
    listed as "not covered", never guessed.
 4. A step that fails runs once more in a fresh browser. It counts as a problem

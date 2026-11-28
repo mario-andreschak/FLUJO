@@ -34,7 +34,17 @@ const STATE_FILE = stateFileFor(ROOT);
 const SHARED_STATE_FILE = path.join(HOME, 'instance.json');
 export const EVIDENCE_DIR = path.join(HOME, 'evidence');
 const RESERVED_PORTS = new Set([4200]);
-const STEP_KINDS = new Set(['goto', 'click', 'fill', 'press', 'wait-for', 'expect-text', 'expect-no-text', 'drop-file', 'choose-file', 'shot', 'aria']);
+const STEP_KINDS = new Set([
+  'goto', 'click', 'fill', 'select', 'check', 'uncheck', 'press', 'wait-for', 'expect-text', 'expect-no-text', 'expect-state',
+  'drop-file', 'choose-file', 'shot', 'aria',
+]);
+const STEP_FIELDS = {
+  goto: ['route'], click: ['role', 'name'], fill: ['label', 'value'], select: ['label', 'option'], check: ['role', 'name'],
+  uncheck: ['role', 'name'], press: ['key'], 'wait-for': ['role', 'name'], 'expect-text': ['text'], 'expect-no-text': ['text'],
+  'expect-state': ['role', 'name', 'state'], 'drop-file': ['role', 'name', 'file'], 'choose-file': ['role', 'name', 'file'],
+  shot: ['out'], aria: ['out'],
+};
+const STATES = new Set(['checked', 'unchecked', 'disabled', 'enabled', 'filled', 'empty']);
 
 export const USAGE = `Usage: node scripts/flujo-drive.mjs <command> [options]
 
@@ -103,12 +113,12 @@ export function validateSteps(steps) {
   steps.forEach((step, index) => {
     const where = `step ${index + 1}`;
     if (!STEP_KINDS.has(step?.do)) throw new Error(`${where}: "do" must be one of ${[...STEP_KINDS].join(', ')}`);
-    const need = {
-      goto: ['route'], click: ['role', 'name'], fill: ['label', 'value'], press: ['key'], 'wait-for': ['role', 'name'],
-      'expect-text': ['text'], 'expect-no-text': ['text'], 'drop-file': ['role', 'name', 'file'], 'choose-file': ['role', 'name', 'file'], shot: ['out'], aria: ['out'],
-    }[step.do];
-    for (const field of need) {
-      if (typeof step[field] !== 'string' || !step[field]) throw new Error(`${where} (${step.do}) needs "${field}"`);
+    for (const field of STEP_FIELDS[step.do]) {
+      if (typeof step[field] !== 'string' || (!step[field] && field !== 'value')) throw new Error(`${where} (${step.do}) needs "${field}"`);
+    }
+    if (step.do === 'expect-state' && !STATES.has(step.state)) throw new Error(`${where} (expect-state): "state" must be one of ${[...STATES].join(', ')}`);
+    if (step.within !== undefined && (typeof step.within?.role !== 'string' || typeof step.within?.name !== 'string')) {
+      throw new Error(`${where} (${step.do}): "within" needs a "role" and a "name", for example { "role": "dialog", "name": "Delete" }`);
     }
   });
   return steps;
@@ -336,7 +346,8 @@ export async function loadChromium({ args = [] } = {}) {
 
 // FLUJO shows `.app-loading` while it opens the workspace; role="alert" marks a dead end (error, owner sign-in).
 // A dead end that offers "Retry" is retried a few times and reported, because dev mode answers slowly while it compiles.
-export async function settle(page, log) {
+// A step that expects the dead end (for example a refused workspace link) passes `{ deadEnd: true }`.
+export async function settle(page, log, { deadEnd = false } = {}) {
   await page.waitForLoadState('load');
   for (let attempt = 1; ; attempt += 1) {
     await page.waitForFunction(
@@ -347,7 +358,7 @@ export async function settle(page, log) {
       throw new Error('FLUJO stayed on its loading screen for 3 minutes. Run "doctor" and read the instance log.');
     });
     const dead = page.locator('.app-loading[role="alert"]');
-    if (!(await dead.count())) break;
+    if (!(await dead.count()) || deadEnd) break;
     const message = (await dead.first().innerText()).replace(/\s+/g, ' ').trim();
     const retry = dead.getByRole('button', { name: 'Retry' });
     if (attempt > 3 || !(await retry.count())) throw new Error(`FLUJO shows instead of the page: "${message}"`);
@@ -387,53 +398,122 @@ export async function save(page, kind, file, log) {
   log(`Saved ${kind === 'shot' ? 'screenshot' : 'ARIA snapshot'}: ${target}`);
 }
 
+/** Files named in steps are read from this checkout, wherever the driver was started. */
+export function stepFile(file, root = ROOT) {
+  return path.resolve(root, file);
+}
+
+/** The part of the page a step acts in: the whole page, or the visible element its `within` names. */
+function scopeOf(page, step) {
+  return step.within ? page.getByRole(step.within.role, { name: step.within.name, exact: step.within.exact ?? false }).filter({ visible: true }).first() : page;
+}
+
+const byRole = (scope, step) => scope.getByRole(step.role, { name: step.name, exact: step.exact ?? false }).filter({ visible: true }).first();
+const normalText = (text) => text.replace(/\s+/g, ' ').toLowerCase();
+
+async function visibleText(page, step) {
+  if (!step.within) return page.evaluate(() => document.body.innerText);
+  const scope = scopeOf(page, step);
+  return (await scope.count()) ? scope.innerText() : '';
+}
+
+/** Polls until `condition` holds, then returns; throws `message` after `timeout` milliseconds. */
+async function waitUntilTrue(page, condition, timeout, message) {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    if (await condition().catch(() => false)) return;
+    if (Date.now() > deadline) throw new Error(message);
+    await page.waitForTimeout(250);
+  }
+}
+
+const STATE_CHECKS = {
+  checked: (target) => target.isChecked(),
+  unchecked: async (target) => !(await target.isChecked()),
+  disabled: (target) => target.isDisabled(),
+  enabled: (target) => target.isEnabled(),
+  filled: async (target) => (await target.inputValue()).trim() !== '',
+  empty: async (target) => (await target.inputValue()) === '',
+};
+
+/** Turns a checkbox or switch on or off unless it already is, then waits until it shows that state. */
+async function setChecked(page, step, on, log) {
+  const target = byRole(scopeOf(page, step), step);
+  await target.waitFor({ timeout: Number(step.timeout ?? 60_000) });
+  if ((await target.isChecked()) !== on) await target.click();
+  await waitUntilTrue(page, async () => (await target.isChecked()) === on, 10_000, `The ${step.role} "${step.name}" did not turn ${on ? 'on' : 'off'}.`);
+  await settle(page, log);
+}
+
+/** Picks `option` in the dropdown labelled `label`: a native select, or a list that opens on click. */
+async function selectOption(page, step, log) {
+  const field = scopeOf(page, step).getByRole('combobox', { name: step.label, exact: step.exact ?? false }).filter({ visible: true }).first();
+  await field.waitFor({ timeout: Number(step.timeout ?? 60_000) });
+  if (await field.evaluate((element) => element.tagName === 'SELECT')) {
+    const value = await field.evaluate((element, { option, exact }) => {
+      const match = [...element.options].find((candidate) => (exact ? candidate.label.trim() === option : candidate.label.includes(option)));
+      return match?.value;
+    }, { option: step.option, exact: step.exactOption ?? false });
+    if (value === undefined) throw new Error(`The dropdown "${step.label}" has no option "${step.option}".`);
+    await field.selectOption(value);
+  } else {
+    await field.click();
+    await page.getByRole('option', { name: step.option, exact: step.exactOption ?? false }).filter({ visible: true }).first().click();
+  }
+  await settle(page, log);
+}
+
 export async function runStep(page, step, baseUrl, log) {
+  const timeout = Number(step.timeout ?? 60_000);
   switch (step.do) {
     case 'goto':
       await gotoWithRetry(page, routeUrl(baseUrl, step.route), log);
-      await settle(page, log);
+      await settle(page, log, { deadEnd: step.deadEnd === true });
       break;
     case 'click':
-      await page.getByRole(step.role, { name: step.name, exact: step.exact ?? false }).filter({ visible: true }).first().click();
+      await byRole(scopeOf(page, step), step).click({ timeout });
       await settle(page, log);
       break;
     case 'fill':
-      await page.getByLabel(step.label, { exact: step.exact ?? false }).filter({ visible: true }).first().fill(step.value);
+      await scopeOf(page, step).getByLabel(step.label, { exact: step.exact ?? false }).filter({ visible: true }).first().fill(step.value, { timeout });
+      break;
+    case 'select':
+      await selectOption(page, step, log);
+      break;
+    case 'check':
+    case 'uncheck':
+      await setChecked(page, step, step.do === 'check', log);
       break;
     case 'press':
       await page.keyboard.press(step.key);
       await settle(page, log);
       break;
     case 'wait-for':
-      await page.getByRole(step.role, { name: step.name }).filter({ visible: true }).first().waitFor({ timeout: Number(step.timeout ?? 60_000) });
+      await byRole(scopeOf(page, step), step).waitFor({ timeout });
       break;
     case 'expect-text':
-      await page.waitForFunction(
-        (text) => document.body.innerText.replace(/\s+/g, ' ').toLowerCase().includes(text.replace(/\s+/g, ' ').toLowerCase()),
-        step.text,
-        { timeout: Number(step.timeout ?? 60_000) },
-      ).catch(() => {
-        throw new Error(`"${step.text}" did not appear on the page within ${Number(step.timeout ?? 60_000) / 1000}s.`);
-      });
+    case 'expect-no-text': {
+      const wanted = step.do === 'expect-text';
+      await waitUntilTrue(page, async () => normalText(await visibleText(page, step)).includes(normalText(step.text)) === wanted, timeout,
+        wanted ? `"${step.text}" did not appear ${step.within ? `in ${step.within.role} "${step.within.name}" ` : 'on the page '}within ${timeout / 1000}s.`
+          : `"${step.text}" was still ${step.within ? `in ${step.within.role} "${step.within.name}"` : 'on the page'} after ${timeout / 1000}s.`);
       break;
-    case 'expect-no-text':
-      await page.waitForFunction(
-        (text) => !document.body.innerText.replace(/\s+/g, ' ').toLowerCase().includes(text.replace(/\s+/g, ' ').toLowerCase()),
-        step.text,
-        { timeout: Number(step.timeout ?? 60_000) },
-      ).catch(() => {
-        throw new Error(`"${step.text}" was still on the page after ${Number(step.timeout ?? 60_000) / 1000}s.`);
-      });
+    }
+    case 'expect-state': {
+      const target = byRole(scopeOf(page, step), step);
+      await waitUntilTrue(page, () => STATE_CHECKS[step.state](target), timeout,
+        `The ${step.role} "${step.name}" was not ${step.state} within ${timeout / 1000}s.`);
       break;
+    }
     case 'drop-file': {
       // A real drag and drop of a local file onto the element, as a person would do from the file manager.
-      const bytes = [...readFileSync(step.file)];
+      const bytes = [...readFileSync(stepFile(step.file))];
       const transfer = await page.evaluateHandle(({ bytes: content, name }) => {
         const data = new DataTransfer();
         data.items.add(new File([new Uint8Array(content)], name));
         return data;
       }, { bytes, name: path.basename(step.file) });
-      const target = page.getByRole(step.role, { name: step.name, exact: step.exact ?? false }).filter({ visible: true }).first();
+      const target = byRole(scopeOf(page, step), step);
       for (const type of ['dragenter', 'dragover', 'drop']) await target.dispatchEvent(type, { dataTransfer: transfer });
       await settle(page, log);
       break;
@@ -441,9 +521,9 @@ export async function runStep(page, step, baseUrl, log) {
     case 'choose-file': {
       const [chooser] = await Promise.all([
         page.waitForEvent('filechooser', { timeout: 30_000 }),
-        page.getByRole(step.role, { name: step.name, exact: step.exact ?? false }).filter({ visible: true }).first().click(),
+        byRole(scopeOf(page, step), step).click(),
       ]);
-      await chooser.setFiles(step.file);
+      await chooser.setFiles(stepFile(step.file));
       await settle(page, log);
       break;
     }

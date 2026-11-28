@@ -16,6 +16,9 @@ const BIG_APP = 'npx playwright test --config=playwright.features-first-use.conf
 const TOOL_TESTER = 'npx playwright test --config=playwright.features.config.mjs';
 const FRONT_DOOR = 'npm run journey:front-door';
 const TOOL_RESULT_LIMIT = 'npm run check:tool-result-limit';
+const FEATURE_STEPS = 'npm run journey:feature-steps';
+const MULTI_USER = 'npm run journey:multi-user';
+const DRIVE_HOME = '${{ runner.temp }}/flujo-drive';
 
 /**
  * The first-use journey (#572) walks a fresh production build on desktop and
@@ -50,6 +53,17 @@ export function assertFirstUseJourneyJob(workflow) {
   if (at(TOOL_RESULT_LIMIT) <= build || !kept.some(line => line.endsWith('/flujo-drive/evidence/tool-result-limit/'))) {
     throw new Error('The broad qualification must check the tool result size limit in the browser '
       + `(${TOOL_RESULT_LIMIT}) after the production build, with nothing optional, and keep its screenshots and report even when it fails.`);
+  }
+  // The click-through checks a person used to run by hand (#1230, #1231, #1389, #574, #575): every
+  // feature map step file, and two people in two browsers. The exact command keeps them unfiltered.
+  const [featureSteps, multiUser] = [FEATURE_STEPS, MULTI_USER].map(at);
+  if (featureSteps <= build || multiUser <= build
+      || [featureSteps, multiUser].some(index => steps[index].env?.FLUJO_DRIVE_HOME !== DRIVE_HOME)
+      || !kept.some(line => line.endsWith('/flujo-drive/evidence/feature-steps/'))
+      || !kept.some(line => line.endsWith('/flujo-drive/evidence/multi-user/'))) {
+    throw new Error(`The broad qualification must run every feature map step file (\`${FEATURE_STEPS}\`) and the two-person `
+      + `journey (\`${MULTI_USER}\`) after the production build, unfiltered and with nothing optional, with FLUJO_DRIVE_HOME set to `
+      + `${DRIVE_HOME}, and keep their screenshots and reports even when they fail.`);
   }
 }
 const ANTIGRAVITY_INSTALL = "node -e \"require('./bin/antigravity-runtime.cjs').resolveBinary().then(binary => console.log(binary))\"";

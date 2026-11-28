@@ -98,6 +98,20 @@ for text a user can see, so screen-reader-only text does not count;
 CSS classes or screen positions. Add `--viewport 360x800` to check the phone
 layout.
 
+More kinds: `select` picks `option` in the dropdown labelled `label` (a native
+select or a list that opens on click); `check` and `uncheck` make sure a
+checkbox or switch is on or off; `expect-state` waits until the element named
+by `role` and `name` is `checked`, `unchecked`, `disabled`, `enabled`, `filled`
+or `empty`. Any step that finds an element, and `expect-text`/`expect-no-text`,
+can take `"within": { "role": "dialog", "name": "Delete “bash”?" }` to look
+only inside that part of the page (agent and app cards are `article`s named
+after the agent or app). `"exact": true` matches the whole name.
+
+A check that has to keep running belongs in a step file in
+`docs/feature-map/steps/`, named from its feature map bullet; then
+`npm run journey:feature-steps` and the release sweep run it, and CI runs it
+on every broad qualification. Never leave steps for a person in an issue.
+
 Every command waits until FLUJO's "Opening your workspace" screen is gone, and
 stops with the on-screen message if FLUJO shows an error or sign-in screen
 instead. It prints page errors and console errors at the end; treat a new one

@@ -307,8 +307,29 @@ function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' ? value as Record<string, unknown> : undefined;
 }
 
-function boundServerTools(properties: Record<string, unknown>): FlujoPromptTool[] {
-  const mcpNodes = Array.isArray(properties.mcpNodes) ? properties.mcpNodes : [];
+/**
+ * The app and resource nodes a step uses. A saved flow wires them to the step
+ * with attachment edges; a run copies them onto the step as `mcpNodes` and
+ * `resourceNodes` (FlowConverter). Both are read, so a preview of a saved flow
+ * names the same tools as the run.
+ */
+function attachedNodes(flow: FlowGraphLike, node: GraphNodeLike, kind: 'mcp' | 'resource'): unknown[] {
+  const listed = node.data?.properties?.[kind === 'mcp' ? 'mcpNodes' : 'resourceNodes'];
+  const found = Array.isArray(listed) ? [...listed] : [];
+  const known = new Set(found.map((entry) => record(entry)?.id).filter((id): id is string => typeof id === 'string'));
+  for (const edge of flow.edges ?? []) {
+    const edgeType = edge.data?.edgeType;
+    if (typeof edgeType !== 'string' || (kind === 'mcp' ? !edgeType.includes('mcp') : edgeType !== 'resource')) continue;
+    const otherId = edge.source === node.id ? edge.target : edge.target === node.id ? edge.source : undefined;
+    const other = otherId === undefined ? undefined : flow.nodes.find((candidate) => candidate.id === otherId);
+    if (!other || nodeType(other) !== kind || known.has(other.id)) continue;
+    known.add(other.id);
+    found.push({ id: other.id, properties: other.data?.properties ?? {} });
+  }
+  return found;
+}
+
+function boundServerTools(mcpNodes: readonly unknown[]): FlujoPromptTool[] {
   return mcpNodes.flatMap((mcpNode) => {
     const props = record(record(mcpNode)?.properties);
     const server = typeof props?.boundServer === 'string' ? props.boundServer : undefined;
@@ -338,9 +359,9 @@ export function estimateFlujoSystemPromptContext(flow: FlowGraphLike | null | un
   const handoffNames = buildHandoffToolNameMap(targets);
   const subflows = targets.filter((target) => target.type === 'subflow');
   const callNames = [...buildSubflowToolNameMap(subflows).values()];
-  const serverTools = boundServerTools(properties);
-  const resourceNodes = Array.isArray(properties.resourceNodes) ? properties.resourceNodes : [];
-  const mcpNodes = Array.isArray(properties.mcpNodes) ? properties.mcpNodes : [];
+  const mcpNodes = attachedNodes(flow, node, 'mcp');
+  const resourceNodes = attachedNodes(flow, node, 'resource');
+  const serverTools = boundServerTools(mcpNodes);
   const ownTools = [
     ...callNames,
     ...callNames.map((name) => name.replace(SUBFLOW_TOOL_PREFIX, START_SUBFLOW_PREFIX)),
