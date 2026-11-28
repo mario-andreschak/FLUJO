@@ -250,7 +250,13 @@ Every run uses a new, empty data folder (or Docker volume) and its own port:
    must still be there.
 5. Try to restore two damaged backups; both must be refused and change nothing.
 6. Restore the backup; the original data must be back. Back up again.
-7. Stop normally; the app must end and free its port.
+7. npm package and Windows installer only: add a local program (stdio) MCP
+   server and call its tool. Add an MCP server behind a local OAuth
+   authorization server (`scripts/mcp-oauth-reference-server.mjs`, built from
+   the official MCP SDK's handlers), sign in through FLUJO's own routes and
+   redirect, and use it after its access token expired. Restart; it must still
+   work with no new consent, and resetting the sign-in must revoke the grant.
+8. Stop normally; the app must end and free its port.
 
 With `--from npm:latest` (or `--from image:...` for Docker) the previous release
 starts first, writes the test data and takes the backup. The release under test
@@ -259,8 +265,10 @@ backup. CI uses the latest published release, so every release is checked as an
 upgrade from the one before it.
 
 What these checks do not cover: the test data is one flow, one finished
-conversation, the theme and one non-secret setting, with no model call, MCP
-tool, schedule, approval or secret. A forced stop is not a power cut. On Windows
+conversation, the theme and one non-secret setting, with no model call,
+schedule or approval. The Docker image runs no MCP checks, because a container
+starts local program servers only after the owner approves them. A forced stop
+is not a power cut. On Windows
 a console program has no gentle stop signal, so a normal stop there also ends
 the process tree. The backups are the ordinary selective backups, not complete
 data-folder or snapshot backups.

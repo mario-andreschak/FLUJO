@@ -2,6 +2,9 @@
 // Real FLUJO builds, installers and images are exercised only in CI; here a
 // small fixture app (scripts/fixtures/packaged-acceptance-app.mjs) stands in.
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { createHash, randomBytes } from 'node:crypto';
+import { createServer } from 'node:http';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -10,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { loadJSZip, parseOptions } from './packaged-acceptance.mjs';
 import { planChecks, runAcceptance } from './packaged-acceptance/checks.mjs';
 import { assertSameData, semanticView } from './packaged-acceptance/flujo-probe.mjs';
+import { MCP_CHECKS, STDIO_SERVER_SOURCE, followConsent, startReferenceServers } from './packaged-acceptance/mcp-checks.mjs';
 import {
   assertContainerIdentity, assertHostIdentity, createDockerTarget, createHostTarget, hostEnvironment, hostLaunch,
   installNpmPackages, isImageReference, npmCliCandidates, portOpen, readCandidateTarballs, unusedPort,
@@ -90,6 +94,52 @@ test('the plan adds the upgrade check only when a previous release is given', ()
   assert.deepEqual(planChecks({ upgrade: false }), ['start', 'seed-and-backup', 'restart-after-stop', 'restart-after-crash',
     'damaged-backup-refused', 'restore', 'backup-after-restore', 'clean-stop']);
   assert.deepEqual(planChecks({ upgrade: true }).slice(0, 3), ['previous-start', 'seed-and-backup', 'upgrade']);
+});
+
+test('host forms run the MCP checks after every data check and before the final stop', () => {
+  const plan = planChecks({ upgrade: false, mcp: true });
+  assert.deepEqual(plan.slice(-4), [...Object.keys(MCP_CHECKS), 'clean-stop']);
+  assert.equal(plan.indexOf('mcp-stdio'), plan.indexOf('backup-after-restore') + 1);
+});
+
+test('the local program server for the stdio check answers over standard input and output', async t => {
+  const child = spawn(process.execPath, ['-e', STDIO_SERVER_SOURCE], { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true });
+  t.after(() => child.kill());
+  assert.doesNotMatch(STDIO_SERVER_SOURCE, /["&|<>^%\r\n]/, 'no quotes, shell operators or line breaks, so it survives command-line quoting');
+  const answers = [];
+  child.stdout.setEncoding('utf8').on('data', chunk => answers.push(...chunk.split('\n').filter(Boolean).map(line => JSON.parse(line))));
+  const ask = message => child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`);
+  ask({ id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'test', version: '1' } } });
+  ask({ method: 'notifications/initialized' });
+  ask({ id: 2, method: 'tools/list' });
+  ask({ id: 3, method: 'tools/call', params: { name: 'echo', arguments: { text: 'hello' } } });
+  ask({ id: 4, method: 'resources/list' });
+  for (let tries = 0; answers.length < 4 && tries < 100; tries++) await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(answers.find(answer => answer.id === 1).result.protocolVersion, '2025-11-25');
+  assert.deepEqual(answers.find(answer => answer.id === 2).result.tools.map(tool => tool.name), ['echo']);
+  assert.equal(answers.find(answer => answer.id === 3).result.content[0].text, 'hello');
+  assert.equal(answers.find(answer => answer.id === 4).error.code, -32601);
+});
+
+test('the reference sign-in server issues a code that the headless browser carries back to the app', async t => {
+  const reference = await startReferenceServers({ moduleRoots: [root] });
+  t.after(() => reference.stop());
+  const app = createServer((request, response) => {
+    const url = new URL(request.url, 'http://app');
+    response.writeHead(307, { location: `/mcp?${url.searchParams.has('code') ? 'oauth_success=check' : 'oauth_error=no_code'}` }).end();
+  });
+  await new Promise(resolve => app.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => app.close(resolve)));
+  const appOrigin = `http://127.0.0.1:${app.address().port}`;
+  const registered = await fetch(`${reference.issuer}/register`, { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ redirect_uris: [`${appOrigin}/api/oauth/callback`], token_endpoint_auth_method: 'none', grant_types: ['authorization_code'] }) });
+  const { client_id: clientId } = await registered.json();
+  const authorization = new URL(`${reference.issuer}/authorize`);
+  for (const [key, value] of Object.entries({ response_type: 'code', client_id: clientId, redirect_uri: `${appOrigin}/api/oauth/callback`,
+    code_challenge: createHash('sha256').update(randomBytes(32).toString('base64url')).digest('base64url'),
+    code_challenge_method: 'S256', resource: reference.resource, state: 'check' })) authorization.searchParams.set(key, value);
+  const landing = await followConsent(authorization, appOrigin);
+  assert.equal(landing.searchParams.get('oauth_success'), 'check');
 });
 
 test('npm is found next to official Node.js downloads on each platform', () => {

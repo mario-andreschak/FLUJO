@@ -2,6 +2,7 @@
 // A target (targets.mjs) starts, stops and crashes one installed copy; a probe
 // (flujo-probe.mjs) writes, reads, backs up and restores the test data.
 import { delay } from './targets.mjs';
+import { MCP_CHECKS } from './mcp-checks.mjs';
 
 export const CHECKS = Object.freeze({
   'previous-start': 'The previous release starts on an empty data folder',
@@ -14,18 +15,21 @@ export const CHECKS = Object.freeze({
   restore: 'Restoring the backup brings the original data back',
   'backup-after-restore': 'A new backup after the restore holds exactly the restored data',
   'clean-stop': 'A normal stop ends the app and frees its port',
+  ...MCP_CHECKS,
 });
 
 export const LIMITS = Object.freeze([
-  'Test data only: one flow, one finished conversation, the theme and one non-secret setting. No model call, MCP tool run, schedule, approval or secret is checked.',
+  'Test data only: one flow, one finished conversation, the theme and one non-secret setting. No model call, schedule or approval is checked.',
+  'MCP checks run on the host forms: one local program server and one OAuth server from a local reference authorization server (official MCP SDK handlers). The container form starts local program servers only after the owner approves them, so it runs no MCP checks.',
   'A forced stop ends the processes; it is not a power cut. Data the operating system had not yet written to disk is not tested.',
   'On Windows a console program has no gentle stop signal, so a normal stop there also ends the process tree.',
   'Backups here are the ordinary selective backups (/api/backup), not complete data-folder or snapshot backups.',
 ]);
 
-export function planChecks({ upgrade }) {
+export function planChecks({ upgrade, mcp = false }) {
   return [upgrade ? 'previous-start' : 'start', 'seed-and-backup', ...(upgrade ? ['upgrade'] : []),
-    'restart-after-stop', 'restart-after-crash', 'damaged-backup-refused', 'restore', 'backup-after-restore', 'clean-stop'];
+    'restart-after-stop', 'restart-after-crash', 'damaged-backup-refused', 'restore', 'backup-after-restore',
+    ...(mcp ? Object.keys(MCP_CHECKS) : []), 'clean-stop'];
 }
 
 /** Wait until the target answers as itself and has finished starting up. */
@@ -62,8 +66,8 @@ function assertStopped(record) {
  * Run every check in order. A failed check stops the run; later checks are
  * reported as not run. Every started copy is stopped before this returns.
  */
-export async function runAcceptance({ candidate, previous, probe, readyOptions, log = () => {} }) {
-  const plan = planChecks({ upgrade: Boolean(previous) });
+export async function runAcceptance({ candidate, previous, probe, mcp, readyOptions, log = () => {} }) {
+  const plan = planChecks({ upgrade: Boolean(previous), mcp: Boolean(mcp) });
   const report = {
     checks: plan.map(id => ({ id, title: CHECKS[id], result: 'not-run' })),
     stops: [], limits: [...LIMITS], result: 'failed',
@@ -143,6 +147,14 @@ export async function runAcceptance({ candidate, previous, probe, readyOptions, 
       const again = await probe.backup(candidate.request, restored);
       return { backupBytes: again.length };
     });
+    if (mcp) {
+      await check('mcp-stdio', () => mcp.stdio(candidate.request));
+      await check('mcp-oauth', () => mcp.oauth(candidate.request, `http://127.0.0.1:${candidate.port}`));
+      await check('mcp-oauth-after-restart', () => mcp.oauthAfterRestart(candidate.request, async () => {
+        await stop(candidate);
+        await start(candidate);
+      }));
+    }
     await check('clean-stop', () => stop(candidate).then(() => undefined));
     report.result = 'passed';
   } catch (error) {
