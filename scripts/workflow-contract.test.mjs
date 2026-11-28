@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import YAML from 'yaml';
-import { assertFullWorkflowContract, assertReleaseSweepReportsOnly, assertReleaseSweepRunsByDefault, assertWorkflowContract } from './workflow-contract.mjs';
+import { assertContributorGuideJob, assertFullWorkflowContract, assertReleaseSweepReportsOnly, assertReleaseSweepRunsByDefault, assertWorkflowContract } from './workflow-contract.mjs';
 
 const directory = new URL('../.github/workflows/', import.meta.url);
 const readWorkflows = () => Object.fromEntries(readdirSync(directory).filter((file) => /\.ya?ml$/.test(file) && file !== 'verify.yml')
@@ -429,7 +429,9 @@ for (const [label, change, expected] of [
   ['an Antigravity job without the verified Node runtime', files => {
     antigravityJob(files).steps = antigravityJob(files).steps.filter(step => !step.run?.startsWith('node scripts/verify-ci-node.mjs'));
   }, /verify official binary identity/],
-  ['a verification gate that ignores the Antigravity job', files => { files['verify.yml'].jobs.verification.needs.pop(); }, /evaluate every prerequisite/],
+  ['a verification gate that ignores the Antigravity job', files => {
+    files['verify.yml'].jobs.verification.needs = files['verify.yml'].jobs.verification.needs.filter(id => id !== 'antigravity-cli');
+  }, /evaluate every prerequisite/],
 ]) {
   test(`broad qualification refuses ${label}`, () => {
     const files = readWorkflows();
@@ -438,9 +440,45 @@ for (const [label, change, expected] of [
   });
 }
 
-test('the main pull-request bridge does not need the broad-only Antigravity job', () => {
+const guideJob = files => files['verify.yml'].jobs['contributor-guide'];
+const guideStep = (files, prefix) => guideJob(files).steps.find(step => step.run?.startsWith(prefix) || step.uses?.startsWith(prefix));
+for (const [label, change, expected] of [
+  ['a missing contributor guide job', files => { delete files['verify.yml'].jobs['contributor-guide']; }, /follow the contributor guide on Linux and macOS/],
+  ['a contributor guide job without macOS', files => { guideJob(files).strategy.matrix.os = ['ubuntu-latest']; }, /follow the contributor guide/],
+  ['a contributor guide job with extra matrix rows', files => { guideJob(files).strategy.matrix.include = [{ os: 'windows-latest' }]; }, /follow the contributor guide/],
+  ['a contributor guide job that stops the other system on a failure', files => { guideJob(files).strategy['fail-fast'] = true; }, /follow the contributor guide/],
+  ['a skipped contributor guide job', files => { guideJob(files).if = 'false'; }, /follow the contributor guide/],
+  ['an optional walkthrough', files => { guideStep(files, 'node scripts/contributor-guide.mjs')['continue-on-error'] = true; }, /follow the contributor guide/],
+  ['a conditional walkthrough', files => { guideStep(files, 'node scripts/contributor-guide.mjs').if = "runner.os == 'Linux'"; }, /follow the contributor guide/],
+  ['a walkthrough with extra settings', files => { guideStep(files, 'node scripts/contributor-guide.mjs').env = { NODE_OPTIONS: '--max-old-space-size=8192' }; }, /follow the contributor guide/],
+  ['a contributor guide job with job-wide settings', files => { guideJob(files).env = { FLUJO_DATA_DIR: '/tmp/flujo' }; }, /follow the contributor guide/],
+  ['a shallow contributor guide checkout', files => { guideStep(files, 'actions/checkout@').with['fetch-depth'] = 1; }, /follow the contributor guide/],
+  ['a walkthrough that does not keep its report', files => { guideStep(files, 'actions/upload-artifact@').if = 'success()'; }, /follow the contributor guide/],
+  ['a walkthrough report kept from the wrong folder', files => { guideStep(files, 'actions/upload-artifact@').with.path = 'ci-node-runtime/'; }, /follow the contributor guide/],
+  ['a walkthrough run before the runtime is verified', files => {
+    const steps = guideJob(files).steps;
+    const [walkthrough] = steps.splice(steps.findIndex(step => step.run?.startsWith('node scripts/contributor-guide.mjs')), 1);
+    steps.splice(1, 0, walkthrough);
+  }, /executes Node commands (?:before runtime verification|without)|follow the contributor guide/],
+  ['a contributor guide job without the verified Node runtime', files => {
+    guideJob(files).steps = guideJob(files).steps.filter(step => !step.run?.startsWith('node scripts/verify-ci-node.mjs'));
+  }, /verify official binary identity/],
+  ['a verification gate that ignores the contributor guide job', files => {
+    files['verify.yml'].jobs.verification.needs = files['verify.yml'].jobs.verification.needs.filter(id => id !== 'contributor-guide');
+  }, /evaluate every prerequisite/],
+]) {
+  test(`broad qualification refuses ${label}`, () => {
+    const files = readWorkflows();
+    assertContributorGuideJob(files['verify.yml']);
+    change(files);
+    assert.throws(() => assertFullWorkflowContract(files), expected);
+  });
+}
+
+test('the main pull-request bridge does not need the broad-only Antigravity and contributor guide jobs', () => {
   const files = Object.fromEntries(readdirSync(directory).filter(file => /\.ya?ml$/.test(file))
     .map(file => [file, YAML.parse(readFileSync(new URL(file, directory), 'utf8'))]));
   assert.equal(files['verify.yml'].jobs['antigravity-cli'], undefined);
-  assert.deepEqual(files['verify-full.yml'].jobs.verification.needs.at(-1), 'antigravity-cli');
+  assert.equal(files['verify.yml'].jobs['contributor-guide'], undefined);
+  assert.deepEqual(files['verify-full.yml'].jobs.verification.needs.slice(-2), ['antigravity-cli', 'contributor-guide']);
 });

@@ -3,11 +3,13 @@
 This guide takes you from nothing to a first pull request. You do not need an AI
 account, a paid service, private files or an existing FLUJO installation.
 
-Last walked through step by step on **Windows 10, November 25, 2026** (Node.js
-22.23.4, npm 10.9.9, Git 2.47). Times below are from that machine. If a step is
-wrong on your system, fixing this page is a welcome first pull request
-([#1441](https://github.com/mario-andreschak/FLUJO/issues/1441) asks for a
-Linux or macOS check).
+A machine follows this page word for word on **Linux and macOS**: it runs every
+command below in a fresh clone, starts the app, checks that it answers, stops it
+with Ctrl+C and runs the checks from step 6 (`scripts/contributor-guide.mjs`, in
+the full CI checks). On **Windows** it was last walked through by hand on November
+25, 2026 (Windows 10, Node.js 22.23.4, npm 10.9.9, Git 2.47). Times below are
+from that machine unless they say otherwise. If a step is wrong on your system,
+fixing this page is a welcome first pull request.
 
 ## What you need
 
@@ -116,7 +118,7 @@ node scripts/launch-next.mjs dev --webpack --hostname 127.0.0.1 --port 4300
 Linux or macOS:
 
 ```sh
-export FLUJO_DATA_DIR="$(mktemp -d -t flujo-contributor.XXXXXX)"
+export FLUJO_DATA_DIR="$(mktemp -d "${TMPDIR:-/tmp}/flujo-contributor.XXXXXX")"
 export FLUJO_EXPOSURE_MODE=localhost
 node scripts/launch-next.mjs dev --webpack --hostname 127.0.0.1 --port 4300
 ```
@@ -124,9 +126,6 @@ node scripts/launch-next.mjs dev --webpack --hostname 127.0.0.1 --port 4300
 Open `http://127.0.0.1:4300` and stop with Ctrl+C. Close that terminal afterwards
 so the throwaway settings do not leak into your everyday FLUJO. Do not connect a
 real AI account or import a personal backup for a first change.
-
-The November 25 check did not start the app (the machine was shared with other
-work), so tell us in an issue if this step does not work for you.
 
 ## 5. Make your change
 
