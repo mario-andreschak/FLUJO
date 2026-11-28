@@ -43,7 +43,7 @@ const RUNS = outFile ? Number(process.env.FLUJO_TURN_BENCH_RUNS ?? 12) : 2;
 const WARMUP = outFile ? Number(process.env.FLUJO_TURN_BENCH_WARMUP ?? 8) : 0;
 jest.setTimeout(outFile ? 900_000 : 120_000);
 
-const ENV = ['FLUJO_DATA_DIR', 'FLUJO_ENCRYPTION_SECRET_FILE', 'FLUJO_WRITER_LEASE_IDLE_MS', 'FLUJO_LOW_LATENCY_SAVES'] as const;
+const ENV = ['FLUJO_DATA_DIR', 'FLUJO_ENCRYPTION_SECRET_FILE', 'FLUJO_WRITER_LEASE_IDLE_MS'] as const;
 const STUB_KEY = 'bench-stub-key';
 const KNOWLEDGE_URI = 'bench://kb/faq';
 const KNOWLEDGE = Array.from({ length: 40 }, (_, index) =>
@@ -356,18 +356,11 @@ it('answers flow turns with MCP tools and a bound resource through the real rout
 });
 
 it('keeps every finished turn on disk with fewer saves per turn (#1408)', async () => {
-  const before = process.env.FLUJO_LOW_LATENCY_SAVES;
-  process.env.FLUJO_LOW_LATENCY_SAVES = '1';
-  try {
-    const tool = await turn('stream', 'tool');
-    expect([tool.model_calls, tool.toolCalled]).toEqual([2, true]);
-    continued = undefined;
-    await turn('json', 'continue');
-    await turn('json', 'continue');
-  } finally {
-    if (before === undefined) delete process.env.FLUJO_LOW_LATENCY_SAVES;
-    else process.env.FLUJO_LOW_LATENCY_SAVES = before;
-  }
+  const tool = await turn('stream', 'tool');
+  expect([tool.model_calls, tool.toolCalled]).toEqual([2, true]);
+  continued = undefined;
+  await turn('json', 'continue');
+  await turn('json', 'continue');
   const { runWithWorkspace } = await import('@/utils/workspace');
   const { loadItem } = await import('@/utils/storage/backend');
   const stored = await runWithWorkspace('default-workspace', () =>
