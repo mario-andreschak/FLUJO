@@ -23,6 +23,8 @@ export type GenerateCompletionOptions = {
   maxTokens?: number;
   /** Internal structured replies, forwarded only to adapters supporting them. */
   outputSchema?: Record<string, unknown>;
+  /** A provider-side summary of exactly these messages instead of a reply (#1091). */
+  nativeCompaction?: CompletionInput['nativeCompaction'];
   temperatureOverride?: number;
   requestToolApproval?: (call: {
     id: string;

@@ -82,6 +82,7 @@ jest.mock('@/backend/services/model/adapters/claudeSessionPersistence', () => ({
 }));
 
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
+import { __resetLearnedContextLimits } from '@/backend/execution/flow/handlers/contextWindowFit';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { flushConversationLog } from '@/backend/execution/flow/conversationLog';
 import { _clearAllSessionsForTests } from '@/backend/services/model/adapters/claudeSessionStore';
@@ -153,6 +154,8 @@ function stream(frames: unknown[], beforeFrames?: (input: QueryInput) => Promise
 }
 
 beforeEach(() => {
+  // Each case starts without a size an earlier case's refusal taught.
+  __resetLearnedContextLimits();
   jest.spyOn(console, 'error').mockImplementation(() => undefined);
   queryMock.mockReset();
   getModelMock.mockReset().mockResolvedValue({

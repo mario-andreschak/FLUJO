@@ -1,5 +1,36 @@
 export type ContextCompactionKind = 'summary' | 'visual-archive' | 'emergency-refit' | 'content-truncation';
 
+/**
+ * What one summary cost and saved, recorded with every summary (#1091), so
+ * real runs measure themselves: who wrote it, how long it took, what the
+ * provider billed for it, and the exact app, policy and prompt behind it.
+ */
+export interface ContextCompactionMeasurement {
+  /** Anthropic's native compaction, or FLUJO's own summarizer. */
+  engine: 'anthropic-native' | 'flujo';
+  /** True when a saved summary was sent again and no summarizer ran. */
+  reused: boolean;
+  /** Wall-clock time spent making the summary; 0 when reused. */
+  latencyMs: number;
+  /** Summarizer requests made, native attempt included. */
+  summarizerCalls: number;
+  /** Tokens the provider reported for those requests; absent when it reported none. */
+  usage?: { inputTokens: number; outputTokens: number; cachedInputTokens: number };
+  /** FLUJO's size estimate of the next request without and with the summary. */
+  estimatedTokensBefore: number;
+  estimatedTokensAfter: number;
+  /** Original user turns kept word for word after the summary. */
+  retainedUserTurns: number;
+  /** Exact execution receipts kept after the summary. */
+  receipts: number;
+  appVersion: string;
+  policyVersion: string;
+  /** First 16 hex digits of the SHA-256 of the summary prompt. */
+  promptDigest: string;
+  /** Why the native summary was not used on a route that has one. */
+  nativeFallback?: string;
+}
+
 /** Durable, provider-neutral record of a late context rewrite. */
 export interface ContextCompactionEvent {
   kind: ContextCompactionKind;
@@ -11,6 +42,7 @@ export interface ContextCompactionEvent {
   omittedMessages?: number;
   truncatedMessages?: number;
   injectedMarker?: string;
+  measurement?: ContextCompactionMeasurement;
 }
 
 export interface ContextCompactionDiagnostic {

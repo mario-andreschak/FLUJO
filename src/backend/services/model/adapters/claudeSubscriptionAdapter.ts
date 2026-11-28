@@ -45,6 +45,7 @@ import { embedSchemaInDescription } from './jsonSchemaToZod';
 import { createOwnedToolSchemaBuilder } from './ownedArchiveSchema';
 import { mapSdkUsage, type SdkUsage } from './claudeUsage';
 import { ClaudeUsageTracker } from './claudeUsageTracker';
+import { claudeCompactionCarryHook, logClaudeCompaction } from './claudeCompactionCarry';
 import { claudeSyntheticFrameError } from './claudeSyntheticFrame';
 import { hasClaudeSessionTranscript, captureClaudeSessionTranscript, canonicalSessionValue, sessionValueHash, claudeSdkRuntimeIdentity } from './claudeSessionPersistence';
 import { ClaudeResultCorrelation } from './claudeResultCorrelation';
@@ -599,6 +600,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // as the transcript so the caller can persist (and re-emit) them with
     // matching ids. `txSeq` keeps timestamps monotonic within the run.
     const transcript: FlujoChatMessage[] = [];
+    // Set when Claude Code's own compaction left FLUJO records out (#1091).
+    let compactionCarryIncomplete = false;
     const baseTs = Date.now();
     let txSeq = 0;
     const recordMessage = (msg: TranscriptMessage, id = `m_${uuidv4()}`): void => {
@@ -1281,6 +1284,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             && hook.tool_calls.some(call => plainHandoffUseIds.has(call.tool_use_id))
             ? { continue: false, stopReason: 'FLUJO handed this run off.' }
             : {}] }],
+          SessionStart: [{ hooks: [claudeCompactionCarryHook(() => [...messages, ...transcript],
+            () => { compactionCarryIncomplete = true; })] }],
         },
         canUseTool: async (toolName, input, opts) => {
           try {
@@ -1404,6 +1409,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     } : undefined;
     const requestPreToolUse = queryOptions.hooks!.PreToolUse![0].hooks[0];
     const requestPostToolBatch = queryOptions.hooks!.PostToolBatch![0].hooks[0];
+    const requestSessionStart = queryOptions.hooks!.SessionStart![0].hooks[0];
     // In the same opt-in mode the answer does not wait for the used process to
     // exit (about 0.7 s on Windows); it is told to stop and exits on its own.
     // A turn that records a session for later resume still waits, so the
@@ -1437,6 +1443,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         canUseTool: queryOptions.canUseTool!,
         preToolUse: requestPreToolUse,
         postToolBatch: requestPostToolBatch,
+        sessionStart: requestSessionStart,
         tools: new Map(effectiveSdkTools.map(definition => [definition.name, definition.handler as ClaudeSpareToolHandler])),
       } : undefined;
       const warmResponse = spare && binding
@@ -1602,6 +1609,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       for await (const message of exitInBackground ? withoutExitWait(response) : response) {
         if (!tracedFirstMessage) { tracedFirstMessage = true; traceMark('claude.firstMessage'); }
         if (message.type === 'system' && message.subtype === 'init') traceMark('claude.init');
+        logClaudeCompaction(message);
         if (!tracedFirstDelta && message.type === 'stream_event' && (message as SDKPartialAssistantMessage).event.type === 'content_block_delta') {
           tracedFirstDelta = true; traceMark('claude.firstDelta');
         }
@@ -1991,7 +1999,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             ...queryOptions,
             abortController: delegates.abortController,
             canUseTool: delegates.canUseTool,
-            hooks: { PreToolUse: [{ hooks: [delegates.preToolUse] }], PostToolBatch: [{ hooks: [delegates.postToolBatch] }] },
+            hooks: { PreToolUse: [{ hooks: [delegates.preToolUse] }], PostToolBatch: [{ hooks: [delegates.postToolBatch] }],
+              SessionStart: [{ hooks: [delegates.sessionStart] }] },
             ...(effectiveSdkTools.length > 0 ? { mcpServers: { [SDK_SERVER_NAME]: createSdkMcpServer({
               name: SDK_SERVER_NAME, version: '1.0.0',
               tools: effectiveSdkTools.map(definition => ({ ...definition, handler: delegates.toolHandler(definition.name) })),
@@ -2053,7 +2062,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     if (sessionTracking) {
       const transcriptCheckpoint = capturedSessionId && !endedByCaller && !handoffCalls.length && !ambientTasks
         ? await captureClaudeSessionTranscript(runtime.home, capturedSessionId) : undefined;
-      if (endedByCaller || handoffCalls.length > 0 || ambientTasks > 0 || !capturedSessionId || !transcriptCheckpoint || !usageTracker.getCheckpoint()) {
+      if (endedByCaller || handoffCalls.length > 0 || ambientTasks > 0 || !capturedSessionId || !transcriptCheckpoint || !usageTracker.getCheckpoint()
+        || compactionCarryIncomplete) {
         await invalidateSession(sessionTracking.key);
       } else {
         await recordSession(sessionTracking.key, {

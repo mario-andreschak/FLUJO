@@ -98,9 +98,14 @@ it('reuses a parked process only for the same start-up options', async () => {
     expect(parkedOptions[name]).toEqual(coldOptions[name]);
   }
   expect((coldOptions.env as Record<string, string>).ENABLE_CLAUDEAI_MCP_SERVERS).toBe('false');
-  // The same hook events, so a parked process also stops after a hand-off (#1414).
-  expect(Object.keys(coldOptions.hooks as object).sort()).toEqual(['PostToolBatch', 'PreToolUse']);
-  expect(Object.keys(parkedOptions.hooks as object).sort()).toEqual(['PostToolBatch', 'PreToolUse']);
+  // The same hook events, so a parked process also stops after a hand-off (#1414)
+  // and gets FLUJO's records back after Claude Code's own compaction (#1091).
+  expect(Object.keys(coldOptions.hooks as object).sort()).toEqual(['PostToolBatch', 'PreToolUse', 'SessionStart']);
+  expect(Object.keys(parkedOptions.hooks as object).sort()).toEqual(['PostToolBatch', 'PreToolUse', 'SessionStart']);
+  // The cold hook reads this run's conversation; a chat with nothing to keep gets nothing added.
+  const coldSessionStart = (coldOptions.hooks as Record<string, Array<{ hooks: Array<(...args: unknown[]) => Promise<unknown>> }>>).SessionStart[0].hooks[0];
+  await expect(coldSessionStart({ hook_event_name: 'SessionStart', source: 'compact' }, undefined, { signal: new AbortController().signal }))
+    .resolves.toEqual({});
   expect(parkedOptions.canUseTool).not.toBe(coldOptions.canUseTool);
   expect(parkedOptions.abortController).not.toBe(coldOptions.abortController);
   const parkedTool = sdkServers.at(-1)!.tools!.find(tool => tool.name === 'lookup')!;

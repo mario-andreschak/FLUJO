@@ -16,6 +16,22 @@ import type { ModelMediaPart } from '@/shared/types/model/media';
 import { mediaTypeFromMime } from '@/shared/types/model/media';
 import { assertOwnerCredentialAdapterRoute } from '@/backend/execution/extensions';
 import { ANTHROPIC_API_VERSION, ANTHROPIC_PREVIOUS_API_VERSION } from './anthropicApiVersion';
+import type { AnthropicCompactionRecord, ModelProviderMetadata } from '@/shared/types/openai';
+import type { Model } from '@/shared/types/model';
+import {
+  ANTHROPIC_COMPACTION_BETA,
+  ANTHROPIC_COMPACTION_MAX_TOKENS,
+  anthropicCompactionAvailable,
+  AnthropicCompactionMissingError,
+  compactionRecordOf,
+  compactionRecordOfMessage,
+  compactionUsage,
+  isCompactionRefusal,
+  isTransientCompactionFailure,
+  markAnthropicCompactionRefused,
+  placeCompactionBlock,
+  textAfterCompaction,
+} from './anthropicCompaction';
 
 const log = createLogger('backend/services/model/adapters/anthropicAdapter');
 
@@ -125,10 +141,18 @@ export function isApiVersionRejection(err: unknown): boolean {
 
 /**
  * How many optional request features `complete()` can negotiate away
- * (`cache_control`, the current API version) — the retry bound for its
- * attempt loop.
+ * (`cache_control`, the current API version, a signed summary block) — the
+ * retry bound for its attempt loop.
  */
-const DROPPABLE_FEATURES = 2;
+const DROPPABLE_FEATURES = 3;
+
+/** One request body; `beta` is set when it asks for or carries native compaction. */
+type AnthropicRequest = {
+  params: Anthropic.MessageCreateParamsNonStreaming;
+  beta?: Anthropic.Beta.Messages.MessageCreateParamsNonStreaming;
+};
+
+type AnthropicReply = Anthropic.Message | Anthropic.Beta.BetaMessage;
 
 /**
  * Client options for one connection. A client holds exactly one credential in
@@ -160,12 +184,23 @@ export function anthropicClientOptions(input: {
  *     (consecutive tool results are merged into one user message, as the API
  *     requires)
  */
-export function toAnthropicMessages(messages: OpenAI.ChatCompletionMessageParam[]): {
+export function toAnthropicMessages(
+  messages: OpenAI.ChatCompletionMessageParam[],
+  options: {
+    /** Send a native summary as its signed block (#1091); false sends it as plain text. */
+    compactionBlock?: boolean;
+    /** A compaction request summarizes every message it gets, a final reply included. */
+    keepTrailingAssistant?: boolean;
+  } = {},
+): {
   system?: string;
   messages: Anthropic.MessageParam[];
+  /** The signed summary that goes first; `merged` means messages[0] holds the records after it. */
+  compaction?: { record: AnthropicCompactionRecord; merged: boolean };
 } {
   const systemParts: string[] = [];
   const out: Anthropic.MessageParam[] = [];
+  let compaction: { record: AnthropicCompactionRecord; merged: boolean } | undefined;
 
   const pushToolResult = (toolUseId: string, content: string) => {
     const block: Anthropic.ToolResultBlockParam = {
@@ -250,6 +285,15 @@ export function toAnthropicMessages(messages: OpenAI.ChatCompletionMessageParam[
     if (msg.role === 'assistant') {
       const blocks: Anthropic.ContentBlockParam[] = [];
       const text = extractText(msg.content ?? '');
+      // The signed block must open `messages`; anywhere else it is a 400.
+      const record = options.compactionBlock !== false && !compaction && out.length === 0 && !msg.tool_calls?.length
+        ? compactionRecordOfMessage(msg) : undefined;
+      const after = record ? textAfterCompaction(text, record) : undefined;
+      if (record && after !== undefined) {
+        compaction = { record, merged: after.length > 0 };
+        if (after) out.push({ role: 'assistant', content: [{ type: 'text', text: after }] });
+        continue;
+      }
       if (text) blocks.push({ type: 'text', text });
 
       for (const tc of msg.tool_calls ?? []) {
@@ -272,7 +316,7 @@ export function toAnthropicMessages(messages: OpenAI.ChatCompletionMessageParam[
   // Anthropic API requires the last message to be a user turn.
   // If the message list (after all processing) still ends with an assistant
   // turn, drop it. This prevents a 400 on models that don't support prefill.
-  while (out.length > 0 && out[out.length - 1].role === 'assistant') {
+  while (!options.keepTrailingAssistant && out.length > (compaction?.merged ? 1 : 0) && out[out.length - 1].role === 'assistant') {
     out.pop();
     log.warn('toAnthropicMessages: stripped trailing assistant message — Anthropic API requires user-last');
   }
@@ -280,6 +324,7 @@ export function toAnthropicMessages(messages: OpenAI.ChatCompletionMessageParam[
   return {
     system: systemParts.length > 0 ? systemParts.join('\n\n') : undefined,
     messages: out,
+    ...(compaction ? { compaction } : {}),
   };
 }
 
@@ -403,7 +448,7 @@ export function applyCacheBreakpoints(input: {
 /** Map an Anthropic response back into an OpenAI-shaped ChatCompletion. */
 function toChatCompletion(
   fallbackModel: string,
-  resp: Anthropic.Message
+  resp: AnthropicReply
 ): { completion: OpenAI.Chat.Completions.ChatCompletion; media: ModelMediaPart[] } {
   let text = '';
   const toolCalls: OpenAI.ChatCompletionMessageFunctionToolCall[] = [];
@@ -511,6 +556,79 @@ function toChatCompletion(
 }
 
 /**
+ * The answer to a compaction request: the summary as the reply text and the
+ * signed block in `providerMetadata`. Its tokens come from `usage.iterations`.
+ */
+function toCompactionResult(model: Model, resp: AnthropicReply): CompletionResult {
+  const record = compactionRecordOf(resp, model.name);
+  const usage = compactionUsage(resp.usage);
+  const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
+  const providerMetadata: ModelProviderMetadata = { anthropicCompaction: record };
+  return {
+    completion: {
+      id: resp.id,
+      object: 'chat.completion',
+      created: Math.floor(Date.now() / 1000),
+      model: resp.model || model.name,
+      choices: [{
+        index: 0,
+        finish_reason: 'stop',
+        logprobs: null,
+        message: { role: 'assistant', content: record.block.content, refusal: null },
+      }],
+      usage: {
+        prompt_tokens: promptTokens,
+        completion_tokens: usage.output,
+        total_tokens: promptTokens + usage.output,
+        prompt_tokens_details: { cached_tokens: usage.cacheRead, cache_write_tokens: usage.cacheWrite },
+      },
+    },
+    providerMetadata,
+    // The summary call's input is not the conversation's next request.
+    contextUsage: null,
+  };
+}
+
+/** Forwards streamed text and tool-call deltas as they arrive. */
+async function relayStream(stream: object, input: CompletionInput, liveMessageId: string): Promise<void> {
+  // The real SDK stream is async-iterable. Keeping the finalMessage-only
+  // fallback also supports older SDK-compatible clients and test doubles.
+  if (!(Symbol.asyncIterator in stream)) return;
+  const toolIndexes = new Map<number, number>();
+  let nextToolIndex = 0;
+  for await (const rawEvent of stream as AsyncIterable<unknown>) {
+    const event = rawEvent as Anthropic.RawMessageStreamEvent;
+    if (event.type === 'content_block_start' && event.content_block.type === 'tool_use') {
+      const toolIndex = nextToolIndex++;
+      toolIndexes.set(event.index, toolIndex);
+      input.onModelDelta?.({
+        messageId: liveMessageId,
+        toolCallDelta: {
+          index: toolIndex,
+          id: event.content_block.id,
+          nameDelta: event.content_block.name,
+        },
+      });
+    } else if (event.type === 'content_block_delta') {
+      if (event.delta.type === 'text_delta' && event.delta.text) {
+        input.onModelDelta?.({ messageId: liveMessageId, contentDelta: event.delta.text });
+      } else if (event.delta.type === 'input_json_delta' && event.delta.partial_json) {
+        const toolIndex = toolIndexes.get(event.index);
+        if (toolIndex != null) {
+          input.onModelDelta?.({
+            messageId: liveMessageId,
+            toolCallDelta: {
+              index: toolIndex,
+              argumentsDelta: event.delta.partial_json,
+            },
+          });
+        }
+      }
+    }
+  }
+}
+
+/**
  * Native Anthropic adapter (using @anthropic-ai/sdk). Used by the
  * "Anthropic (Native)" provider profile. Supports tool calling: tools are
  * translated to Anthropic's tool schema and `tool_use` responses are mapped
@@ -518,8 +636,10 @@ function toChatCompletion(
  */
 export class AnthropicAdapter implements CompletionAdapter {
   async createCompletion(input: CompletionInput): Promise<CompletionResult> {
-    return this.complete(input, 'createCompletion', async (client, params, options) => ({
-      message: await client.messages.create(params, options),
+    return this.complete(input, 'createCompletion', async (client, request, options) => ({
+      message: request.beta
+        ? await client.beta.messages.create(request.beta, options)
+        : await client.messages.create(request.params, options),
     }));
   }
 
@@ -535,48 +655,20 @@ export class AnthropicAdapter implements CompletionAdapter {
    */
   async createStreamCompletion(input: CompletionInput): Promise<CompletionResult> {
     if (input.readOnlyAssessment) throw new Error('Read-only assessment does not support streaming.');
+    // A summary arrives whole, in one content_block_start, with no deltas.
+    if (input.nativeCompaction) return this.createCompletion(input);
     const liveMessageId = `stream_${uuidv4()}`;
-    return this.complete(input, 'createStreamCompletion', async (client, params, options) => {
+    return this.complete(input, 'createStreamCompletion', async (client, request, options) => {
+      if (request.beta) {
+        const stream = client.beta.messages.stream(request.beta, options);
+        await relayStream(stream, input, liveMessageId);
+        return { message: await stream.finalMessage(), liveMessageId };
+      }
       const stream = client.messages.stream(
-        params as Parameters<typeof client.messages.stream>[0],
+        request.params as Parameters<typeof client.messages.stream>[0],
         options
       );
-      const toolIndexes = new Map<number, number>();
-      let nextToolIndex = 0;
-      // The real SDK stream is async-iterable. Keeping the finalMessage-only
-      // fallback also supports older SDK-compatible clients and test doubles.
-      if (Symbol.asyncIterator in Object(stream)) {
-        for await (const rawEvent of stream) {
-          const event = rawEvent as Anthropic.RawMessageStreamEvent;
-          if (event.type === 'content_block_start' && event.content_block.type === 'tool_use') {
-            const toolIndex = nextToolIndex++;
-            toolIndexes.set(event.index, toolIndex);
-            input.onModelDelta?.({
-              messageId: liveMessageId,
-              toolCallDelta: {
-                index: toolIndex,
-                id: event.content_block.id,
-                nameDelta: event.content_block.name,
-              },
-            });
-          } else if (event.type === 'content_block_delta') {
-            if (event.delta.type === 'text_delta' && event.delta.text) {
-              input.onModelDelta?.({ messageId: liveMessageId, contentDelta: event.delta.text });
-            } else if (event.delta.type === 'input_json_delta' && event.delta.partial_json) {
-              const toolIndex = toolIndexes.get(event.index);
-              if (toolIndex != null) {
-                input.onModelDelta?.({
-                  messageId: liveMessageId,
-                  toolCallDelta: {
-                    index: toolIndex,
-                    argumentsDelta: event.delta.partial_json,
-                  },
-                });
-              }
-            }
-          }
-        }
-      }
+      await relayStream(stream, input, liveMessageId);
       return { message: await stream.finalMessage(), liveMessageId };
     });
   }
@@ -589,26 +681,33 @@ export class AnthropicAdapter implements CompletionAdapter {
    * turns and user text never carries citations. A Creativity value saved on
    * the model is therefore ignored here; the model settings say so.
    *
-   * Negotiates two optional-but-valuable request features, each detected
-   * narrowly and each dropped at most once, so the loop cannot spin. Both are
-   * remembered per (provider, baseURL) for the rest of the process, since the
-   * answer never changes mid-run:
+   * Negotiates three optional-but-valuable request features, each detected
+   * narrowly and each dropped at most once, so the loop cannot spin. The first
+   * two are remembered per (provider, baseURL) for the rest of the process,
+   * since the answer never changes mid-run:
    *   - `cache_control` breakpoints — absent from Anthropic-compatible proxies
    *     that don't implement prompt caching.
    *   - the current API version — an Anthropic-compatible server that only
    *     knows the earlier one gets that instead.
+   *   - a signed native summary (#1091) — a server that refuses it gets the
+   *     same summary as plain text, and the model gets FLUJO's own summaries
+   *     for a while (see anthropicCompaction.ts).
+   *
+   * With `input.nativeCompaction` the request asks for a summary instead of a
+   * reply (beta compact-2026-09-04). It never falls back to an ordinary reply:
+   * a refusal or a missing summary throws, and the caller uses FLUJO's own.
    */
   private async complete(
     input: CompletionInput,
     label: string,
     send: (
       client: Anthropic,
-      params: Anthropic.MessageCreateParamsNonStreaming,
+      request: AnthropicRequest,
       options?: Anthropic.RequestOptions
-    ) => Promise<{ message: Anthropic.Message; liveMessageId?: string }>
+    ) => Promise<{ message: AnthropicReply; liveMessageId?: string }>
   ): Promise<CompletionResult> {
     assertReadOnlyAssessmentInput(input);
-    const { model, apiKey, messages, tools, maxTokens, signal, onSdkRequest, onSdkRequestResult, readOnlyAssessment } = input;
+    const { model, apiKey, messages, tools, maxTokens, signal, onSdkRequest, onSdkRequestResult, readOnlyAssessment, nativeCompaction } = input;
     assertOwnerCredentialAdapterRoute(model, 'anthropic');
     const client = new Anthropic({
       ...anthropicClientOptions({ provider: model.provider, apiKey, baseUrl: model.baseUrl }),
@@ -618,19 +717,24 @@ export class AnthropicAdapter implements CompletionAdapter {
       ...(readOnlyAssessment ? { maxRetries: 0, fetchOptions: { redirect: 'error' as const } } : {}),
     });
 
-    const { system, messages: anthropicMessages } = toAnthropicMessages(messages);
+    const keepTrailingAssistant = Boolean(nativeCompaction);
+    const withBlock = toAnthropicMessages(messages, { keepTrailingAssistant });
+    const plain = withBlock.compaction ? toAnthropicMessages(messages, { compactionBlock: false, keepTrailingAssistant }) : withBlock;
     const anthropicTools = toAnthropicTools(tools);
     const endpoint = endpointKey(model.provider, model.baseUrl);
 
     // Each attempt builds its own body from the untouched translation output, so
     // the params already handed to the SDK are never rewritten underneath it.
-    const build = (opts: { cache: boolean }) => {
+    const build = (opts: { cache: boolean; block: boolean }): { request: AnthropicRequest; breakpoints: number } => {
+      const translated = opts.block ? withBlock : plain;
       const shaped = opts.cache
-        ? applyCacheBreakpoints({ system, messages: anthropicMessages, tools: anthropicTools })
-        : { system, messages: anthropicMessages, tools: anthropicTools, breakpoints: 0 };
+        ? applyCacheBreakpoints({ system: translated.system, messages: translated.messages, tools: anthropicTools })
+        : { system: translated.system, messages: translated.messages, tools: anthropicTools, breakpoints: 0 };
       const params: Anthropic.MessageCreateParamsNonStreaming = {
         model: model.name,
-        max_tokens: maxTokens ?? DEFAULT_MAX_TOKENS,
+        max_tokens: nativeCompaction
+          ? Math.max(maxTokens ?? 0, ANTHROPIC_COMPACTION_MAX_TOKENS)
+          : maxTokens ?? DEFAULT_MAX_TOKENS,
         ...(model.reasoningEffort
           ? {
               output_config: {
@@ -642,17 +746,32 @@ export class AnthropicAdapter implements CompletionAdapter {
         ...(shaped.system ? { system: shaped.system } : {}),
         ...(shaped.tools ? { tools: shaped.tools } : {}),
       };
-      return { params, breakpoints: shaped.breakpoints };
+      const compaction = opts.block ? translated.compaction : undefined;
+      if (!nativeCompaction && !compaction) return { request: { params }, breakpoints: shaped.breakpoints };
+      return {
+        request: {
+          params,
+          beta: {
+            ...params,
+            messages: compaction ? placeCompactionBlock(shaped.messages, compaction, opts.cache) : shaped.messages,
+            betas: [ANTHROPIC_COMPACTION_BETA],
+            ...(nativeCompaction ? { compaction: { type: 'summarize' as const, instructions: nativeCompaction.instructions } } : {}),
+          },
+        },
+        breakpoints: shaped.breakpoints + (compaction && opts.cache ? 1 : 0),
+      };
     };
 
     let useCache = !readOnlyAssessment && !rejectedCacheControl.has(endpoint);
     let useCurrentVersion = !previousVersionEndpoints.has(endpoint);
+    // A summary made before this model's endpoint refused one goes as text.
+    let useBlock = Boolean(withBlock.compaction) && anthropicCompactionAvailable(model.id);
 
     // One attempt, plus at most one retry per droppable feature. Each retry
     // clears the flag its own guard tests, so the loop cannot spin; the bound
     // mirrors openaiResponsesAdapter's negotiation loop as a backstop.
     for (let attempt = 0; attempt <= DROPPABLE_FEATURES; attempt++) {
-      const { params, breakpoints } = build({ cache: useCache });
+      const { request, breakpoints } = build({ cache: useCache, block: useBlock });
       // The abort signal (Stop button) cancels the in-flight HTTP request.
       const options: Anthropic.RequestOptions | undefined = signal || !useCurrentVersion
         ? {
@@ -664,9 +783,10 @@ export class AnthropicAdapter implements CompletionAdapter {
       log.debug(`${label} via Anthropic SDK`, {
         model: model.name,
         toolCount: anthropicTools?.length ?? 0,
-        hasSystem: Boolean(system),
+        hasSystem: Boolean(withBlock.system),
         cacheBreakpoints: breakpoints,
         apiVersion: useCurrentVersion ? ANTHROPIC_API_VERSION : ANTHROPIC_PREVIOUS_API_VERSION,
+        nativeCompaction: nativeCompaction ? 'request' : useBlock ? 'replay' : undefined,
       });
 
       try {
@@ -674,11 +794,13 @@ export class AnthropicAdapter implements CompletionAdapter {
           { onSdkRequest, onSdkRequestResult, signal },
           {
             adapter: 'anthropic',
-            operation: label === 'createStreamCompletion' ? 'messages.stream' : 'messages.create',
-            request: params,
+            operation: nativeCompaction ? 'beta.messages.create (compaction)'
+              : `${request.beta ? 'beta.' : ''}${label === 'createStreamCompletion' ? 'messages.stream' : 'messages.create'}`,
+            request: request.beta ?? request.params,
           },
-          () => send(client, params, options),
+          () => send(client, request, options),
         );
+        if (nativeCompaction) return toCompactionResult(model, result.message);
         const translated = toChatCompletion(model.name, result.message);
         return {
           ...translated,
@@ -705,6 +827,20 @@ export class AnthropicAdapter implements CompletionAdapter {
           );
           useCache = false;
           continue;
+        }
+        if (useBlock && isCompactionRefusal(err)) {
+          markAnthropicCompactionRefused(model.id);
+          log.warn(
+            'Endpoint refused the signed Anthropic summary; sending the same summary as text and using FLUJO summaries for this model for a while.',
+            { model: model.name, provider: model.provider, baseUrl: model.baseUrl }
+          );
+          useBlock = false;
+          continue;
+        }
+        if (nativeCompaction && (err instanceof AnthropicCompactionMissingError || !isTransientCompactionFailure(err))) {
+          markAnthropicCompactionRefused(model.id);
+          log.warn('Anthropic native compaction gave no summary; FLUJO summarizes this model itself for a while.',
+            { model: model.name, provider: model.provider, reason: err instanceof Error ? err.message : String(err) });
         }
         throw err;
       }

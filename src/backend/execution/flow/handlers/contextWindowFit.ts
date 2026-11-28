@@ -112,6 +112,11 @@ export function estimateOutgoingInputTokens(
  */
 export function isContextOverflowError(error?: ExecutionError): boolean {
   if (!error || error.type !== 'model') return false;
+  return isContextOverflowText(providerErrorText(error));
+}
+
+/** The message, code, type and raw provider body of a model error, as one text. */
+function providerErrorText(error: ExecutionError): string {
   const details = (error.details ?? {}) as Record<string, unknown>;
   let providerText = '';
   try {
@@ -119,9 +124,66 @@ export function isContextOverflowError(error?: ExecutionError): boolean {
   } catch {
     /* circular/huge body — the message + code below are enough to decide */
   }
-  return isContextOverflowText(
-    `${error.message ?? ''} ${String(details.code ?? '')} ${String(details.type ?? '')} ${providerText}`,
-  );
+  return `${error.message ?? ''} ${String(details.code ?? '')} ${String(details.type ?? '')} ${providerText}`;
+}
+
+/** How long a limit learned from a provider's refusal is kept. */
+export const LEARNED_CONTEXT_LIMIT_MS = 60 * 60_000;
+const learnedInputBudgets = new Map<string, { tokens: number; until: number }>();
+
+/** The context size a provider's refusal states, in its usual wordings. */
+function statedContextWindow(text: string): number | undefined {
+  const number = (value: string | undefined) => value ? Number.parseInt(value.replace(/[,_]/g, ''), 10) : NaN;
+  return [
+    /maximum context length is\s+(\d[\d,_]*)\s*tokens/i,
+    /prompt is too long:\s*\d[\d,_]*\s*tokens\s*>\s*(\d[\d,_]*)/i,
+    /context (?:limit|window)[^\d]{0,40}\d[\d,_]*\s*\+\s*\d[\d,_]*\s*>\s*(\d[\d,_]*)/i,
+  ].map(pattern => number(pattern.exec(text)?.[1])).find(value => Number.isSafeInteger(value) && value > 0);
+}
+
+/**
+ * Remembers the size a provider just refused for this model, so the next
+ * requests are shortened before they are sent instead of being refused again
+ * (#1327, #1091). The provider's own number wins when its message states one;
+ * otherwise 70% of the refused estimate. Each refusal can only lower it, and
+ * it is forgotten after an hour, so a bigger window or a passing glitch needs
+ * no restart and no setting.
+ */
+export function rememberContextRejection(
+  modelId: string,
+  rejectedEstimate: number,
+  rejection: ExecutionError | undefined,
+  maxTokens?: number,
+  now = Date.now(),
+): void {
+  const stated = rejection ? statedContextWindow(providerErrorText(rejection)) : undefined;
+  const tokens = stated ? resolveOutgoingInputBudget(stated, maxTokens) : Math.floor(rejectedEstimate * 0.7);
+  if (!tokens || tokens <= 0) return;
+  const previous = learnedInputBudget(modelId, now);
+  learnedInputBudgets.set(modelId, { tokens: Math.min(tokens, previous ?? Infinity), until: now + LEARNED_CONTEXT_LIMIT_MS });
+}
+
+/** The input budget learned from this model's last refusal, while it is fresh. */
+export function learnedInputBudget(modelId: string, now = Date.now()): number | undefined {
+  const learned = learnedInputBudgets.get(modelId);
+  if (!learned) return undefined;
+  if (now < learned.until) return learned.tokens;
+  learnedInputBudgets.delete(modelId);
+  return undefined;
+}
+
+/** Test seam: forget every learned limit. */
+export function __resetLearnedContextLimits(): void {
+  learnedInputBudgets.clear();
+}
+
+/** The smaller of the catalogue budget and a freshly learned one. */
+export function effectiveInputBudget(
+  modelId: string, contextWindow: number | undefined, maxTokens: number | undefined,
+): number | undefined {
+  const advertised = resolveOutgoingInputBudget(contextWindow, maxTokens);
+  const learned = learnedInputBudget(modelId);
+  return advertised === undefined ? learned : learned === undefined ? advertised : Math.min(advertised, learned);
 }
 
 /**
@@ -172,17 +234,22 @@ export function ensureReadResourceArmed(
   );
 }
 
+/** Arguments up to this size stay inline in an emergency receipt. */
+const INLINE_RECEIPT_ARGUMENT_CHARS = 256;
+
 /**
- * Emergency context-overflow recovery: make every oversized tool result on
- * the wire recoverable so it can be shrunk to a dereferenceable
- * `flujo://run/...` URI on the retry. Any oversized result whose tool_call_id
- * is NOT already backed by a captured resource is written to the run-resource
- * store on the fly and added to a fresh (augmented) markers map — so it can be
- * read back with `read_resource` instead of being lossily discarded. This
- * covers results that auto-capture missed (disabled, or produced before the
- * setting was on). Best-effort: any store failure just leaves that result
- * unmarked (it will be lossily truncated). Returns the markers map to use for
- * the refit.
+ * Emergency context-overflow recovery: make every tool result on the wire
+ * recoverable, so an oversized one can be shrunk to a dereferenceable
+ * `flujo://run/...` URI and a completed call group of any size can leave the
+ * wire as an exact receipt (#1327: hundreds of small results overflow a
+ * window as surely as one large result). Any result whose tool_call_id is NOT
+ * already backed by a captured resource is written to the run-resource store
+ * and added to a fresh (augmented) markers map. Arguments longer than a short
+ * identifier are stored too, so receipts point to them instead of repeating
+ * them. Markers are rebuilt from the store on every call, so each payload is
+ * written once, not on every long turn. Best-effort: any store failure just
+ * leaves that payload unmarked; its call group then stays on the wire whole.
+ * Returns the markers map to use for the refit.
  */
 export async function captureOversizedToolResultsForRefit(
   conversationId: string,
@@ -192,9 +259,28 @@ export async function captureOversizedToolResultsForRefit(
   durableContext: FlowDurableMutationContext = {},
 ): Promise<Map<string, ToolResourceMarker> | undefined> {
   let markers: Map<string, ToolResourceMarker> | undefined = existing ? new Map(existing) : undefined;
+  for (const message of apiMessages) {
+    if (message.role !== 'assistant') continue;
+    for (const call of message.tool_calls ?? []) {
+      if (call.type !== 'function' || call.function.arguments.length <= INLINE_RECEIPT_ARGUMENT_CHARS) continue;
+      if (markers?.get(call.id)?.args?.uri) continue;
+      try {
+        const written = await commitFlowDurableMutation(durableContext, () => writeRunResource({
+          conversationId, mimeType: 'application/json', kind: 'text',
+          data: { text: call.function.arguments },
+          producedBy: { source: 'tool-args', nodeId, toolCallId: call.id },
+        }));
+        if ('skipped' in written) continue;
+        if (!markers) markers = new Map();
+        markers.set(call.id, { ...markers.get(call.id), args: written });
+      } catch (error) {
+        rethrowFlowExecutionAuthorityError(error);
+        log.warn('Emergency capture of tool arguments failed; the receipt keeps them inline', error);
+      }
+    }
+  }
   for (const msg of apiMessages) {
     if (msg.role !== 'tool' || typeof msg.content !== 'string') continue;
-    if (msg.content.length <= OVERFLOW_TOOL_RESULT_HEAD_CHARS) continue;
     const callId = msg.tool_call_id;
     if (markers?.get(callId)?.result?.uri) continue; // already recoverable
     const content = msg.content;
@@ -208,7 +294,7 @@ export async function captureOversizedToolResultsForRefit(
         }),
       );
       if ('skipped' in written) {
-        log.warn(`Emergency capture of oversized tool result skipped (${written.skipped}); it will be lossily truncated`);
+        log.warn(`Emergency capture of a tool result skipped (${written.skipped}); its call group stays on the wire`);
         continue;
       }
       if (!markers) markers = new Map();
@@ -217,7 +303,7 @@ export async function captureOversizedToolResultsForRefit(
       markers.set(callId, slot);
     } catch (error) {
       rethrowFlowExecutionAuthorityError(error);
-      log.warn('Emergency capture of oversized tool result failed; it will be lossily truncated', error);
+      log.warn('Emergency capture of a tool result failed; its call group stays on the wire', error);
     }
   }
   return markers;

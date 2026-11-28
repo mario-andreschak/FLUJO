@@ -32,6 +32,11 @@ export interface WireSummaryArtifact {
   protectedUserIds?: string[];
   /** Balanced immutable range summaries used to extend this prefix after restart. */
   summaryRanges?: SummaryRange[];
+  /**
+   * Anthropic's signed summary the narrative came from (#1091). Its block goes
+   * back first and unchanged; `summaryText` holds the same summary as text.
+   */
+  anthropicCompaction?: import('@/shared/types/openai').AnthropicCompactionRecord;
   policyVersion: string;
   modelId?: string;
   schemaVersion: typeof COMPACTION_ARTIFACT_SCHEMA_VERSION;

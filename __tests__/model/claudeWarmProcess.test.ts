@@ -74,6 +74,7 @@ function binding(): ClaudeSpareBinding & { toolSpy: jest.Mock } {
     canUseTool: jest.fn(async (_name, input) => ({ behavior: 'allow' as const, updatedInput: input })),
     preToolUse: jest.fn(async () => ({ hookSpecificOutput: { hookEventName: 'PreToolUse' as const } })),
     postToolBatch: jest.fn(async () => ({})),
+    sessionStart: jest.fn(async () => ({ hookSpecificOutput: { hookEventName: 'SessionStart' as const, additionalContext: 'FLUJO records' } })),
     tools: new Map([['lookup', toolSpy]]),
   };
 }
@@ -146,6 +147,8 @@ describe('claude warm process isolation', () => {
       .resolves.toMatchObject({ hookSpecificOutput: { permissionDecision: 'deny' } });
     await expect(d.postToolBatch({ hook_event_name: 'PostToolBatch', tool_calls: [] } as never, undefined, { signal: new AbortController().signal }))
       .resolves.toMatchObject({ continue: false });
+    const compacted = { hook_event_name: 'SessionStart', source: 'compact' } as never;
+    await expect(d.sessionStart(compacted, undefined, { signal: new AbortController().signal })).resolves.toEqual({});
     await expect(d.toolHandler('lookup')({}, {})).resolves.toMatchObject({ isError: true });
 
     expect(takeClaudeSpare(shapeOf('key-b'))).toBeUndefined();
@@ -168,6 +171,8 @@ describe('claude warm process isolation', () => {
     await expect(d.postToolBatch({ hook_event_name: 'PostToolBatch', tool_calls: [] } as never, undefined, { signal: new AbortController().signal }))
       .resolves.toEqual({});
     expect(bound.postToolBatch).toHaveBeenCalledTimes(1);
+    await expect(d.sessionStart(compacted, undefined, { signal: new AbortController().signal }))
+      .resolves.toMatchObject({ hookSpecificOutput: { additionalContext: 'FLUJO records' } });
     await expect(d.toolHandler('refund')({}, {})).resolves.toMatchObject({ isError: true });
 
     releaseClaudeSpare(spare);

@@ -333,6 +333,20 @@ describe('#1092 and #1096: compaction, steering, forks, concurrent sessions', ()
       usage: { input_tokens: sum('input_tokens'), output_tokens: sum('output_tokens') } });
   });
 
+  it('puts FLUJO\'s standing instructions back in right after Claude Code compacts its own session (#1091)', async () => {
+    const step = conversation('compaction-carry', 'stable');
+    standIn.reply = request => ({ ...planReply(request), usage: { input_tokens: 985_000, output_tokens: 20 } });
+    await step(ENGLISH, 'Never email the customer. Remember ticket 4821.');
+    standIn.reply = planReply;
+    const after = await step(ENGLISH, 'Which ticket?');
+    expect(after.events).toContainEqual(expect.objectContaining({ kind: 'compact_boundary' }));
+    // The summary is the model's own; the request after it carries FLUJO's exact record again.
+    const answer = JSON.stringify(bodyOf(after.requests.at(-1)!));
+    expect(answer).toContain('[FLUJO context kept after compaction]');
+    expect(answer).toContain('Never email the customer. Remember ticket 4821.');
+    expect(after.answer).toBe('Your ticket is 4821.');
+  });
+
   it('keeps stable instructions after a compaction', async () => {
     const step = conversation('stable-compaction', 'stable');
     standIn.reply = request => ({ ...planReply(request), usage: { input_tokens: 985_000, output_tokens: 20 } });

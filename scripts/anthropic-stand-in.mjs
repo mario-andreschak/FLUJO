@@ -8,6 +8,9 @@
 //                            https://docs.claude.com/en/docs/build-with-claude/streaming
 //   GET  /v1/models[/{id}]   the Models API https://docs.claude.com/en/api/models-list
 //   GET  /api/oauth/usage    the subscription usage page that Claude Code's /usage and FLUJO read
+// On-demand compaction (beta compact-2026-09-04) answers with one signed summary and holds every
+// later request that carries it to the documented rules
+// (https://platform.claude.com/docs/en/build-with-claude/compaction-on-demand).
 // Every answer carries a `request-id`, errors use the documented error body
 // (https://docs.claude.com/en/api/errors), API-key answers carry the documented
 // `anthropic-ratelimit-*` headers (https://docs.claude.com/en/api/rate-limits) and subscription
@@ -35,6 +38,11 @@ import http from 'node:http';
  *   StandInReply | undefined | Promise<StandInReply | undefined>} StandInReplyFunction
  * @typedef {{ fiveHour?: number, sevenDay?: number, sevenDaySonnet?: number, sevenDayOpus?: number }} StandInSubscription
  * @typedef {{ status: number, body?: unknown, headers?: Record<string, string>, message?: string }} StandInUsagePage
+ * @typedef {{ summary?: string, stopReason?: string,
+ *   error?: { status: number, type: string, message: string, code?: string, headers?: Record<string, string> } }} StandInCompactionPlan
+ * @typedef {{ knownBeta: boolean, refuseReplay: boolean, summarize: (body: any) => string,
+ *   reply?: (request: { body: any, record: StandInRecord }) => StandInCompactionPlan | undefined | Promise<StandInCompactionPlan | undefined>,
+ *   signed: Array<{ type: 'compaction', content: string, signature: string }> }} StandInCompaction
  */
 
 export const API_VERSIONS = Object.freeze({ current: '2026-10-21', previous: '2023-06-01' });
@@ -268,10 +276,78 @@ export function messageEvents({ id = newId('msg'), model, blocks, usage = { inpu
   return events;
 }
 
-/** The documented error body. */
-export function errorBody(type, message, requestId = newId('req')) {
-  return { type: 'error', error: { type, message }, request_id: requestId };
+/** The documented error body; `code` becomes `error.details.error_code`. */
+export function errorBody(type, message, requestId = newId('req'), code = undefined) {
+  return { type: 'error', error: { type, message, ...(code ? { details: { error_code: code } } : {}) }, request_id: requestId };
 }
+
+// --- On-demand compaction (beta compact-2026-09-04) ------------------------------------------
+// https://platform.claude.com/docs/en/build-with-claude/compaction-on-demand
+// A request with `compaction: { type: "summarize" }` gets one signed `compaction` block instead of
+// a reply. Every later request that carries the block needs the beta header, exactly one block,
+// first in `messages`, sent back exactly as returned. The stand-in signs summaries with a key it
+// keeps to itself, so a changed byte is refused as the real API refuses it.
+
+export const COMPACTION_BETA = 'compact-2026-09-04';
+const SUMMARY_KEY = randomUUID();
+const RETURNED_BLOCK_FIELDS = new Set(['type', 'content', 'signature', 'cache_control']);
+
+/** The stand-in's signature over a summary. */
+export const signSummary = (content) => createHash('sha256').update(SUMMARY_KEY).update(String(content)).digest('base64');
+
+/** A text view of any message, for default summaries. */
+const textOfMessage = (message) => blocksOf(message?.content).map((block) => (block?.type === 'text' ? block.text
+  : block?.type === 'compaction' ? block.content : JSON.stringify(block))).join('\n');
+
+/**
+ * The documented 400 for the compaction blocks a request carries, or undefined.
+ * `refuseReplay` makes an endpoint that no longer takes back the blocks it signed.
+ */
+export function compactionBlockViolation(body, betas, { refuseReplay = false } = {}) {
+  const found = [];
+  (Array.isArray(body?.messages) ? body.messages : []).forEach((message, messageIndex) => blocksOf(message?.content)
+    .forEach((block, blockIndex) => { if (block?.type === 'compaction') found.push({ messageIndex, blockIndex, block }); }));
+  if (!found.length) return undefined;
+  const [{ messageIndex, blockIndex, block }] = found;
+  if (!betas.includes(COMPACTION_BETA)) {
+    return { message: `messages.${messageIndex}.content.${blockIndex}: Input tag 'compaction' found using 'type' does not match any of the expected tags` };
+  }
+  if (found.length > 1) return { message: 'A request may carry only one compaction block; send the newest.' };
+  if (messageIndex !== 0 || blockIndex !== 0) return { message: 'Summarized messages remain in front of the compaction block.', code: 'compaction_block_misplaced' };
+  const extra = Object.keys(block).find((key) => !RETURNED_BLOCK_FIELDS.has(key));
+  if (extra) return { message: `messages.0.content.0.compaction.${extra}: Extra inputs are not permitted` };
+  if (refuseReplay || typeof block.content !== 'string' || block.signature !== signSummary(block.content)) {
+    return { message: 'The compaction block signature does not match its content.', code: 'compaction_signature_invalid' };
+  }
+  return undefined;
+}
+
+/** The documented 400 for a compaction request itself, or undefined. */
+export function compactionRequestViolation(body, betas) {
+  if (!betas.includes(COMPACTION_BETA)) return { message: `The compaction parameter requires anthropic-beta: ${COMPACTION_BETA}.` };
+  if (body.compaction?.type !== 'summarize') return { message: "compaction.type: Input should be 'summarize'" };
+  if (body.context_management !== undefined) return { message: 'compaction cannot be combined with context_management.' };
+  if (body.stop_sequences !== undefined || body.output_config?.format !== undefined
+    || body.tool_choice?.type === 'any' || body.tool_choice?.type === 'tool') {
+    return { message: 'stop_sequences, output_config.format and a forced tool_choice cannot be combined with compaction.' };
+  }
+  if (typeof body.compaction.instructions === 'string' && body.compaction.instructions.length > 16_384) {
+    return { message: 'compaction.instructions: String should have at most 16384 characters' };
+  }
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  if (!messages.some((message) => blocksOf(message?.content).some((block) => block?.type !== 'compaction' || block.content))) {
+    return { message: 'There is nothing to summarize.', code: 'compaction_nothing_to_summarize' };
+  }
+  const last = messages.at(-1);
+  if (last?.role === 'assistant' && blocksOf(last.content).some((block) => block?.type === 'tool_use')) {
+    return { message: 'The last assistant turn ends in a tool call with no result yet.' };
+  }
+  return undefined;
+}
+
+/** The default summary: what the request held, shortened. */
+export const defaultSummary = (body) => `Summary of ${body.messages.length} messages: ${body.messages.map(textOfMessage).join(' | ').slice(0, 400)}`;
+
 
 function credentialOf(headers) {
   const bearer = /^Bearer\s+(.+)$/i.exec(headers.authorization ?? '')?.[1];
@@ -314,18 +390,20 @@ export async function startAnthropicStandIn({
   /** @type {StandInRecord[]} */
   const requests = [];
   const cache = createPromptCache({ now });
-  /** @type {{ baseUrl: string, requests: StandInRecord[], cache: ReturnType<typeof createPromptCache>,
+  /** @type {StandInCompaction} */
+  const compaction = { knownBeta: true, refuseReplay: false, summarize: defaultSummary, reply: undefined, signed: [] };
+  /** @type {{ baseUrl: string, requests: StandInRecord[], cache: ReturnType<typeof createPromptCache>, compaction: StandInCompaction,
    *   subscription: StandInSubscription, subscriptionFor?: (credential: StandInCredential) => StandInSubscription | undefined,
    *   usagePage: StandInUsagePage | undefined, acceptedVersions: string[],
    *   reply: StandInReplyFunction, refusesCredential: (credential: StandInCredential) => boolean, close: () => Promise<void> }} */
-  const standIn = { baseUrl: '', requests, cache, subscription, usagePage, acceptedVersions, reply, refusesCredential: refuses,
+  const standIn = { baseUrl: '', requests, cache, compaction, subscription, usagePage, acceptedVersions, reply, refusesCredential: refuses,
     close: async () => undefined };
   const send = (response, status, body, headers = {}) => {
     const requestId = newId('req');
     response.writeHead(status, { 'content-type': 'application/json', 'request-id': requestId, ...headers });
     response.end(JSON.stringify(body?.type === 'error' ? { ...body, request_id: requestId } : body));
   };
-  const fail = (response, status, type, message, headers) => send(response, status, errorBody(type, message), headers);
+  const fail = (response, status, type, message, headers, code) => send(response, status, errorBody(type, message, undefined, code), headers);
 
   const server = http.createServer(async (request, response) => {
     try {
@@ -341,7 +419,7 @@ export async function startAnthropicStandIn({
       };
       requests.push(record);
       const answer = (status, body, headers) => { record.status = status; send(response, status, body, headers); };
-      const refuse = (status, type, message, headers) => { record.status = status; fail(response, status, type, message, headers); };
+      const refuse = (status, type, message, headers, code) => { record.status = status; fail(response, status, type, message, headers, code); };
       if ((requireCredential && credential.kind === 'none') || (credential.kind !== 'none' && standIn.refusesCredential(credential))) {
         refuse(401, 'authentication_error', credential.kind === 'oauth' ? 'OAuth token has expired. Please obtain a new token or refresh your existing token.'
           : credential.kind === 'none' ? 'x-api-key header is required' : 'invalid x-api-key');
@@ -376,6 +454,14 @@ export async function startAnthropicStandIn({
       record.body = body;
       const broken = record.version === API_VERSIONS.current ? versionViolation(body) : undefined;
       if (broken) { refuse(400, 'invalid_request_error', broken); return; }
+      if (record.betas.includes(COMPACTION_BETA) && !standIn.compaction.knownBeta) {
+        refuse(400, 'invalid_request_error', `Unexpected value(s) \`${COMPACTION_BETA}\` for the \`anthropic-beta\` header.`);
+        return;
+      }
+      const misplaced = compactionBlockViolation(body, record.betas, standIn.compaction);
+      if (misplaced) { refuse(400, 'invalid_request_error', misplaced.message, undefined, misplaced.code); return; }
+      const compactionRefused = body.compaction !== undefined ? compactionRequestViolation(body, record.betas) : undefined;
+      if (compactionRefused) { refuse(400, 'invalid_request_error', compactionRefused.message, undefined, compactionRefused.code); return; }
       const charged = cache.charge(body);
       if (charged.error) { refuse(400, 'invalid_request_error', charged.error); return; }
       const windows = subscriptionWindows({ ...(standIn.subscriptionFor?.(credential) ?? standIn.subscription), now: now() });
@@ -383,6 +469,35 @@ export async function startAnthropicStandIn({
       if (credential.kind === 'oauth' && limitHeaders['anthropic-ratelimit-unified-status'] === 'rejected') {
         const resetsAt = Number(limitHeaders['anthropic-ratelimit-unified-reset']);
         refuse(429, 'rate_limit_error', 'Rate limit exceeded', { ...limitHeaders, 'retry-after': String(Math.max(1, resetsAt - Math.floor(now() / 1000))) });
+        return;
+      }
+      if (body.compaction !== undefined) {
+        // One signed summary instead of a reply; the call is reported in usage.iterations only.
+        const plan = (await standIn.compaction.reply?.({ body, record })) ?? {};
+        if (plan.error) {
+          refuse(plan.error.status, plan.error.type, plan.error.message, { ...limitHeaders, ...plan.error.headers }, plan.error.code);
+          return;
+        }
+        const content = plan.stopReason ? undefined : plan.summary ?? standIn.compaction.summarize(body);
+        const blocks = content === undefined ? [] : [{ type: 'compaction', content, signature: signSummary(content) }];
+        if (blocks.length) standIn.compaction.signed.push(blocks[0]);
+        const iteration = { type: 'compaction', ...charged, output_tokens: content === undefined ? body.max_tokens : tokensOf(content) };
+        const usage = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, iterations: [iteration] };
+        record.usage = usage;
+        record.reply = blocks;
+        record.status = 200;
+        const message = { id: newId('msg'), type: 'message', role: 'assistant', model: body.model, content: blocks,
+          stop_reason: plan.stopReason ?? 'compaction', stop_sequence: null, usage };
+        if (!body.stream) { send(response, 200, message, limitHeaders); return; }
+        // Streamed, the block arrives whole: one content_block_start, then content_block_stop.
+        response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', 'request-id': newId('req'), ...limitHeaders });
+        const events = [['message_start', { type: 'message_start', message: { ...message, content: [], stop_reason: null } }],
+          ...blocks.flatMap((block, index) => [['content_block_start', { type: 'content_block_start', index, content_block: block }],
+            ['content_block_stop', { type: 'content_block_stop', index }]]),
+          ['message_delta', { type: 'message_delta', delta: { stop_reason: message.stop_reason, stop_sequence: null }, usage: { output_tokens: 0 } }],
+          ['message_stop', { type: 'message_stop' }]];
+        for (const [event, data] of events) response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+        response.end();
         return;
       }
       const index = requests.filter((entry) => entry.path === '/v1/messages' && entry.body).length - 1;

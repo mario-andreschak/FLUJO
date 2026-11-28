@@ -7,7 +7,14 @@ import { toApiMessages } from '../buildNodeContext';
 import OpenAI from 'openai';
 import { type ModelCatalogAdmission } from '@/backend/services/model/catalogAdmission';
 import { resolveEffectiveCompaction } from './resolveEffectiveCompaction';
-import { compactHistory, selectCompactionSplit, COMPACTION_SUMMARY_SECTIONS, type CompactHistoryResult } from './summarizingCompaction';
+import {
+  buildCompactionPrompt,
+  compactHistory,
+  selectCompactionSplit,
+  COMPACTION_SUMMARY_MARKER,
+  COMPACTION_SUMMARY_SECTIONS,
+  type CompactHistoryResult,
+} from './summarizingCompaction';
 import { digestProjectedMessages, digestProjectionIdentity } from '../compaction/digest';
 import { retainSummaryArtifacts } from '../compaction/state';
 import { manualCompactionMode, markManualCompactionAttempted } from '../compaction/manualRequest';
@@ -17,7 +24,13 @@ import {
   COMPACTION_PROJECTION_VERSION,
   type CompactionProjectionIdentity,
 } from '../compaction/types';
-import { type ModelAdapter, type ModelProvider } from '@/shared/types/model/provider';
+import { resolveModelAdapter, type ModelAdapter, type ModelProvider } from '@/shared/types/model/provider';
+import type { ContextCompactionEvent } from '@/shared/types/contextCompaction';
+import type { AnthropicCompactionRecord } from '@/shared/types/openai';
+import { anthropicCompactionAvailable, ANTHROPIC_COMPACTION_MAX_TOKENS } from '@/backend/services/model/adapters/anthropicCompaction';
+import type { Result } from '../errors';
+import type { ModelCallResult } from '../types/modelHandler';
+import applicationPackage from '../../../../../package.json';
 import {
   writeRunResource,
   listRunResources,
@@ -31,7 +44,7 @@ import {
 import { StorageKey } from '@/shared/types/storage/storage';
 import { v4 as uuidv4 } from 'uuid';
 import { getCompactionGlobalSettings } from './modelHandlerSettings';
-import { estimateOutgoingInputTokens, resolveOutgoingInputBudget } from './contextWindowFit';
+import { effectiveInputBudget, estimateOutgoingInputTokens, learnedInputBudget } from './contextWindowFit';
 import type { GenerateCompletion } from './modelCompletionContract';
 
 const log = createLogger('backend/flow/execution/handlers/wireCompaction');
@@ -41,6 +54,17 @@ export type WireCompactionDeps = {
   generateCompletion: GenerateCompletion;
   isConversationCancelled: (conversationId: string) => boolean;
 };
+
+/** A summary on the wire, with the record of what it cost and saved (#1091). */
+export type WireCompactionResult = CompactHistoryResult & { event: ContextCompactionEvent };
+
+const PROMPT_DIGEST = createHash('sha256').update(buildCompactionPrompt().system).digest('hex').slice(0, 16);
+const RECEIPTS_HEADING = '\n\n## Execution Receipts\n';
+
+function receiptCount(summaryText: string): number {
+  const start = summaryText.lastIndexOf(RECEIPTS_HEADING);
+  return start < 0 ? 0 : summaryText.slice(start).split('\n').filter(line => line.startsWith('{"call_id"')).length;
+}
 
 /**
  * Build summarizing compaction strictly as a provider-facing projection.
@@ -62,7 +86,7 @@ export async function compactWireProjection(
   tools?: OpenAI.ChatCompletionFunctionTool[],
   modelCatalogAdmission?: ModelCatalogAdmission,
   shouldAbort?: () => boolean,
-): Promise<CompactHistoryResult | null> {
+): Promise<WireCompactionResult | null> {
   try {
     if (!conversationId) return null;
     const state = getConversationStates().get(conversationId);
@@ -81,8 +105,8 @@ export async function compactWireProjection(
 
     // Previous usage excludes newly appended observations, instructions and
     // tool schemas. Budget the current provider projection every time.
-    const estimate = estimateOutgoingInputTokens(toApiMessages(source), tools,
-      model.provider ? { provider: model.provider, adapter: model.adapter, name: model.name ?? '' } : undefined);
+    const wireModel = model.provider ? { provider: model.provider, adapter: model.adapter, name: model.name ?? '' } : undefined;
+    const estimate = estimateOutgoingInputTokens(toApiMessages(source), tools, wireModel);
     // Some CLI/provider catalogues do not publish a context window. The
     // opt-in summarizer must still be useful for them, so use a conservative
     // provider-neutral trigger instead of silently disabling compaction.
@@ -93,7 +117,9 @@ export async function compactWireProjection(
           ? model.contextWindow - Math.max(effectiveMaxTokens ?? 0, eff.bufferTokens)
           : 96_000));
     // Codex also bounds text in one turn/start independently of model tokens.
-    const threshold = model.adapter === 'codex-cli' ? Math.min(tokenThreshold, 220_000) : tokenThreshold;
+    // A size the provider refused recently is a ceiling too (#1327).
+    const threshold = Math.min(model.adapter === 'codex-cli' ? Math.min(tokenThreshold, 220_000) : tokenThreshold,
+      learnedInputBudget(model.id) ?? Infinity);
     const overThreshold = threshold !== undefined && threshold > 0 && estimate >= threshold;
     if (!overThreshold && !state?.compactionRequest) return null;
 
@@ -142,11 +168,54 @@ export async function compactWireProjection(
     // all; it never starts a new summarizer call on its own.
     if (keepManualSummary && sourceDigest !== reusableArtifact?.sourceDigest) return null;
 
+    // Measured on every summary: requests, provider-reported tokens, why a
+    // native summary was not used.
+    const measured = { calls: 0, input: 0, output: 0, cached: 0, usageReported: false, nativeFallback: undefined as string | undefined };
+    const countUsage = (response: Result<ModelCallResult>) => {
+      measured.calls += 1;
+      const usage = response.success ? response.value.fullResponse?.usage : undefined;
+      if (!usage) return;
+      measured.usageReported = true;
+      measured.input += usage.prompt_tokens ?? 0;
+      measured.output += usage.completion_tokens ?? 0;
+      measured.cached += usage.prompt_tokens_details?.cached_tokens ?? 0;
+    };
+    const cancelledNow = () => Boolean(shouldAbort?.() || deps.isConversationCancelled(conversationId));
+    const nativeRoute = resolveModelAdapter(model.provider, model.adapter) === 'anthropic';
+    if (nativeRoute && !anthropicCompactionAvailable(model.id)) measured.nativeFallback = 'The endpoint refused native compaction recently.';
+    // Anthropic summarizes the history itself and signs the summary (#1091).
+    // Anything short of a signed summary leaves FLUJO's own summarizer to run.
+    const summarizeNatively = nativeRoute && anthropicCompactionAvailable(model.id)
+      ? async (messages: FlujoChatMessage[], instructions: string): Promise<AnthropicCompactionRecord | undefined> => {
+        if (cancelledNow()) throw new DOMException('Compaction cancelled', 'AbortError');
+        const budget = effectiveInputBudget(model.id, model.contextWindow, ANTHROPIC_COMPACTION_MAX_TOKENS);
+        if (budget !== undefined
+          && estimateOutgoingInputTokens(toApiMessages(messages, 'anthropicCompaction'), tools, wireModel) > budget) {
+          measured.nativeFallback = 'The history is too long for one native summary request.';
+          return undefined;
+        }
+        const response = await deps.generateCompletion(model.id, '', messages, tools, {
+          modelCatalogAdmission,
+          shouldAbort: cancelledNow,
+          maxTokens: ANTHROPIC_COMPACTION_MAX_TOKENS,
+          nativeCompaction: { instructions },
+          beforeModelDispatch: durableContext.executionAuthority?.assertCurrent,
+          durableContext,
+        });
+        countUsage(response);
+        if (cancelledNow()) throw new DOMException('Compaction cancelled', 'AbortError');
+        await assertFlowExecutionCurrent(durableContext);
+        const record = response.success ? response.value.providerMetadata?.anthropicCompaction : undefined;
+        if (!record) measured.nativeFallback = response.success ? 'No signed summary came back.' : response.error.message;
+        return record;
+      }
+      : undefined;
+
     const summarize = async (
       msgs: FlujoChatMessage[],
       prompt: { system: string; user: string; previousSummary?: string; selectUserInstructions?: boolean; mergingRanges?: boolean },
     ): Promise<string> => {
-      const cancelled = () => Boolean(shouldAbort?.() || deps.isConversationCancelled(conversationId));
+      const cancelled = cancelledNow;
       if (cancelled()) throw new DOMException('Compaction cancelled', 'AbortError');
       // A read-only router summary is one bounded inference, not the owning
       // task's lifetime. A slow/unavailable Free endpoint must yield to the
@@ -206,6 +275,7 @@ export async function compactWireProjection(
         beforeModelDispatch: durableContext.executionAuthority?.assertCurrent,
         durableContext,
       });
+      countUsage(response);
       if (cancelled()) throw new DOMException('Compaction cancelled', 'AbortError');
       await assertFlowExecutionCurrent(durableContext);
       if (deadline !== undefined && Date.now() >= deadline) throw new Error('Summary attempt timed out; retrying the same source.');
@@ -241,10 +311,11 @@ export async function compactWireProjection(
       return 'skipped' in written ? undefined : written.uri;
     };
 
+    const startedAt = Date.now();
     const result = await compactHistory(source, {
       keepTokens: eff.keepTokens,
       inputBudgetTokens: Math.min(
-        resolveOutgoingInputBudget(model.contextWindow, effectiveMaxTokens) ?? 96_000,
+        effectiveInputBudget(model.id, model.contextWindow, effectiveMaxTokens) ?? 96_000,
         model.adapter === 'codex-cli' ? 220_000 : Number.MAX_SAFE_INTEGER,
       ),
       nodeId,
@@ -256,7 +327,7 @@ export async function compactWireProjection(
       modelId: model.id,
       reusableArtifact,
       pinToArtifact: keepManualSummary,
-    }, { summarize, writeAnchor, writeSummaryRange: async payload => {
+    }, { summarize, summarizeNatively, writeAnchor, writeSummaryRange: async payload => {
       const name = 'compaction-range-' + createHash('sha256')
         .update(projectionDigest).update(JSON.stringify(payload)).digest('hex');
       const existing = (await listRunResources(conversationId)).find(entry => entry.name === name);
@@ -268,6 +339,7 @@ export async function compactWireProjection(
       return 'skipped' in written ? undefined : written.uri;
     } });
     if (!result) return null;
+    const latencyMs = Date.now() - startedAt;
 
     await assertFlowExecutionCurrent(durableContext);
     if (digestProjectedMessages(source) !== fullSourceDigest) {
@@ -292,7 +364,34 @@ export async function compactWireProjection(
       }
     }
 
-    return result;
+    const reused = result.artifact.artifactId === reusableArtifact?.artifactId;
+    const protectedIds = new Set(split.protectedMessages.map(message => message.id));
+    const event: ContextCompactionEvent = {
+      kind: 'summary',
+      reason: 'AI summarization ran before provider dispatch.',
+      before: result.artifact.sourceMessageCount,
+      after: 1,
+      unit: 'messages',
+      omittedMessages: result.artifact.sourceMessageCount,
+      injectedMarker: COMPACTION_SUMMARY_MARKER,
+      measurement: {
+        engine: result.artifact.anthropicCompaction ? 'anthropic-native' : 'flujo',
+        reused,
+        latencyMs: reused ? 0 : latencyMs,
+        summarizerCalls: measured.calls,
+        ...(measured.usageReported ? { usage: { inputTokens: measured.input, outputTokens: measured.output, cachedInputTokens: measured.cached } } : {}),
+        estimatedTokensBefore: estimate,
+        estimatedTokensAfter: estimateOutgoingInputTokens(toApiMessages(result.wireMessages), tools, wireModel),
+        retainedUserTurns: result.wireMessages.filter(message => message.role === 'user' && protectedIds.has(message.id)).length,
+        receipts: receiptCount(result.artifact.summaryText),
+        appVersion: applicationPackage.version,
+        policyVersion: COMPACTION_POLICY_VERSION,
+        promptDigest: PROMPT_DIGEST,
+        ...(nativeRoute && !result.artifact.anthropicCompaction && measured.nativeFallback ? { nativeFallback: measured.nativeFallback } : {}),
+      },
+    };
+    log.info('Context summary on the wire', { conversationId, nodeId, ...event.measurement });
+    return { ...result, event };
   } catch (error) {
     rethrowFlowExecutionAuthorityError(error);
     log.warn('Summarizing-compaction pre-flight failed; using canonical wire', { conversationId, error });
