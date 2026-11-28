@@ -92,6 +92,9 @@ async function POST_handler(request: NextRequest) {
       if (error instanceof Error && error.name === 'OAuthAuthorizationInProgress') {
         return NextResponse.json({ error: rawMessage, serverName }, { status: 409 });
       }
+      if (error instanceof Error && error.name === 'OAuthRefreshUnavailable') {
+        return NextResponse.json({ error: rawMessage, serverName }, { status: 503 });
+      }
 
       // Some authorization servers (e.g. Asana's V2 MCP server) disable Dynamic Client
       // Registration, so auth() can't self-register and needs a pre-registered app. Turn the

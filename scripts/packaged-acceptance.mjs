@@ -14,6 +14,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { runAcceptance } from './packaged-acceptance/checks.mjs';
 import { createFlujoProbe } from './packaged-acceptance/flujo-probe.mjs';
+import { createMcpChecks, startReferenceServers } from './packaged-acceptance/mcp-checks.mjs';
 import {
   assertHostIdentity, createDockerTarget, createHostTarget, dockerCommand, hostEnvironment, hostLaunch,
   installNpmPackages, isImageReference, packCandidate, prepareHostSandbox, readCandidateTarballs, resolveNpmCli, unusedPort,
@@ -163,6 +164,7 @@ export async function main(argv = process.argv.slice(2)) {
     arch: process.arch, node: process.version, startedAt: new Date().toISOString(), candidate: null, previous: null,
     checks: [], result: 'failed' };
   let targets;
+  let reference;
   const interrupt = signal => {
     const running = [targets?.candidate, targets?.previous].filter(Boolean);
     Promise.allSettled(running.map(target => target.dispose())).finally(() => process.exit(signal === 'SIGINT' ? 130 : 143));
@@ -173,11 +175,15 @@ export async function main(argv = process.argv.slice(2)) {
   try {
     targets = options.form === 'docker' ? await dockerTargets(options, report) : await hostTargets(options, sandbox, report);
     const probe = createFlujoProbe({ JSZip: loadJSZip([root, ...targets.appRoots]) });
-    Object.assign(report, await runAcceptance({ candidate: targets.candidate, previous: targets.previous, probe, log: printCheck }));
+    // The host forms also run the MCP checks; the SDK may come from the installed app.
+    if (options.form !== 'docker') reference = await startReferenceServers({ moduleRoots: [root, ...targets.appRoots] });
+    Object.assign(report, await runAcceptance({ candidate: targets.candidate, previous: targets.previous, probe,
+      mcp: reference && createMcpChecks(reference), log: printCheck }));
   } catch (error) {
     report.result = 'failed';
     report.failure ??= error.message;
   } finally {
+    await reference?.stop();
     if (targets?.volume) {
       try { await dockerCommand(['volume', 'rm', '--force', targets.volume]); } catch (error) {
         report.cleanup = [...(report.cleanup ?? []), `volume ${targets.volume}: ${error.message}`];

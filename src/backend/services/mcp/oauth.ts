@@ -1,4 +1,4 @@
-import { auth, extractWWWAuthenticateParams, OAuthClientProvider, type AuthResult, type OAuthDiscoveryState } from '@modelcontextprotocol/sdk/client/auth.js';
+import { auth, discoverAuthorizationServerMetadata, extractWWWAuthenticateParams, OAuthClientProvider, type AuthResult, type OAuthDiscoveryState } from '@modelcontextprotocol/sdk/client/auth.js';
 import { OAuthClientMetadata, OAuthClientInformation, OAuthTokens, OAuthClientInformationMixed } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { createLogger } from '@/utils/logger';
 import { MCPStreamableConfig } from '@/shared/types/mcp';
@@ -14,6 +14,9 @@ const log = createLogger('backend/services/mcp/oauth');
 
 /** Authorization callbacks older than this must start a fresh flow. */
 export const MCP_OAUTH_STATE_TTL_MS = 20 * 60 * 1000;
+
+/** Callback of a background connection, which cannot know the address the browser uses. */
+const DEFAULT_OAUTH_REDIRECT_URL = 'http://localhost:4200/api/oauth/callback';
 
 const OAUTH_NONCE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
@@ -80,6 +83,27 @@ function assertPkceSupported(discovery: OAuthDiscoveryState | undefined): void {
 
 const OAUTH_CHALLENGE_TIMEOUT_MS = 10_000;
 
+/** Answers that mean "not now" rather than "no": the request is worth repeating shortly. */
+const TRANSIENT_STATUSES = new Set([429, 502, 503, 504]);
+const AUTHORIZATION_RETRY_DELAYS_MS = [250, 1000];
+const MAX_RETRY_AFTER_MS = 5000;
+
+function grantType(init: RequestInit | undefined): string | null {
+  const body = init?.body;
+  if (typeof body === 'string') return body.includes('grant_type=') ? new URLSearchParams(body).get('grant_type') : null;
+  return Object.prototype.toString.call(body) === '[object URLSearchParams]' ? (body as URLSearchParams).get('grant_type') : null;
+}
+
+function retryAfterMs(response: Response): number | undefined {
+  const header = response.headers.get('retry-after');
+  if (!header) return undefined;
+  const seconds = Number(header);
+  const wait = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(header) - Date.now();
+  return Number.isFinite(wait) ? Math.min(Math.max(wait, 0), MAX_RETRY_AFTER_MS) : undefined;
+}
+
+const pause = (ms: number) => new Promise<void>(resolve => { setTimeout(resolve, ms); });
+
 export interface OAuthChallenge { resourceMetadataUrl?: URL; scope?: string }
 
 /**
@@ -104,14 +128,57 @@ export async function readOAuthChallenge(serverUrl: string, fetchFn: typeof fetc
   }
 }
 
-/** Start or resume a person-initiated sign-in the way a connection's 401 would. */
+/**
+ * Start or resume a person-initiated sign-in the way a connection's 401 would. A sign-in
+ * a connection already prepared (one more scope for a tool, or a grant the provider
+ * revoked) is opened as it is: starting over would refresh the old grant and lose it.
+ */
 export async function startOAuthAuthorization(
   provider: MCPOAuthClientProvider,
   serverUrl: string,
   fetchFn: typeof fetch = provider.oauthFetch,
 ): Promise<AuthResult> {
+  if (await provider.resumePendingAuthorization()) return 'REDIRECT';
   const challenge = await readOAuthChallenge(serverUrl, fetchFn);
   return auth(provider, { serverUrl, fetchFn, ...challenge });
+}
+
+const OAUTH_REVOCATION_TIMEOUT_MS = 5000;
+
+/**
+ * RFC 7009: when a person resets a sign-in, end the grant at the provider too, so the
+ * refresh token FLUJO forgets cannot be used by anyone. Best effort: a provider without
+ * a revocation endpoint, or one that does not answer, never blocks the reset.
+ */
+export async function revokeOAuthGrant(config: MCPStreamableConfig, fetchFn: typeof fetch = fetch): Promise<boolean> {
+  const bounded: typeof fetch = (input, init) => fetchFn(input, { ...init, redirect: 'manual', signal: AbortSignal.timeout(OAUTH_REVOCATION_TIMEOUT_MS) });
+  try {
+    const tokens = await readOAuthTokens(config) as (OAuthTokens & { issuer?: string }) | undefined;
+    const token = tokens?.refresh_token ?? tokens?.access_token;
+    if (!token || !tokens?.issuer) return false;
+    const metadata = await discoverAuthorizationServerMetadata(tokens.issuer, { fetchFn: bounded });
+    const endpoint = metadata && 'revocation_endpoint' in metadata ? metadata.revocation_endpoint : undefined;
+    if (typeof endpoint !== 'string') return false;
+    const client = await createOAuthClientProvider(config).clientInformation();
+    if (!client) return false;
+    const body = new URLSearchParams({ token, token_type_hint: tokens.refresh_token ? 'refresh_token' : 'access_token' });
+    const headers: Record<string, string> = { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' };
+    const method = (client as { token_endpoint_auth_method?: string }).token_endpoint_auth_method;
+    if (client.client_secret && method === 'client_secret_basic') {
+      headers.authorization = `Basic ${Buffer.from(`${encodeURIComponent(client.client_id)}:${encodeURIComponent(client.client_secret)}`).toString('base64')}`;
+    } else {
+      body.set('client_id', client.client_id);
+      if (client.client_secret) body.set('client_secret', client.client_secret);
+    }
+    const response = await bounded(endpoint, { method: 'POST', headers, body });
+    await response.body?.cancel().catch(() => undefined);
+    if (!response.ok) log.warn(`The provider did not revoke the OAuth grant for ${config.name} (HTTP ${response.status})`);
+    return response.ok;
+  } catch {
+    // Provider and storage errors can carry credentials; log only that it failed.
+    log.warn(`Could not revoke the OAuth grant for ${config.name} at the provider`);
+    return false;
+  }
 }
 
 /** Legacy credentials must complete a fresh authorization before they can be reused. */
@@ -154,19 +221,28 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
   private issuerResponseSupported?: boolean;
   private usingCimd = false;
   private readonly cimdRedirectUrl: string;
+  /** Background connections do not know the browser's address; see clientInformation(). */
+  private readonly redirectIsDefault: boolean;
+  /** A refresh just failed because the sign-in service did not answer. */
+  private refreshUnavailable = false;
+  /** Scopes a 403 insufficient_scope answer asked for, until a new sign-in starts. */
+  private stepUpScope?: string;
+  /** Scopes of the stored grant, as last read. */
+  private grantedScope?: string;
 
-  constructor(config: MCPStreamableConfig, redirectUrl: string, authorizationDiscovery?: OAuthDiscoveryState) {
+  constructor(config: MCPStreamableConfig, redirectUrl?: string, authorizationDiscovery?: OAuthDiscoveryState) {
     this.config = config;
     this.discovery = authorizationDiscovery;
-    this._redirectUrl = redirectUrl;
-    const stableCallback = new URL(redirectUrl);
+    this.redirectIsDefault = redirectUrl === undefined;
+    this._redirectUrl = redirectUrl ?? DEFAULT_OAUTH_REDIRECT_URL;
+    const stableCallback = new URL(this._redirectUrl);
     stableCallback.searchParams.delete('workspace');
     this.cimdRedirectUrl = stableCallback.toString();
     
     const scope = configuredOAuthScope(config.oauthScopes);
     this._clientMetadata = {
-      redirect_uris: [redirectUrl],
-      application_type: ['localhost', '127.0.0.1', '[::1]'].includes(new URL(redirectUrl).hostname) ? 'native' : 'web',
+      redirect_uris: [this._redirectUrl],
+      application_type: ['localhost', '127.0.0.1', '[::1]'].includes(stableCallback.hostname) ? 'native' : 'web',
       client_name: `FLUJO MCP Client - ${config.name}`,
       client_uri: 'https://github.com/mario-andreschak/FLUJO',
       grant_types: ['authorization_code', 'refresh_token'],
@@ -197,6 +273,24 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
   /** CIMD keeps the callback stable; its state carries a workspace plus a random nonce. */
   state(): string {
     // The SDK asks for state only when it starts a new authorization, never for refresh.
+    // After a refresh the provider could not answer, the grant is still good: a new
+    // consent page would not help (it needs the same token endpoint) and would make the
+    // person sign in again. Fail like any connection error, so the caller retries.
+    if (this.refreshUnavailable) {
+      const error = new Error(`The sign-in service for ${this.config.name} did not answer. FLUJO kept the existing sign-in and tries again shortly.`);
+      error.name = 'OAuthRefreshUnavailable';
+      throw error;
+    }
+    // A server that refuses a scope the grant already has would refuse it again after
+    // another consent; asking the person to sign in once more would only loop.
+    if (this.stepUpScope && this.grantedScope !== undefined) {
+      const granted = splitScope(this.grantedScope);
+      if (splitScope(this.stepUpScope).every(scope => granted.includes(scope))) {
+        const error = new Error(`${this.config.name} refused the request although FLUJO's sign-in already includes the permission it asks for (${this.stepUpScope}). Signing in again would not change that; check the account's access with the server's provider.`);
+        error.name = 'OAuthScopeRefused';
+        throw error;
+      }
+    }
     assertPkceSupported(this.discovery);
     const nonce = randomBytes(32).toString('base64url');
     const workspace = getCurrentWorkspace();
@@ -209,9 +303,36 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
     return state;
   }
 
-  /** Preserve RFC9207 metadata also when the SDK's OIDC schema strips extra fields. */
+  /**
+   * Every request of this connection and its sign-in goes through here. Discovery and
+   * token requests that meet a busy or briefly unavailable sign-in service are repeated
+   * a few times; MCP requests never are. It also notes a refresh that failed for that
+   * reason, a step-up challenge, and RFC 9207 metadata the SDK's OIDC schema strips.
+   */
   readonly oauthFetch: typeof fetch = async (input, init) => {
-    const response = await fetch(input, init);
+    const method = (init?.method ?? 'GET').toUpperCase();
+    const href = typeof input === 'string' ? input : 'href' in input ? input.href : input.url;
+    const grant = method === 'POST' ? grantType(init) : null;
+    const repeatable = grant !== null || (method === 'GET' && href.includes('/.well-known/'));
+    let response: Response;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        response = await fetch(input, init);
+      } catch (error) {
+        if (grant === 'refresh_token') this.refreshUnavailable = true;
+        if (!repeatable || grant !== null || attempt >= AUTHORIZATION_RETRY_DELAYS_MS.length) throw error;
+        await pause(AUTHORIZATION_RETRY_DELAYS_MS[attempt]);
+        continue;
+      }
+      if (!repeatable || !TRANSIENT_STATUSES.has(response.status) || attempt >= AUTHORIZATION_RETRY_DELAYS_MS.length) break;
+      await response.body?.cancel().catch(() => undefined);
+      await pause(retryAfterMs(response) ?? AUTHORIZATION_RETRY_DELAYS_MS[attempt]);
+    }
+    if (grant === 'refresh_token') this.refreshUnavailable = response.status >= 500 || TRANSIENT_STATUSES.has(response.status);
+    if (response.status === 403) {
+      const { error, scope } = extractWWWAuthenticateParams(response);
+      if (error === 'insufficient_scope' && scope) this.stepUpScope = scope;
+    }
     if (response.ok && response.headers.get('content-type')?.includes('json')) {
       try {
         const metadata = await response.clone().json() as Record<string, unknown>;
@@ -263,8 +384,16 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
 
   async clientInformation(): Promise<OAuthClientInformation | undefined> {
     const storedClient = await readOAuthClientInformation(this.config);
-    if (hasOAuthIssuer(storedClient)) {
-      this.usingCimd = storedClient?.client_id === this.clientMetadataUrl;
+    if (storedClient && hasOAuthIssuer(storedClient)) {
+      this.usingCimd = storedClient.client_id === this.clientMetadataUrl;
+      // A background connection that has to start a sign-in (one more scope, a revoked
+      // grant) must use the callback this client registered; the authorization server
+      // compares it exactly.
+      const registered = 'redirect_uris' in storedClient && Array.isArray(storedClient.redirect_uris)
+        ? storedClient.redirect_uris.filter((uri): uri is string => typeof uri === 'string') : [];
+      if (this.redirectIsDefault && !this.usingCimd && registered.length > 0 && !registered.includes(this._redirectUrl)) {
+        this._redirectUrl = registered[0];
+      }
       log.debug(`Returning stored client information for ${this.config.name}`);
       return storedClient;
     }
@@ -411,6 +540,13 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
         }
       }
 
+      this.grantedScope = tokens.scope;
+      // Step-up: a refresh can never add a scope. Without its refresh token the v1 SDK
+      // starts the new authorization the challenge asked for (v2 already does).
+      if (this.stepUpScope) {
+        const granted = splitScope(tokens.scope);
+        if (splitScope(this.stepUpScope).some(scope => !granted.includes(scope))) return { ...tokens, refresh_token: undefined };
+      }
       return tokens;
     }
 
@@ -433,6 +569,7 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
     };
     
     await this.persist({ oauthTokens: await sealOAuthCredential('tokens', tokensWithTimestamp) });
+    this.stepUpScope = undefined;
     log.info(`OAuth tokens saved for ${this.config.name}`);
   }
 
@@ -455,6 +592,7 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
       const added = [...new Set(await this.grantedScopes())].filter(scope => !requested.includes(scope));
       if (added.length > 0) authorizationUrl.searchParams.set('scope', [...requested, ...added].join(' '));
     }
+    this.stepUpScope = undefined;
     
     // Persist the URL with its nonce/verifier, so another reconnect can reuse the
     // pending sign-in instead of invalidating a consent page already open.
@@ -483,20 +621,7 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
           && pending.serverUrl === this.config.serverUrl
           && matchesOAuthState(pending, pending.oauthState, getCurrentWorkspace())
           && pending.oauthStateDiscovery?.authorizationServerUrl === this.discovery?.authorizationServerUrl) {
-        let pendingUrl: URL | undefined;
-        let expectedEndpoint: URL | undefined;
-        try { pendingUrl = new URL(pending.authorizationUrl ?? ''); } catch { /* The first request may still be saving its URL. */ }
-        try { expectedEndpoint = new URL(this.discovery?.authorizationServerMetadata?.authorization_endpoint
-          ?? new URL('/authorize', this.discovery!.authorizationServerUrl).href); } catch { /* Unusable discovery cannot resume an authorization. */ }
-        if (expectedEndpoint && pendingUrl?.searchParams.get('state') === pending.oauthState
-            && pendingUrl.origin === expectedEndpoint.origin && pendingUrl.pathname === expectedEndpoint.pathname
-            && pendingUrl.searchParams.get('redirect_uri') === this.redirectUrl
-            && (!this.config.oauthClientId || pendingUrl.searchParams.get('client_id') === this.config.oauthClientId)) {
-          Object.assign(this.config, {
-            authorizationUrl: pendingUrl.toString(), oauthState: pending.oauthState,
-            oauthStateWorkspace: pending.oauthStateWorkspace, oauthStateCreatedAt: pending.oauthStateCreatedAt,
-            oauthStateDiscovery: pending.oauthStateDiscovery, oauthCodeVerifier: pending.oauthCodeVerifier,
-          });
+        if (this.adoptOpenAuthorization(pending, this.discovery)) {
           const error = new Error(`OAuth authentication required for ${this.config.name}. Complete the pending sign-in.`);
           error.name = 'OAuthAuthenticationRequired';
           throw error;
@@ -519,6 +644,45 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
     log.debug(`Code verifier saved for ${this.config.name}`);
   }
 
+  /**
+   * Take over a stored sign-in when it is one FLUJO started for this server and the
+   * person can still finish it: same server, same authorization endpoint and callback,
+   * its state still valid and its code verifier saved.
+   */
+  private adoptOpenAuthorization(pending: MCPStreamableConfig, discovery: OAuthDiscoveryState | undefined): boolean {
+    if (!pending.oauthState || !pending.oauthCodeVerifier || !discovery || pending.serverUrl !== this.config.serverUrl
+        || pending.oauthStateDiscovery?.authorizationServerUrl !== discovery.authorizationServerUrl
+        || !matchesOAuthState(pending, pending.oauthState, getCurrentWorkspace())) return false;
+    let url: URL;
+    let endpoint: URL;
+    try {
+      url = new URL(pending.authorizationUrl ?? '');
+      endpoint = new URL(discovery.authorizationServerMetadata?.authorization_endpoint
+        ?? new URL('/authorize', discovery.authorizationServerUrl).href);
+    } catch {
+      return false; // The first request may still be saving its URL.
+    }
+    const clientId = url.searchParams.get('client_id');
+    const callback = clientId !== null && clientId === this.clientMetadataUrl ? this.cimdRedirectUrl : this.redirectUrl;
+    if (url.searchParams.get('state') !== pending.oauthState || url.origin !== endpoint.origin
+        || url.pathname !== endpoint.pathname || url.searchParams.get('redirect_uri') !== callback
+        || (this.config.oauthClientId && clientId !== this.config.oauthClientId)) return false;
+    Object.assign(this.config, {
+      authorizationUrl: url.toString(), oauthState: pending.oauthState,
+      oauthStateWorkspace: pending.oauthStateWorkspace, oauthStateCreatedAt: pending.oauthStateCreatedAt,
+      oauthStateDiscovery: pending.oauthStateDiscovery, oauthCodeVerifier: pending.oauthCodeVerifier,
+    });
+    return true;
+  }
+
+  /** Reuse a sign-in a connection already prepared for this server; see startOAuthAuthorization. */
+  async resumePendingAuthorization(): Promise<boolean> {
+    const configs = await loadServerConfigs();
+    const pending = Array.isArray(configs)
+      ? configs.find(config => config.name === this.config.name) as MCPStreamableConfig | undefined : undefined;
+    return pending?.transport === 'streamable' && this.adoptOpenAuthorization(pending, pending.oauthStateDiscovery);
+  }
+
   async codeVerifier(): Promise<string> {
     if (!this.config.oauthCodeVerifier) {
       const error = `No code verifier found for ${this.config.name}`;
@@ -536,7 +700,7 @@ export class MCPOAuthClientProvider implements OAuthClientProvider {
  */
 export function createOAuthClientProvider(
   config: MCPStreamableConfig,
-  redirectUrl: string = 'http://localhost:4200/api/oauth/callback',
+  redirectUrl?: string,
   authorizationDiscovery?: OAuthDiscoveryState,
 ): MCPOAuthClientProvider {
   return new MCPOAuthClientProvider(config, redirectUrl, authorizationDiscovery);

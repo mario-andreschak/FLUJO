@@ -6,17 +6,19 @@
  *   npm run conformance:mcp -- --url http://localhost:4200/mcp-flows
  *   npm run conformance:mcp -- --url http://localhost:4200/mcp-proxy/<server> --scenario server-stateless
  *
- * The tool comes from the publisher's own npm package at a pinned version
- * (@modelcontextprotocol/conformance, MIT). Only its pre-release line has the
+ * The tool is the publisher's own npm package, pinned in devDependencies
+ * (@modelcontextprotocol/conformance, MIT); its client scenarios run in
+ * __tests__/mcp/mcpClientConformance.test.ts. Only its pre-release line has the
  * 2026-07-28 scenarios. Results go to a folder outside the repository.
  * The exit code is non-zero when any scenario failed.
  */
 import { spawn } from 'node:child_process';
 import { mkdtemp } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 
-const CONFORMANCE_PACKAGE = '@modelcontextprotocol/conformance@0.2.0-alpha.12';
+const conformanceCli = path.join(path.dirname(createRequire(import.meta.url).resolve('@modelcontextprotocol/conformance/package.json')), 'dist', 'index.js');
 const DEFAULT_SCENARIOS = ['server-stateless', 'http-header-validation', 'dns-rebinding-protection', 'tools-list'];
 
 function option(name) {
@@ -34,9 +36,9 @@ const out = option('out') ?? await mkdtemp(path.join(os.tmpdir(), 'flujo-mcp-con
 
 function run(scenario) {
   return new Promise(resolve => {
-    const child = spawn(process.platform === 'win32' ? 'npx.cmd' : 'npx',
-      ['--yes', CONFORMANCE_PACKAGE, 'server', '--url', url, '--scenario', scenario, '--output-dir', out],
-      { stdio: 'inherit', shell: process.platform === 'win32' });
+    const child = spawn(process.execPath,
+      [conformanceCli, 'server', '--url', url, '--scenario', scenario, '--output-dir', out],
+      { stdio: 'inherit' });
     child.on('close', code => resolve({ scenario, code: code ?? 1 }));
     child.on('error', () => resolve({ scenario, code: 1 }));
   });

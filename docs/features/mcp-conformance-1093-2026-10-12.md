@@ -298,7 +298,7 @@ release.
 | OAuth: servers without protected resource metadata whose issuer is the bare origin | **Fixed now** (was refused as an issuer mismatch) | `issuerMatchesDiscovery`; same test |
 | OAuth: `resource` in authorization, code and refresh requests | Checked (SDK behaviour, now locked by a test) | same test |
 | OAuth: discovery order (path metadata, then root; OAuth then OpenID) | SDK already correct; the capability preview probe **fixed now** | `oauthProbe.ts`; `oauthProbe.test.ts` |
-| OAuth: real code exchange and refresh with a third-party provider | **Open: needs Mario** | see "What is left" |
+| OAuth: real code exchange and refresh (formerly "needs a third-party provider") | **Fixed and tested on November 27** without a person: a local authorization server from the official SDK handlers, plus the official conformance suite | `oauthReferenceServer.test.ts`, `mcpClientConformance.test.ts`; see the November 27 section |
 | Sampling: requested, policy and model token caps; real stop reason | Fixed earlier (#1119, live check #1157) | `sampling.test.ts` |
 | Sampling/elicitation: v2 handlers keep request context | Fixed earlier | `betaClient.ts` |
 | Errors: same codes and data from both SDK generations | Fixed earlier | `protocolErrors.ts`; `conformanceAdapters.test.ts` |
@@ -312,7 +312,7 @@ release.
 | Modern HTTP separate from Tasks; Skills Final in both clients; Apps docs and browser checks | Fixed earlier (#1119, #1153, #1155, #1160, #1161) | sections above |
 | One shared `@modelcontextprotocol/core` | **Fixed now** | `sdkPackageAlignment.test.ts` |
 | Modern-only stdio | Deliberately not supported until FLUJO owns that process lifecycle | boundary table above |
-| Installed Windows/Linux and combined release checks | **Open: release pre-flight** | not run in this bundle |
+| Installed Windows/Linux and combined release checks | **Covered on November 27**: the packaged checks of every host release workflow now run a local program server and an OAuth server against the installed app | `scripts/packaged-acceptance/mcp-checks.mjs`; `packaged-acceptance.test.mjs` |
 
 ### Deliberate choices
 
@@ -322,15 +322,83 @@ release.
 - The S256 check refuses only new sign-ins. A server that never listed S256 keeps
   refreshing grants that already exist. All providers checked on November 25
   (Slack, Asana, GitHub, Linear, Notion, Atlassian, Sentry, Stripe) list S256.
-- The official conformance tool (`@modelcontextprotocol/conformance` 0.1.16, MIT)
-  exists. Its client mode needs a FLUJO command-line client that drives the real
-  sign-in code with private storage; its server mode needs a running FLUJO. Neither
-  fits this bundle, so no script was added. The scripted tests above cover the same
-  authorization rules for both SDK generations.
+- The official conformance tool now runs against FLUJO's client; see the
+  November 27 section. (The November 25 note that it needed a command-line client
+  no longer applies: a small bridge hands each scenario to a Jest test.)
 
 ### What is left
 
-- Mario: finish one real sign-in and one refresh with a third-party provider
-  (the Slack "Allow" page is ready; it also accepts FLUJO's terms, so a person
-  must click it).
-- Release pre-flight: installed Windows/Linux and combined release checks.
+Nothing. The two open lines of November 25 are closed below.
+
+## November 27, 2026: sign-in checked end to end without a person
+
+The two items left on November 25 needed "a real third-party account" and "a
+release pre-flight". Both are now automatic checks that run in CI.
+
+### A real authorization server instead of a third-party account
+
+`scripts/mcp-oauth-reference-server.mjs` starts a local OAuth 2.1 authorization
+server and an MCP server protected by it. It is built from the official MCP SDK's
+own server-side sign-in handlers (authorize, token, register, revoke and the
+bearer check, MIT), not a mock: they check S256 PKCE, exact redirect addresses
+and client authentication themselves. On top it adds rotating refresh tokens (a
+reused refresh token ends the grant, as OAuth 2.1 asks), revocation, client ID
+metadata documents read from the same `githubpages/oauth/client-metadata.json`
+FLUJO publishes, the issuer in the redirect, and a step-up scope.
+
+`__tests__/mcp/oauthReferenceServer.test.ts` drives FLUJO's real routes
+(`/api/oauth/initiate`, `/callback`, `/reset`), its OAuth provider, its encrypted
+storage and both client generations through four stories (v1 and v2, client ID
+metadata document and dynamic registration). A headless request follows the
+consent redirect back into the callback route, so nobody clicks Allow. Each story
+checks, against the server's own log: the 401 challenge, the scope from the
+challenge, S256, the resource indicator, registration fields, that only
+ciphertext is stored, a tool call, refresh after expiry with a rotated token, use
+after a restart, a token endpoint that is down for a moment, a step-up, a grant
+the provider revoked, and revocation on reset. 32 tests; 22 failed before the
+fixes below.
+
+### Fixed by these checks
+
+| Finding | Fix | Test |
+| --- | --- | --- |
+| One "service unavailable" from the token endpoint made FLUJO open a new consent page, although the grant was fine | Discovery and token requests that get 429/502/503/504 are repeated twice with a short wait (Retry-After honoured up to 5 s); MCP requests never are. If the refresh still fails, no new sign-in starts: the connection fails like any other and is retried, with the grant kept | reference test "keeps the sign-in when the token endpoint is down" |
+| A tool needing one more scope prepared the right sign-in, but Authenticate refreshed the old grant and dropped it | Authenticate first resumes a sign-in FLUJO already prepared for this server (same server, endpoint, callback, valid state and code verifier) | reference test "asks for one more scope" |
+| The v1 client could not step up at all: a refresh never adds a scope, and the SDK refreshed first | After a 403 `insufficient_scope`, the provider hands the v1 SDK the grant without its refresh token, so it starts the authorization the challenge asked for | same test, v1 stories |
+| Background connections used a callback address the client never registered, so a new sign-in after dynamic registration was refused | A connection's provider uses the callback the stored registration lists | same test, dynamic registration stories |
+| A server that refused a scope FLUJO already held got a new consent page every time (4 in the official retry-limit check) | No new sign-in when the refused scope is already granted; FLUJO reports the refusal instead | conformance `auth/scope-retry-limit` |
+| Reset forgot the tokens but left the refresh token alive at the provider | Reset first revokes the grant at the provider's revocation endpoint (RFC 7009); best effort, bounded to 5 s, never blocks the reset | reference test "revokes the grant" |
+
+### The official conformance suite
+
+`@modelcontextprotocol/conformance` 0.2.0-alpha.12 (official, MIT) is a pinned dev
+dependency. `__tests__/mcp/mcpClientConformance.test.ts` runs every client
+scenario of its frozen 2026-07-28 requirement set: the tool starts its own
+servers and launches `__tests__/mcp/fixtures/conformanceClientBridge.mjs` as "the
+client"; the bridge hands the scenario to the test, where FLUJO connects with its
+own factories, signs in through its routes with a headless browser and uses what
+the server offers. The tool's own checks decide; a warning counts as a failure.
+
+- All 25 sign-in scenarios, for the v2 client at 2026-07-28 and at 2025-11-25 and
+  for the v1 client at 2025-11-25 (the newer scenarios forced onto the older
+  protocol, because the same sign-in rules apply there): 75 runs.
+- The 7 request scenarios (standard and custom headers, invalid tool headers,
+  request state, `_meta`, tool calls, no network `$ref`), v2 client at 2026-07-28.
+- `npm run conformance:mcp` (server mode) now uses the same pinned package.
+
+### Installed checks before release
+
+`scripts/packaged-acceptance.mjs` already runs on the installed npm package
+(`verify-full.yml` on Ubuntu and Windows, `publish-npm.yml`) and on the installed
+Windows checkout (`installer.yml`). Its host forms now end with three MCP checks
+(`scripts/packaged-acceptance/mcp-checks.mjs`): a dependency-free local program
+server answers a tool call; a server behind the reference authorization server
+signs in through the real routes and redirect and refreshes an expired token;
+after a restart the sign-in works and refreshes with no new consent, and reset
+revokes the grant. The container form starts local program servers only after
+the owner approves them, so it runs no MCP checks; the client code it would run
+is the same as on the host forms.
+
+Verified locally: both Jest suites (32 and 82 tests), the existing sign-in suites,
+`packaged-acceptance.test.mjs` and the workflow contract. The packaged MCP checks
+need a production build and run in CI with the release workflows.
