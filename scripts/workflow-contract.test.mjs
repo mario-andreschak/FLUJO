@@ -495,7 +495,52 @@ for (const [label, change, expected] of [
 test('the main pull-request bridge does not need the broad-only jobs, and the broad gate waits for them', () => {
   const files = Object.fromEntries(readdirSync(directory).filter(file => /\.ya?ml$/.test(file))
     .map(file => [file, YAML.parse(readFileSync(new URL(file, directory), 'utf8'))]));
-  const broadOnly = ['antigravity-cli', 'installed-windows-acceptance', 'image-acceptance', 'contributor-guide'];
+  const broadOnly = ['antigravity-cli', 'installed-windows-acceptance', 'image-acceptance', 'system-key-store', 'system-key-store-linux', 'contributor-guide'];
   for (const id of broadOnly) assert.equal(files['verify.yml'].jobs[id], undefined, id);
   assert.deepEqual(files['verify-full.yml'].jobs.verification.needs.slice(-broadOnly.length), broadOnly);
 });
+
+const systemKeyJob = (files, id = 'system-key-store') => files['verify.yml'].jobs[id];
+const systemKeyStep = (files, id, matches) => systemKeyJob(files, id).steps.find(matches);
+const isSystemKeyCheck = step => step.run === 'node scripts/check-system-key-store.mjs';
+const isKeyringInstall = step => step.run?.includes('apt-get install');
+for (const [label, change, expected] of [
+  ['a missing desktop system key job', files => { delete files['verify.yml'].jobs['system-key-store']; }, /real key store on macOS, Windows and Linux/],
+  ['a missing Linux keyring job', files => { delete files['verify.yml'].jobs['system-key-store-linux']; }, /real key store/],
+  ['a system key job without macOS', files => { systemKeyJob(files).strategy.matrix.os = ['windows-latest']; }, /real key store/],
+  ['a system key job with extra matrix rows', files => { systemKeyJob(files).strategy.matrix.exclude = [{ os: 'macos-latest' }]; }, /real key store/],
+  ['a system key job that stops other systems on the first failure', files => { systemKeyJob(files).strategy['fail-fast'] = true; }, /real key store/],
+  ['a skipped Linux keyring job', files => { systemKeyJob(files, 'system-key-store-linux').if = 'false'; }, /real key store/],
+  ['a tolerated failing system key check', files => { systemKeyStep(files, 'system-key-store', isSystemKeyCheck)['continue-on-error'] = true; }, /real key store/],
+  ['a conditional system key check', files => { systemKeyStep(files, 'system-key-store-linux', isSystemKeyCheck).if = "runner.os == 'Linux'"; }, /real key store/],
+  ['a system key check that turns the real store off', files => { systemKeyStep(files, 'system-key-store', isSystemKeyCheck).env = { FLUJO_SYSTEM_KEY_STORE: 'off' }; }, /real key store/],
+  ['a system key check narrowed to one situation', files => { systemKeyJob(files, 'system-key-store-linux').env = { FLUJO_TEST_REAL_SYSTEM_KEY: 'absent' }; }, /real key store/],
+  ['a replaced system key check', files => { systemKeyStep(files, 'system-key-store', isSystemKeyCheck).run = 'node scripts/check-system-key-store.mjs || true'; }, /real key store/],
+  ['a Linux keyring job without the keyring', files => {
+    const job = systemKeyJob(files, 'system-key-store-linux');
+    job.steps = job.steps.filter(step => !isKeyringInstall(step));
+  }, /real key store/],
+  ['a Linux keyring installed after the check', files => {
+    const steps = systemKeyJob(files, 'system-key-store-linux').steps;
+    const [install] = steps.splice(steps.findIndex(isKeyringInstall), 1);
+    steps.push(install);
+  }, /real key store/],
+  ['a system key check run before npm ci', files => {
+    const steps = systemKeyJob(files).steps;
+    const [check] = steps.splice(steps.findIndex(isSystemKeyCheck), 1);
+    steps.splice(steps.findIndex(step => step.run === 'npm ci --include=dev'), 0, check);
+  }, /real key store/],
+  ['a system key job without the verified Node runtime', files => {
+    systemKeyJob(files).steps = systemKeyJob(files).steps.filter(step => !step.run?.startsWith('node scripts/verify-ci-node.mjs'));
+  }, /verify official binary identity/],
+  ['a verification gate that ignores the Linux keyring job', files => {
+    const gate = files['verify.yml'].jobs.verification;
+    gate.needs = gate.needs.filter(id => id !== 'system-key-store-linux');
+  }, /evaluate every prerequisite/],
+]) {
+  test(`broad qualification refuses ${label}`, () => {
+    const files = readWorkflows();
+    change(files);
+    assert.throws(() => assertFullWorkflowContract(files), expected);
+  });
+}
