@@ -35,6 +35,7 @@ import {
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { getSchedulerService } from '@/backend/services/scheduler';
 import { requireApprovalOf } from '@/backend/execution/flow/toolApprovalGate';
+import { findLiveApproval, resolvePendingApproval, type LiveApprovalListing } from '@/backend/execution/flow/toolApprovalRegistry';
 
 const log = createLogger('app/api/approvals/[id]/route');
 
@@ -77,6 +78,38 @@ function waitingCallsOfBatch(entry: PendingApprovalEntry, state: SharedState): s
   return (state.pendingToolCalls ?? []).filter((call) => batch.has(call.id)).map((call) => call.id);
 }
 
+/**
+ * Answer a call a running agent SDK or sub-flow waits on (a live wait, #1284).
+ * The run is still going and does the rest; this only hands it the decision,
+ * exactly like the chat card's /respond. The receipt names one call and stops
+ * working once it is answered.
+ */
+async function answerLiveApproval(
+  request: NextRequest,
+  approvalId: string,
+  live: LiveApprovalListing,
+  toolCallId: string | undefined,
+  action: 'approve' | 'reject',
+): Promise<Response> {
+  if (toolCallId && toolCallId !== live.toolCall.id) {
+    return json({ error: `Pending tool call with ID ${toolCallId} not found` }, 404);
+  }
+  const state = FlowExecutor.conversationStates.get(live.conversationId) ?? await loadConversationState(live.conversationId);
+  if (!state || isPersonaOwnedConversationState(state)) {
+    const notLoopback = assertLocalRequest(request, { strictLoopback: true });
+    if (notLoopback) return notLoopback;
+  }
+  if (state?.personaArchived) return json({ error: 'An anonymized Persona archive is read-only.' }, 409);
+  if (isPersonaOwnedConversationState(state) && !state?.personaAttribution) {
+    return json({ error: 'Persona conversation attribution is incomplete; refusing an unfenced approval.' }, 409);
+  }
+  if (!resolvePendingApproval(live.conversationId, live.toolCall.id, action === 'approve')) {
+    return json({ error: 'This approval is no longer awaiting a decision' }, 404);
+  }
+  log.info('Answered a live approval from the inbox', { approvalId, conversationId: live.conversationId, action });
+  return json({ status: 'running', approvalId, conversationId: live.conversationId, live: true });
+}
+
 function deriveOutputText(state: SharedState | undefined): string | undefined {
   if (!state) return undefined;
   const last = state.messages[state.messages.length - 1];
@@ -100,6 +133,8 @@ function deriveOutputText(state: SharedState | undefined): string | undefined {
  * resolved with the same action; calls the run makes after it continues are
  * never included. `deny` maps to the existing reject semantics. A receipt
  * stops working once its batch is decided; a later batch has a new one.
+ * A live wait (`live: true` in the listing) names one call of a running agent
+ * or sub-flow; answering it hands the run the decision and returns at once.
  *
  * The tool decision is applied via the SAME helper the interactive chat
  * `/respond` route uses (applyApprovalDecision), then the run is resumed via
@@ -176,6 +211,8 @@ async function POST_handler(
   try {
     const candidateEntry = await findPendingApprovalByReceipt(id);
     if (!candidateEntry) {
+      const live = findLiveApproval(id);
+      if (live) return await answerLiveApproval(request, id, live, body.toolCallId, mappedAction);
       return json({ error: `No pending approval with id "${id}"` }, 404);
     }
 

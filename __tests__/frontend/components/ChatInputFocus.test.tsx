@@ -47,4 +47,19 @@ describe('ChatInput composer focus', () => {
     expect(onSendMessage).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled();
   });
+
+  it('keeps "Require tool approvals" usable while a card waits, unless the chat itself is unavailable (#1284)', () => {
+    const onRequireApprovalChange = jest.fn();
+    const { rerender } = render(
+      <ChatInput onSendMessage={() => undefined} disabled approvalSettingDisabled={false} requireApproval onRequireApprovalChange={onRequireApprovalChange} />,
+    );
+    const box = () => screen.getByRole('checkbox', { name: 'Require tool approvals' });
+
+    expect(box()).toBeEnabled();
+    fireEvent.click(box());
+    expect(onRequireApprovalChange).toHaveBeenCalledWith(false);
+
+    rerender(<ChatInput onSendMessage={() => undefined} disabled requireApproval onRequireApprovalChange={onRequireApprovalChange} />);
+    expect(box()).toBeDisabled();
+  });
 });

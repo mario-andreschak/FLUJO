@@ -121,7 +121,7 @@ const CURATED_GROUPS: ApiGroup[] = [
           { name: 'stream', type: 'boolean', description: 'Stream the response as SSE chunks.' },
           { name: 'flujo', type: 'boolean', description: 'Enable FLUJO-specific behavior.' },
           { name: 'conversation_id', type: 'string', description: 'Reuse/continue an existing conversation.' },
-          { name: 'requireApproval', type: 'boolean', description: 'Pause for manual tool-call approval.' },
+          { name: 'requireApproval', type: '"true" | "false"', description: 'Turn "Require tool approvals" on or off for this conversation (saved for later runs). Leave it out to keep the conversation\'s saved setting; a new conversation starts with it off.' },
           { name: 'flujodebug', type: 'boolean', description: 'Run in the visual debugger (single-step).' },
         ],
         response: 'OpenAI ChatCompletion object, or an SSE stream of chunks when stream=true.',
