@@ -8,6 +8,12 @@ import type { OwnerRequestAuthorization } from '@/backend/services/security/owne
 import { runWithWorkspace } from '@/utils/workspace';
 import { writeFileAtomic } from '@/utils/storage/backend';
 import * as storageBackend from '@/utils/storage/backend';
+import * as runtimeLock from '@/backend/services/enduringAgents/runtimeLock';
+
+jest.mock('@/backend/services/enduringAgents/runtimeLock', () => {
+  const actual = jest.requireActual<typeof import('@/backend/services/enduringAgents/runtimeLock')>('@/backend/services/enduringAgents/runtimeLock');
+  return { ...actual, withWorkspaceRuntimeLock: jest.fn(actual.withWorkspaceRuntimeLock) };
+});
 
 jest.mock('@/utils/storage/backend', () => {
   const actual = jest.requireActual<typeof import('@/utils/storage/backend')>('@/utils/storage/backend');
@@ -36,6 +42,10 @@ jest.mock('@/utils/encryption/secure', () => {
 
 function deferred<T>() { let resolve!: (value: T) => void;
   const promise = new Promise<T>(yes => { resolve = yes; }); return { promise, resolve }; }
+/** Resolves once `condition` holds. The test's own time limit bounds the wait. */
+async function until(condition: () => boolean | Promise<boolean>, everyMs = 10): Promise<void> {
+  while (!(await condition())) await new Promise(resolve => setTimeout(resolve, everyMs));
+}
 const inputRequests = { approval: { method: 'elicitation/create' as const,
   params: { mode: 'form' as const, message: 'Approve private-operation-label', requestedSchema: { type: 'object' as const, properties: {} } } } };
 const response = { approval: { action: 'accept' as const, content: { secret: 'elicited-private-value' } } };
@@ -93,13 +103,12 @@ describe('durable MCP server Tasks', () => {
   const children = new Set<ChildProcess>();
   const inWorkspace = <T>(action: () => Promise<T>, workspace = 'tasks-workspace') => runWithWorkspace(workspace, action);
   async function waitFor(id: string, status: string, authorization = auth): Promise<ServerTaskView> {
-    const deadline = Date.now() + 5000;
-    while (Date.now() < deadline) {
-      const value = await inWorkspace(() => store.get(authorization, 'tasks-workspace', id));
-      if (value.status === status) return value;
-      await new Promise(resolve => setTimeout(resolve, 30));
-    }
-    throw new Error(`Task did not reach ${status}`);
+    let value!: ServerTaskView;
+    await until(async () => {
+      value = await inWorkspace(() => store.get(authorization, 'tasks-workspace', id));
+      return value.status === status;
+    }, 30);
+    return value;
   }
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-server-tasks-'));
@@ -202,7 +211,21 @@ describe('durable MCP server Tasks', () => {
       await expect(inWorkspace(() => store.create(anotherOwner, 'tasks-workspace', { run: async () => ({}) }))).rejects.toMatchObject({ code: 'TASK_LIMIT' });
     } finally { gate.resolve({}); }
     for (const task of tasks) await waitFor(task.id, 'completed', task.auth);
-  }, 15000);
+    // About 130 locked ledger transactions: 6 s on its own, 20 s beside heavy tests.
+  }, 60_000);
+  it('lets running tasks watch the ledger without queueing for its lock every tick', async () => {
+    const gate = deferred<Record<string, unknown>>();
+    const recheck = jest.fn(async () => null);
+    const watched = { ...auth, recheck };
+    try {
+      for (let n = 0; n < 4; n++) await inWorkspace(() => store.create(watched, 'tasks-workspace', { run: () => gate.promise }));
+      const locked = jest.mocked(runtimeLock.withWorkspaceRuntimeLock);
+      const lockedBefore = locked.mock.calls.length, checksBefore = recheck.mock.calls.length;
+      // Every monitor rechecks authority on each tick; wait for three ticks of all four.
+      await until(() => recheck.mock.calls.length >= checksBefore + 12);
+      expect(locked.mock.calls.length).toBe(lockedBefore);
+    } finally { gate.resolve({}); }
+  });
   it('fails dead-process handles after restart without replaying or exposing old input', async () => {
     const created = await inWorkspace(() => store.create(auth, 'tasks-workspace', { run: async () => ({}) }));
     await waitFor(created.taskId, 'completed');
@@ -268,14 +291,10 @@ describe('durable MCP server Tasks', () => {
       for (const id of ids) await inWorkspace(() => store.cancel(auth, 'tasks-workspace', id));
       await expect(inWorkspace(() => store.create(auth, 'tasks-workspace', { run: async () => ({}) }))).rejects.toMatchObject({ code: 'TASK_LIMIT' });
     } finally { gate.resolve({ late: 'ignored' }); }
-    let cleared = false;
-    const deadline = Date.now() + 3000;
-    while (!cleared && Date.now() < deadline) {
+    await until(async () => {
       const ledger = JSON.parse(await fs.readFile(path.join(root, '.mcp-server-tasks', 'ledger.json'), 'utf8'));
-      cleared = ledger.tasks.every((task: { executionPending: boolean }) => !task.executionPending);
-      if (!cleared) await new Promise(resolve => setTimeout(resolve, 20));
-    }
-    expect(cleared).toBe(true);
+      return ledger.tasks.every((task: { executionPending: boolean }) => !task.executionPending);
+    }, 20);
     for (const id of ids) expect((await waitFor(id, 'cancelled')).result).toBeUndefined();
     const next = await inWorkspace(() => store.create(auth, 'tasks-workspace', { run: async () => ({ ok: true }) }));
     await waitFor(next.taskId, 'completed');
@@ -293,12 +312,11 @@ describe('durable MCP server Tasks', () => {
       return original(...args);
     });
     gate.resolve({ private: 'callback-result-must-not-be-replayed' });
-    const deadline = Date.now() + 3000;
     const expectedFailures = cancelled ? 1 : 2;
-    while (failures < expectedFailures && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
-    expect(failures).toBeGreaterThanOrEqual(expectedFailures);
-    // Allow the finish attempts to reject and the callback to fully retire.
-    await new Promise(resolve => setTimeout(resolve, 30));
+    await until(() => failures >= expectedFailures);
+    // The callback has fully retired once it left its settlement receipt.
+    const ledgerFile = path.join(root, '.mcp-server-tasks', 'ledger.json');
+    await until(() => globalThis.__flujo_server_tasks_v1?.settled.get(ledgerFile)?.has(created.taskId) === true);
     const reconstructed = new ServerTaskStore({ directory: root, now: () => now });
     await expect(inWorkspace(() => reconstructed.get(auth, 'tasks-workspace', created.taskId)))
       .rejects.toMatchObject({ code: 'TASK_STORAGE_UNAVAILABLE' });
@@ -380,13 +398,12 @@ describe('durable MCP server Tasks', () => {
     children.add(child);
     let errors = ''; child.stderr?.on('data', data => { errors += String(data).slice(0, 4096); });
     const ids = await new Promise<string[]>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error(`Task child timed out: ${errors}`)), 12000);
       child.on('message', message => {
         const value = message as { ids?: string[]; error?: string };
-        if (value.ids) { clearTimeout(timeout); resolve(value.ids); }
-        if (value.error) { clearTimeout(timeout); reject(new Error(value.error)); }
+        if (value.ids) resolve(value.ids);
+        if (value.error) reject(new Error(value.error));
       });
-      child.once('exit', code => { clearTimeout(timeout); reject(new Error(`Task child exited ${code}: ${errors}`)); });
+      child.once('exit', code => reject(new Error(`Task child exited ${code}: ${errors}`)));
     });
     return { child, ids };
   }
