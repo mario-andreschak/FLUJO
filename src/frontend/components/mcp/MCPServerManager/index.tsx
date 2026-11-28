@@ -331,9 +331,10 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     }
   };
 
-  const handleEnvRestart = async (serverName: string) => {
-    await toggleServer(serverName, false);
-    await toggleServer(serverName, true);
+  // The save itself restarts the app with its new environment; a second restart here
+  // would close that connection under a tool test that is already running (#577).
+  const handleEnvSaved = async (serverName: string) => {
+    await retryServer(serverName);
   };
 
   const detailsServer = detailsServerName
@@ -1330,7 +1331,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
         server={detailsServer ? { name: detailsServer.name, status: detailsServer.status, env: detailsServer.env } : null}
         onClose={handleCloseDetails}
         onSaveEnv={saveEnv}
-        onServerRestart={handleEnvRestart}
+        onServerRestart={handleEnvSaved}
         toolPrefill={toolPrefill}
       />
 

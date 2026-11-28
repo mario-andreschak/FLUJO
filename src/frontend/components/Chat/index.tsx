@@ -149,6 +149,7 @@ import {
   observeNewMcpAppResultIds,
 } from './mcpAppProjection';
 import { applyModelDeltaBatch } from './modelDeltaBatch';
+import { rememberAnsweredToolCall, unansweredToolCalls } from './answeredToolCalls';
 import {
   getConversationMcpSkills,
   setActiveMcpSkillConversation,
@@ -577,6 +578,7 @@ const Chat: React.FC = () => {
   const [titleDraft, setTitleDraft] = useState<string>('');
   const [executeInDebugger, setExecuteInDebugger] = useState<boolean>(false); // State for debugger checkbox
   const [pendingToolCalls, setPendingToolCalls] = useState<OpenAI.ChatCompletionMessageFunctionToolCall[] | null>(null);
+  const answeredToolCallIdsRef = useRef<Set<string>>(new Set());
   const [pendingElicitation, setPendingElicitation] = useState<PendingElicitation | null>(null);
   const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null);
   // Flow the user asked to switch an already-executed conversation to; a
@@ -634,6 +636,9 @@ const Chat: React.FC = () => {
   // open in that pending state: armed for the next run, or attaching to the
   // run that is already in flight. Cleared when the debugger is closed.
   const [debuggerRequested, setDebuggerRequested] = useState<boolean>(false);
+  // Armed for the next message: the final reply of a run started before the arming
+  // must not disarm it (#577).
+  const debuggerArmedForNextSendRef = useRef(false);
   // An attach is in flight (wildcard breakpoint armed, waiting for the loop to
   // reach its next node) — drives the panel's spinner caption.
   const [debugAttaching, setDebugAttaching] = useState<boolean>(false);
@@ -1346,7 +1351,7 @@ const Chat: React.FC = () => {
       // keeps the prompt closed.
       if (conversation.status === 'awaiting_tool_approval' && conversation.pendingToolCalls?.length
         && loadingConversationIdRef.current !== id) {
-        setPendingToolCalls(conversation.pendingToolCalls);
+        setPendingToolCalls(unansweredToolCalls(conversation.pendingToolCalls, answeredToolCallIdsRef.current));
       }
       // Issue #383 (gap 2): rehydrate the error message + code from the
       // server so it survives a reload or re-selecting an older errored
@@ -2525,11 +2530,14 @@ const Chat: React.FC = () => {
         // not bleed its pending tool calls into whatever conversation is on
         // screen — that previously showed the wrong conversation's prompt and
         // made Reject target the wrong conversation.
-        if (event.conversationId && event.conversationId === currentConversationIdRef.current) {
-          setPendingToolCalls(event.pendingToolCalls || []);
+        {
+          const open = unansweredToolCalls(event.pendingToolCalls || [], answeredToolCallIdsRef.current);
+          if (event.conversationId && event.conversationId === currentConversationIdRef.current) {
+            setPendingToolCalls(open);
+          }
+          if (event.conversationId) patchConversationStatus(event.conversationId,
+            open?.length ? 'awaiting_tool_approval' : 'running');
         }
-        if (event.conversationId) patchConversationStatus(event.conversationId,
-          event.pendingToolCalls?.length ? 'awaiting_tool_approval' : 'running');
         break;
       case 'run:awaiting_elicitation':
         // Same bleed-prevention rule as awaiting_approval: only surface for the
@@ -2585,10 +2593,11 @@ const Chat: React.FC = () => {
         if (event.status === 'error' && event.error && event.conversationId === currentConversationIdRef.current) {
           setErrorInfo(event.error);
         }
-        // Clear any pending elicitation/question when the run completes.
+        // A finished run waits for nothing: clear its prompts.
         if (ownsPendingInputUpdate) {
           setPendingElicitation(null);
           setPendingQuestion(null);
+          setPendingToolCalls(null);
         }
         // The live-view teardown (indicator, stream, input gate) belongs to
         // the run this client is tracking. Events normally only arrive from
@@ -3353,9 +3362,11 @@ const Chat: React.FC = () => {
       // or errored — and only when the finished conversation is the one on
       // screen (a background run ending must not close the viewed debugger).
       log.info(`API Response: Execution completed or errored (Status: ${data.status}). Hiding debugger panel.`, { conversationId });
-      setDebuggerRequested(false);
+      if (!debuggerArmedForNextSendRef.current) {
+        setDebuggerRequested(false);
+        setExecuteInDebugger(false);
+      }
       setDebugAttaching(false);
-      setExecuteInDebugger(false);
       setIsDebugPaused(false);
       setDebugState(null);
       setDebugSessionActive(false);
@@ -3406,7 +3417,7 @@ const Chat: React.FC = () => {
       log.info('API Response/Polling: Pausing for tool approval', { conversationId });
       // The approval prompt belongs to the viewed conversation only — same
       // bleed rule as the SSE run:awaiting_approval handler.
-      if (isViewed) setPendingToolCalls(data.pendingToolCalls || []);
+      if (isViewed) setPendingToolCalls(unansweredToolCalls(data.pendingToolCalls || [], answeredToolCallIdsRef.current));
       if (isTracked) {
         setIsLoading(false); // Stop loading indicator
         setLoadingConversationId(null);
@@ -3672,7 +3683,7 @@ const Chat: React.FC = () => {
           } as OpenAI.ChatCompletionUserMessageParam & { id?: string; timestamp?: number; processNodeId?: string };
         });
 
-      // Call the API
+      debuggerArmedForNextSendRef.current = false;
       const completion = await openaiRef.current.chat.completions.create({
         model: modelName,
         messages,
@@ -4280,6 +4291,7 @@ const Chat: React.FC = () => {
     if (!currentConversationId) return;
     log.info(`Handling tool response: ${action}`, { conversationId: currentConversationId, toolCallId });
 
+    rememberAnsweredToolCall(answeredToolCallIdsRef.current, toolCallId);
     setPendingToolCalls(null);
     setIsLoading(true); // Indicate processing and potentially restart polling
     setLoadingConversationId(currentConversationId);
@@ -4319,6 +4331,9 @@ const Chat: React.FC = () => {
       // view has since moved on to another conversation's run.
       if (loadingConversationIdRef.current === currentConversationId) setIsLoading(false);
       markConvRunning(currentConversationId, false);
+      // The answer did not arrive, so the call may still be waiting: offer it again.
+      answeredToolCallIdsRef.current.delete(toolCallId);
+      fetchDetailedConversation(currentConversationId);
     }
   };
 
@@ -4352,10 +4367,12 @@ const Chat: React.FC = () => {
           setIsLoading(true);
           setLoadingConversationId(conversationId);
           markConvRunning(conversationId, true);
+          rememberAnsweredToolCall(answeredToolCallIdsRef.current, target.toolCallId);
           const data = await chatService.respondToToolCall(conversationId, action, target.toolCallId, human);
           handleApiResponse(data, conversationId);
           return { ok: true };
         } catch (fallbackError) {
+          answeredToolCallIdsRef.current.delete(target.toolCallId);
           if (loadingConversationIdRef.current === conversationId) setIsLoading(false);
           markConvRunning(conversationId, false);
           const fallbackBody = fallbackError instanceof ChatApiError
@@ -4366,6 +4383,7 @@ const Chat: React.FC = () => {
       log.warn('Could not answer a Human step', { conversationId, requestId: target.requestId, err });
       return { ok: false, error: body?.error ?? t('chat.humanStep.failed'), fieldErrors: body?.fieldErrors };
     }
+    rememberAnsweredToolCall(answeredToolCallIdsRef.current, target.toolCallId);
     if (currentConversationIdRef.current === conversationId) {
       setPendingToolCalls(null);
       setIsLoading(true);
@@ -4465,8 +4483,11 @@ const Chat: React.FC = () => {
   };
 
   // --- Debugger Control Handlers ---
+  // A second Step while one runs was refused by the server and closed the paused debugger (#577).
+  const debugStepInFlightRef = useRef(false);
   const handleDebugStep = async () => {
-    if (!currentConversationId || !isDebugPaused) return;
+    if (!currentConversationId || !isDebugPaused || debugStepInFlightRef.current) return;
+    debugStepInFlightRef.current = true;
     log.info('Handling debug step request', { conversationId: currentConversationId });
     setIsLoading(true); // Show loading during step
     setLoadingConversationId(currentConversationId);
@@ -4485,7 +4506,7 @@ const Chat: React.FC = () => {
       setIsDebugPaused(false); // Exit debug mode on error? Or just show error?
       setDebugState(null);
     } finally {
-       // setIsLoading(false); // Loading is stopped by handleApiResponse on success/final state
+      debugStepInFlightRef.current = false;
     }
   };
 
@@ -4597,6 +4618,7 @@ const Chat: React.FC = () => {
     }
     setDebuggerRequested(true);
     setExecuteInDebugger(true); // the next turn runs in debug mode
+    debuggerArmedForNextSendRef.current = true;
     const running =
       (isLoading && loadingConversationId === currentConversationId) ||
       (!!currentConversationId && runningConvs.has(currentConversationId)) ||
@@ -4756,6 +4778,7 @@ const Chat: React.FC = () => {
     const conversationId = currentConversationId;
     const wasPaused = isDebugPaused;
     log.info('Closing debugger panel (detach)', { conversationId, wasPaused });
+    debuggerArmedForNextSendRef.current = false;
     setDebuggerRequested(false);
     setDebugAttaching(false);
     setExecuteInDebugger(false);
@@ -4852,6 +4875,11 @@ const Chat: React.FC = () => {
   const debugPendingMode: 'armed' | 'attaching' = debugAttaching ? 'attaching' : 'armed';
   /** The Debugger button is "on" whenever the panel is showing in any form. */
   const debuggerOpen = debugPanelOpen;
+  // Armed and waiting for the next message: a full-screen debugger would cover the
+  // message box it asks for (#577), so it takes over the screen only once a run is
+  // paused or being attached to. The side panel leaves the chat usable.
+  const debuggerAwaitsMessage = !debugState && !debugAttaching;
+  const debuggerFullScreen = (debuggerExpanded || isCompactLayout) && !debuggerAwaitsMessage;
 
   const handleDebuggerStepSelectionChange = useCallback((index: number) => {
     setDebuggerSelectedStepIndex(index);
@@ -6308,8 +6336,9 @@ const Chat: React.FC = () => {
         {/* Executed-Steps panel (issue #213): a hideable, resizable side panel
             that renders the current conversation's flow and highlights the
             executed path. Independent of the debugger — works for normal,
-            non-debug chats. */}
-        {workflowPanelVisible && currentConversationId && !isCompactLayout && (
+            non-debug chats. While the debugger (which draws the same flow) is
+            open it steps aside, so the chat keeps room to type (#577). */}
+        {workflowPanelVisible && currentConversationId && !isCompactLayout && !debugPanelOpen && (
           <>
             {/* Draggable divider: resizes the executed-steps panel. */}
             <Box
@@ -6385,7 +6414,7 @@ const Chat: React.FC = () => {
         {/* Debugger Area (open for the whole debug session, not only when paused).
             Docked side-panel layout — shown unless the user expanded it into the
             full-screen modal (issue #162). */}
-        {debugPanelOpen && currentConversationId && !debuggerExpanded && !isCompactLayout && (
+        {debugPanelOpen && currentConversationId && !isCompactLayout && !debuggerFullScreen && (
           <>
             {/* Draggable divider: resizes the debugger panel. */}
             <Box
@@ -6503,7 +6532,7 @@ const Chat: React.FC = () => {
           the whole viewport so the execution tracker and detail inspector have
           room. Toggled by the expand button in the debugger
           header; the debug session/state is untouched. */}
-      {debugPanelOpen && currentConversationId && (debuggerExpanded || isCompactLayout) && (
+      {debugPanelOpen && currentConversationId && debuggerFullScreen && (
         <Dialog
           fullScreen
           open

@@ -85,6 +85,23 @@ this way on desktop and phone screens and keeps the evidence. On a `launch`
 mode needs about 8–10 GB for this many pages, otherwise Next restarts itself
 mid-run and the loading stage fails with `ERR_CONNECTION_REFUSED`.
 
+## Scripted pilot
+
+`npm run pilot:scripted` (after `npm run build`) plays three first-time users
+(desktop, laptop and phone-sized windows) through the day-one tasks of the
+pilot's [tester guide](../pilots/product-fit/tester-guide.md). Each one gets
+its own fresh FLUJO with an empty data folder and a local stand-in model
+(`scripts/scripted-pilot/pilot-model.mjs`) that lists the allowed folders,
+reads the practice note and quotes its receipt phrase. Every task has a fixed
+rule: its result shows on screen within its time limit and no red error
+message appears. It ends with Settings → Privacy & usage → "Create report" and
+checks that the report counts the tester's work and holds nothing private. It
+writes `result.md` in plain language, `result.json`, each tester's diagnostic
+report and a screenshot and page snapshot per task, and exits with 1 when any
+task fails. The anonymous usage pulse goes to a local stand-in
+(`scripts/scripted-pilot/pulse-collector.mjs`), never to the real collector.
+The broad CI run (`verify-full`) runs it on Linux and Windows.
+
 ## Features
 
 The order below doubles as the sweep order for a broad "did we break the app" pass.

@@ -151,6 +151,12 @@ export default defineConfig([
     },
   },
   {
+    files: ['src/app/**/route.{js,ts}'],
+    rules: {
+      'flujo/route-request-required': 'error',
+    },
+  },
+  {
     files: ['src/frontend/**/*.tsx', 'src/app/**/*.tsx', 'src/frontend/**/hooks/**/*.ts'],
     ignores: ['src/frontend/hooks/timing.ts'],
     rules: {

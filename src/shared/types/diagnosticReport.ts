@@ -66,6 +66,10 @@ export interface DiagnosticReport {
     finished: number;
     failed: number;
     stopped: number;
+    /** Waiting for a tool approval or in the debugger when the period ended. */
+    paused: number;
+    /** Ended at a limit (turns, time, cost). */
+    limited: number;
     unfinished: number;
     toolCalls: number;
     toolFailures: number;
@@ -183,6 +187,8 @@ export function normalizeDiagnosticReport(input: unknown): DiagnosticReport {
       finished: diagnosticCount(value.finished),
       failed: diagnosticCount(value.failed),
       stopped: diagnosticCount(value.stopped),
+      paused: diagnosticCount(value.paused),
+      limited: diagnosticCount(value.limited),
       unfinished: diagnosticCount(value.unfinished),
       toolCalls: diagnosticCount(value.toolCalls),
       toolFailures: diagnosticCount(value.toolFailures),
@@ -247,7 +253,7 @@ export function formatDiagnosticReport(input: unknown): string {
       `Last ${DIAGNOSTIC_REPORT_DAYS} days (${activity.from} to ${activity.to}, UTC):`,
       `  Days with runs: ${activity.daysWithRuns}`,
       `  Runs: ${activity.runs} (finished ${activity.finished}, failed ${activity.failed}, `
-        + `stopped ${activity.stopped}, unfinished ${activity.unfinished})`,
+        + `stopped ${activity.stopped}, paused ${activity.paused}, ended at a limit ${activity.limited}, unfinished ${activity.unfinished})`,
       `  Tool calls: ${activity.toolCalls} (failed ${activity.toolFailures})`,
       `  AI requests: ${activity.aiRequests} (failed ${activity.aiFailures})`,
       `  Error types: ${joined(activity.errorTypes) || 'none'}`,

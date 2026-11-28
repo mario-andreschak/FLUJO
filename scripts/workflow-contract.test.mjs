@@ -520,7 +520,7 @@ for (const [label, change, expected] of [
 test('the main pull-request bridge does not need the broad-only jobs, and the broad gate waits for them', () => {
   const files = Object.fromEntries(readdirSync(directory).filter(file => /\.ya?ml$/.test(file))
     .map(file => [file, YAML.parse(readFileSync(new URL(file, directory), 'utf8'))]));
-  const broadOnly = ['antigravity-cli', 'installed-windows-acceptance', 'image-acceptance', 'system-key-store', 'system-key-store-linux', 'contributor-guide', 'first-use-journey'];
+  const broadOnly = ['antigravity-cli', 'installed-windows-acceptance', 'image-acceptance', 'system-key-store', 'system-key-store-linux', 'contributor-guide', 'first-use-journey', 'scripted-pilot'];
   for (const id of broadOnly) assert.equal(files['verify.yml'].jobs[id], undefined, id);
   assert.deepEqual(files['verify-full.yml'].jobs.verification.needs.slice(-broadOnly.length), broadOnly);
 });
@@ -599,5 +599,38 @@ for (const [label, change, where] of [
     assertContainerSmoke(files);
     change(files);
     assert.throws(() => assertFullWorkflowContract(files), where);
+  });
+}
+
+const pilotJob = files => files['verify.yml'].jobs['scripted-pilot'];
+const pilotStep = (files, prefix) => pilotJob(files).steps.find(step => step.run?.startsWith(prefix) || step.uses?.startsWith(prefix));
+for (const [label, change, expected] of [
+  ['a missing scripted pilot job', files => { delete files['verify.yml'].jobs['scripted-pilot']; }, /scripted pilot/],
+  ['a pilot without Windows', files => { pilotJob(files).strategy.matrix.os = ['ubuntu-24.04']; }, /scripted pilot/],
+  ['a pilot with extra matrix rows', files => { pilotJob(files).strategy.matrix.include = [{ os: 'macos-latest' }]; }, /scripted pilot/],
+  ['a skipped pilot job', files => { pilotJob(files).if = 'false'; }, /scripted pilot/],
+  ['an optional pilot', files => { pilotStep(files, 'npm run pilot:scripted')['continue-on-error'] = true; }, /scripted pilot/],
+  ['a pilot that only runs sometimes', files => { pilotStep(files, 'npm run pilot:scripted').if = "github.event_name == 'push'"; }, /scripted pilot/],
+  ['a pilot on the development server', files => { pilotStep(files, 'npm run pilot:scripted').run = pilotStep(files, 'npm run pilot:scripted').run.replace('--mode start', '--mode dev'); }, /scripted pilot/],
+  ['a pilot limited to one tester', files => { pilotStep(files, 'npm run pilot:scripted').run += ' --only p01-desk'; }, /scripted pilot/],
+  ['a pilot run before the production build', files => {
+    const steps = pilotJob(files).steps;
+    const [build] = steps.splice(steps.findIndex(step => step.run === 'npm run build'), 1);
+    steps.push(build);
+  }, /scripted pilot/],
+  ['a pilot whose result is lost when it fails', files => { delete pilotStep(files, 'actions/upload-artifact@').if; }, /scripted pilot/],
+  ['a pilot whose result may be missing', files => { pilotStep(files, 'actions/upload-artifact@').with['if-no-files-found'] = 'warn'; }, /scripted pilot/],
+  ['a pilot job without the verified Node runtime', files => {
+    pilotJob(files).steps = pilotJob(files).steps.filter(step => !step.run?.startsWith('node scripts/verify-ci-node.mjs'));
+  }, /verify official binary identity/],
+  ['a verification gate that ignores the pilot', files => {
+    const gate = files['verify.yml'].jobs.verification;
+    gate.needs = gate.needs.filter(id => id !== 'scripted-pilot');
+  }, /evaluate every prerequisite/],
+]) {
+  test(`broad qualification refuses ${label}`, () => {
+    const files = readWorkflows();
+    change(files);
+    assert.throws(() => assertFullWorkflowContract(files), expected);
   });
 }

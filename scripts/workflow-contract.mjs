@@ -9,7 +9,7 @@ const isApplicationSelection = (file, id, condition) => file === 'verify.yml' &&
 const VERIFICATION_MATRIX_RUNNER = "${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}";
 
 /** Jobs only the manual broad qualification runs; its verification gate needs them too. */
-const BROAD_ONLY_JOB_IDS = Object.freeze(['antigravity-cli', 'installed-windows-acceptance', 'image-acceptance', 'system-key-store', 'system-key-store-linux', 'contributor-guide', 'first-use-journey']);
+const BROAD_ONLY_JOB_IDS = Object.freeze(['antigravity-cli', 'installed-windows-acceptance', 'image-acceptance', 'system-key-store', 'system-key-store-linux', 'contributor-guide', 'first-use-journey', 'scripted-pilot']);
 const JOURNEY_DESKTOP = 'npm run journey:first-use';
 const JOURNEY_PHONE = 'npm run journey:first-use -- --viewport 390x844';
 const BIG_APP = 'npx playwright test --config=playwright.features-first-use.config.mjs';
@@ -137,10 +137,40 @@ export function assertSystemKeyStoreJobs(workflow) {
       || !runsInOrder(linux.steps, step => step.run === LINUX_KEYRING_INSTALL, step => step.run === SYSTEM_KEY_CHECK)) fail();
 }
 
+const PILOT_RUN = 'npm run pilot:scripted -- --mode start --out "$RUNNER_TEMP/scripted-pilot"';
+const PILOT_EVIDENCE = '${{ runner.temp }}/scripted-pilot/';
+
+/**
+ * The pilot that replaced people (#577): scripted first-time users on a fresh production build, on
+ * Linux and Windows, with nothing optional, and its result and evidence kept even when it fails.
+ */
+export function assertScriptedPilotJob(workflow) {
+  const job = workflow?.jobs?.['scripted-pilot'];
+  const steps = job?.steps ?? [];
+  const order = ['npm ci --include=dev', 'npx playwright install --with-deps chromium', 'npm run build', PILOT_RUN]
+    .map(command => steps.findIndex(step => step.run === command));
+  const pilot = order.at(-1);
+  const upload = steps.findIndex(step => step.uses?.startsWith('actions/upload-artifact@'));
+  const kept = steps[upload];
+  const afterPilot = steps.slice(pilot + 1);
+  if (!job || job.name !== 'Scripted pilot (${{ matrix.os }})' || job['runs-on'] !== '${{ matrix.os }}'
+      || job.if !== undefined || job['continue-on-error'] || job.strategy?.['fail-fast'] !== false
+      || Object.keys(job.strategy?.matrix ?? {}).join() !== 'os'
+      || JSON.stringify(job.strategy.matrix.os) !== JSON.stringify(['ubuntu-24.04', 'windows-latest'])
+      || order.some((index, position) => index < 0 || (position > 0 && index <= order[position - 1]))
+      || steps.some(step => step['continue-on-error'])
+      || steps.slice(0, pilot + 1).some(step => step.if !== undefined)
+      || afterPilot.some(step => step.if !== 'always()')
+      || upload <= pilot || kept.with?.path !== PILOT_EVIDENCE || kept.with['if-no-files-found'] !== 'error') {
+    throw new Error('The broad qualification must run the scripted pilot (npm run pilot:scripted) on a production build on Linux and Windows, with nothing optional, and keep its result even when it fails.');
+  }
+}
+
 function assertVerificationRunners(workflow) {
   for (const [id, job] of Object.entries(workflow?.jobs ?? {})) {
-    // Their runners are checked by assertAntigravityPlatformJob, assertSystemKeyStoreJobs and assertContributorGuideJob.
-    if (['antigravity-cli', 'system-key-store', 'system-key-store-linux', 'contributor-guide'].includes(id)) continue;
+    // Their runners are checked by assertAntigravityPlatformJob, assertSystemKeyStoreJobs,
+    // assertContributorGuideJob and assertScriptedPilotJob.
+    if (['antigravity-cli', 'system-key-store', 'system-key-store-linux', 'contributor-guide', 'scripted-pilot'].includes(id)) continue;
     if (Object.hasOwn(NON_LINUX_VERIFICATION_JOBS, id)) {
       if (job['runs-on'] !== NON_LINUX_VERIFICATION_JOBS[id][0]) throw new Error(`${id} must run on ${NON_LINUX_VERIFICATION_JOBS[id][0]}: ${NON_LINUX_VERIFICATION_JOBS[id][1]}`);
     } else if (['production-build', 'release-safety'].includes(id)) {
@@ -687,6 +717,7 @@ export function assertFullWorkflowContract(workflows, { mainIntegration = false 
     assertSystemKeyStoreJobs(workflow);
     assertContributorGuideJob(workflow);
     assertFirstUseJourneyJob(workflow);
+    assertScriptedPilotJob(workflow);
   }
   const gate = workflow.jobs.verification;
   if (gate?.name !== 'verification' || gate.if !== 'always()'

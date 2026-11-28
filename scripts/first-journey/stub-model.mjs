@@ -55,7 +55,7 @@ function send(response, status, payload) {
   response.writeHead(status, { 'Content-Type': 'application/json' }).end(JSON.stringify(payload));
 }
 
-export async function startStubModel({ port = 0, host = '127.0.0.1', onEvent = () => {} } = {}) {
+export async function startStubModel({ port = 0, host = '127.0.0.1', onEvent = () => {}, plan = planCompletion } = {}) {
   const events = [];
   const record = (event) => {
     const entry = { at: new Date().toISOString(), ...event };
@@ -83,7 +83,7 @@ export async function startStubModel({ port = 0, host = '127.0.0.1', onEvent = (
         chunks.push(chunk);
       }
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
-      const message = planCompletion(body);
+      const message = plan(body);
       record({
         kind: 'completion',
         model: body.model,
