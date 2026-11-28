@@ -3,8 +3,8 @@
 This page walks you through running FLUJO for other people or as a service:
 install a pinned version, check it is up, find a failed job, take a backup,
 upgrade and restore. Every step has a command for Linux and macOS (bash) and
-one for Windows (PowerShell 7 or newer). You need Node.js 22.23.4+ (within 22.x)
-or 24.22.1+ (within 24.x) with npm.
+one for Windows (PowerShell 7.4 or newer). You need Node.js 22.23.4+ (within
+22.x) or 24.22.1+ (within 24.x) with npm.
 
 CI follows this page word for word on Linux and Windows before every release
 (`scripts/operator-runbook.mjs`, see the end of this page). If a step here is
@@ -148,11 +148,14 @@ curl -fsS -F "file=@$FLUJO_BACKUP" -F 'selections=["flows","chatHistory","settin
 ```
 
 ```powershell
-Invoke-RestMethod "http://127.0.0.1:$env:FLUJO_PORT/api/restore" -Method Post `
-  -Form @{ file = Get-Item $env:FLUJO_BACKUP; selections = '["flows","chatHistory","settings","globalEnvVars"]' }
+curl.exe -fsS -F "file=@$env:FLUJO_BACKUP" -F 'selections=["flows","chatHistory","settings","globalEnvVars"]' "http://127.0.0.1:$env:FLUJO_PORT/api/restore"
+if ($LASTEXITCODE) { throw "Restoring the backup failed (curl exit $LASTEXITCODE)." }
 ```
 
-The answer reports `"success": true` and, per part, how many records came back.
+On Windows this uses `curl.exe`, which comes with Windows 10 (1803) and
+Windows Server 2019 and newer: PowerShell's own `-Form` upload is not accepted
+by FLUJO. The answer reports `"success": true` and, per part, how many records
+came back.
 When you are done, stop FLUJO as in step 6.
 
 ## How CI follows this page
