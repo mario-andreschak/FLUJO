@@ -47,11 +47,19 @@ export function getAppDir(): string {
  * should continue configuring FLUJO_DATA_DIR; a nonblank internal marker wins.
  */
 export function getDataDir(): string {
+  if (productionDataDir !== undefined) return productionDataDir;
   const parent = process.env.FLUJO_PARENT_DATA_DIR;
-  if (parent && parent.trim().length > 0) return path.resolve(parent);
   const custom = process.env.FLUJO_DATA_DIR;
-  return custom && custom.trim().length > 0 ? path.resolve(custom) : getAppDir();
+  const dir = parent && parent.trim().length > 0 ? path.resolve(parent)
+    : custom && custom.trim().length > 0 ? path.resolve(custom) : getAppDir();
+  // A running production server never changes its environment or folder, and
+  // every storage path starts here: reading the environment each time cost a
+  // burst of chats more than any single step (#757). Tests and development
+  // change it between runs, so they keep reading it.
+  if (process.env.NODE_ENV === 'production') productionDataDir = dir;
+  return dir;
 }
+let productionDataDir: string | undefined;
 
 /**
  * Base URL of the Ollama server FLUJO should talk to for local models.
