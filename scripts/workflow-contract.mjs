@@ -9,7 +9,7 @@ const isApplicationSelection = (file, id, condition) => file === 'verify.yml' &&
 const VERIFICATION_MATRIX_RUNNER = "${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}";
 
 /** Jobs only the manual broad qualification runs; its verification gate needs them too. */
-const BROAD_ONLY_JOB_IDS = Object.freeze(['antigravity-cli', 'installed-windows-acceptance', 'image-acceptance', 'system-key-store', 'system-key-store-linux', 'contributor-guide', 'first-use-journey', 'scripted-pilot']);
+const BROAD_ONLY_JOB_IDS = Object.freeze(['antigravity-cli', 'installed-windows-acceptance', 'image-acceptance', 'system-key-store', 'system-key-store-linux', 'contributor-guide', 'first-use-journey', 'scripted-pilot', 'chat-burst-load']);
 const JOURNEY_DESKTOP = 'npm run journey:first-use';
 const JOURNEY_PHONE = 'npm run journey:first-use -- --viewport 390x844';
 const BIG_APP = 'npx playwright test --config=playwright.features-first-use.config.mjs';
@@ -166,6 +166,41 @@ export function assertScriptedPilotJob(workflow) {
       || afterPilot.some(step => step.if !== 'always()')
       || upload <= pilot || kept.with?.path !== PILOT_EVIDENCE || kept.with['if-no-files-found'] !== 'error') {
     throw new Error('The broad qualification must run the scripted pilot (npm run pilot:scripted) on a production build on Linux and Windows, with nothing optional, and keep its result even when it fails.');
+  }
+}
+
+const CHAT_BURST = 'node scripts/chat-burst-load-test.mjs';
+/** The load test runs, in this order, exactly as written: its pass rules live in the script, not here. */
+export const CHAT_BURST_RUNS = Object.freeze([
+  `${CHAT_BURST} --parallel 300 --mode stream --out "$RUNNER_TEMP/chat-burst/stream-300.json"`,
+  `${CHAT_BURST} --parallel 300 --mode json --out "$RUNNER_TEMP/chat-burst/json-300.json"`,
+  `${CHAT_BURST} --parallel 50 --mode json --out "$RUNNER_TEMP/chat-burst/json-50.json"`,
+  `${CHAT_BURST} --parallel 300 --mode stream --cold-start --out "$RUNNER_TEMP/chat-burst/cold-start-300.json"`,
+]);
+const CHAT_BURST_RESULTS = '${{ runner.temp }}/chat-burst/';
+
+/**
+ * Issue #757 is rerun without anyone (docs/performance/chat-burst-load-test.md): 300 parallel
+ * chats, streamed and plain, 50 plain, and 300 while FLUJO is starting, on a fresh production
+ * build with a local stand-in model and nothing optional. Each run fails on a lost or refused
+ * request or a slow first model call; the results are kept even when a run fails.
+ */
+export function assertChatBurstLoadJob(workflow) {
+  const job = workflow?.jobs?.['chat-burst-load'];
+  const steps = job?.steps ?? [];
+  const order = ['npm ci --include=dev', 'npm run build', ...CHAT_BURST_RUNS].map(command => steps.findIndex(step => step.run === command));
+  const keep = steps.findIndex(step => step.uses?.startsWith('actions/upload-artifact@'));
+  const runs = steps.filter(step => step.run?.includes(CHAT_BURST));
+  if (!job || job.name !== 'Chat burst load test' || job['runs-on'] !== 'ubuntu-24.04' || job.if !== undefined
+      || job['continue-on-error'] || job.strategy !== undefined || job.env !== undefined
+      || order.some((index, position) => index < 0 || (position > 0 && index <= order[position - 1]))
+      || runs.length !== CHAT_BURST_RUNS.length || runs.some(step => step.shell !== 'bash' || step.env !== undefined)
+      || steps.some(step => step['continue-on-error'] || (step.if !== undefined && step !== steps[keep]))
+      || keep <= order.at(-1) || steps[keep].if !== 'always()' || steps[keep].with?.path !== CHAT_BURST_RESULTS
+      || steps[keep].with['if-no-files-found'] !== 'error') {
+    throw new Error('The broad qualification must rerun the #757 chat burst load test on a fresh production build: '
+      + `after "npm ci --include=dev" and "npm run build", run ${CHAT_BURST_RUNS.map(run => `"${run}"`).join(', then ')} `
+      + `in bash with no extra settings and nothing optional, and keep ${CHAT_BURST_RESULTS} even when a run fails.`);
   }
 }
 
@@ -721,6 +756,7 @@ export function assertFullWorkflowContract(workflows, { mainIntegration = false 
     assertContributorGuideJob(workflow);
     assertFirstUseJourneyJob(workflow);
     assertScriptedPilotJob(workflow);
+    assertChatBurstLoadJob(workflow);
   }
   const gate = workflow.jobs.verification;
   if (gate?.name !== 'verification' || gate.if !== 'always()'

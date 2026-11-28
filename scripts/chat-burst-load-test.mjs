@@ -17,6 +17,17 @@
  *   node scripts/chat-burst-load-test.mjs [--parallel 300] [--rounds 1]
  *     [--mode stream|json] [--filler-tokens 1000] [--stub-delay 0]
  *     [--app <dir with .next>] [--out <file.json>] [--keep] [--no-warmup]
+ *     [--cold-start]
+ *
+ * --cold-start sets FLUJO up, stops it and starts it again on the same data,
+ * then sends the burst the moment the new process accepts connections, while
+ * it is still starting. The stub model is starting too: for three seconds
+ * after FLUJO first reaches it, it answers 503 with no body, as vLLM did in
+ * issue #757.
+ *
+ * Against its own server the run passes only when every request answers
+ * correctly with HTTP 200 (nothing refused, nothing lost) and FLUJO reaches
+ * the model quickly enough (PASS_RULES below). Otherwise the exit code is 2.
  *
  * Against an already running FLUJO (for example one that uses a real vLLM
  * server), name a flow that already exists there. No stub is started and no
@@ -32,9 +43,10 @@
  */
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import http from 'node:http';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -72,7 +84,9 @@ const traceFileOption = option('trace-file', undefined);
 const application = path.resolve(option('app', repo));
 const outFile = option('out', undefined);
 const keep = flag('keep');
-const warmup = !flag('no-warmup');
+const coldStart = flag('cold-start');
+assert.ok(!coldStart || !targetUrl, '--cold-start restarts the FLUJO it started itself; it cannot be used with --url');
+const warmup = !flag('no-warmup') && !coldStart;
 const say = message => process.stderr.write(`[burst] ${message}\n`);
 const now = () => performance.now();
 
@@ -80,6 +94,12 @@ const now = () => performance.now();
 const STUB_KEY = 'burst-stub-key';
 const arrivals = new Map(); // marker -> first time FLUJO reached the stub
 const MARKER = /burst-[0-9a-f]{8}-\d+-\d+/;
+// --cold-start: the model server is starting too. For MODEL_START_MS after FLUJO first reaches it, it
+// answers 503 with no body, as vLLM did in #757.
+const MODEL_START_MS = 3000;
+let modelStarting = false;
+let modelReadyAt;
+let modelUnavailableAnswers = 0;
 function chunk(delta, finish = null) {
   return `data: ${JSON.stringify({ id: 'burst', object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000),
     model: 'burst-model', choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
@@ -97,6 +117,13 @@ const stubModel = http.createServer(async (request, response) => {
     const body = JSON.parse(Buffer.concat(parts).toString('utf8'));
     const marker = JSON.stringify(body.messages ?? []).match(MARKER)?.[0] ?? 'unknown';
     if (!arrivals.has(marker)) arrivals.set(marker, arrival);
+    if (modelStarting) modelReadyAt ??= arrival + MODEL_START_MS;
+    if (modelStarting && arrival < modelReadyAt) {
+      modelUnavailableAnswers++;
+      response.writeHead(503);
+      response.end();
+      return;
+    }
     if (stubDelayMs) await delay(stubDelayMs);
     const content = `The code is ${marker}.`;
     if (body.stream) {
@@ -160,6 +187,7 @@ async function api(endpoint, body, method = body === undefined ? 'GET' : 'POST')
   assert.ok(response.ok, `API ${method} ${endpoint} returned ${response.status}: ${text.slice(0, 300)}`);
   return text ? JSON.parse(text) : undefined;
 }
+let serverPort, sandboxPort;
 async function startServer() {
   await fs.access(path.join(application, '.next', 'BUILD_ID')).catch(() => {
     throw new Error(`No production build in ${application}. Run "npm run build" first or pass --app.`);
@@ -176,19 +204,27 @@ async function startServer() {
   const { createSmokeOperator } = await import('./smoke-bundled-operator.mjs');
   operator = await createSmokeOperator({ scopes: ['control:admin', 'mcp:access', 'secrets:read', 'openai:read', 'openai:execute'], ttlMs: 6 * 3600_000 });
   token = operator.token;
-  const port = await freePort();
-  base = `http://127.0.0.1:${port}`;
+  serverPort = await freePort();
+  sandboxPort = await freePort();
+  base = `http://127.0.0.1:${serverPort}`;
+  await launchServer();
+  await waitUntilReady();
+  await setUpData();
+}
+function launchServer() {
   const data = path.join(root, 'data');
-  child = spawn(process.execPath, [path.join(application, 'scripts', 'launch-next.mjs'), 'start', '-p', String(port), '-H', '127.0.0.1'], {
+  child = spawn(process.execPath, [path.join(application, 'scripts', 'launch-next.mjs'), 'start', '-p', String(serverPort), '-H', '127.0.0.1'], {
     cwd: runtimeApp, detached: process.platform !== 'win32', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...safeEnvironment(), ...operator.env, FLUJO_DATA_DIR: data, FLUJO_RUNTIME_ENV_DIR: data, FLUJO_APP_ROOT: runtimeApp,
-      FLUJO_BASE_URL: base, FLUJO_PORT: String(port), FLUJO_EXPOSURE_MODE: 'localhost',
+      FLUJO_BASE_URL: base, FLUJO_PORT: String(serverPort), FLUJO_EXPOSURE_MODE: 'localhost',
       FLUJO_TELEMETRY_URL: `${base}/disabled-telemetry`, FLUJO_CODEX_AUTO_UPDATE: '0',
-      FLUJO_MCP_APP_SANDBOX_HOST: '127.0.0.1', FLUJO_MCP_APP_SANDBOX_PORT: String(await freePort()),
+      FLUJO_MCP_APP_SANDBOX_HOST: '127.0.0.1', FLUJO_MCP_APP_SANDBOX_PORT: String(sandboxPort),
       FLUJO_TURN_TRACE_FILE: traceFile },
   });
   childClosed = new Promise(resolve => child.once('close', resolve));
   for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { serverLog = `${serverLog}${bytes}`.slice(-60_000); });
+}
+async function waitUntilReady() {
   const deadline = Date.now() + 180_000;
   for (;;) {
     if (child.exitCode !== null) throw new Error(`FLUJO exited during startup:\n${serverLog.slice(-4000)}`);
@@ -201,9 +237,25 @@ async function startServer() {
     if (Date.now() > deadline) throw new Error(`FLUJO did not become ready:\n${serverLog.slice(-4000)}`);
     await delay(100);
   }
-  const password = randomBytes(24).toString('hex');
-  assert.equal((await api('/api/encryption/secure', { action: 'initialize', password })).success, true);
-  assert.equal((await api('/api/encryption/secure', { action: 'authenticate', password })).success, true);
+}
+/** Resolves as soon as the new process accepts a connection; nothing is asked of it yet. */
+async function waitUntilListening() {
+  const deadline = Date.now() + 180_000;
+  for (;;) {
+    if (child.exitCode !== null) throw new Error(`FLUJO exited during startup:\n${serverLog.slice(-4000)}`);
+    const accepted = await new Promise(resolve => {
+      const socket = net.connect(serverPort, '127.0.0.1');
+      socket.once('connect', () => { socket.destroy(); resolve(true); });
+      socket.once('error', () => { socket.destroy(); resolve(false); });
+    });
+    if (accepted) return;
+    if (Date.now() > deadline) throw new Error(`FLUJO did not start listening:\n${serverLog.slice(-4000)}`);
+    await delay(20);
+  }
+}
+async function setUpData() {
+  // The default key setup, as a new desktop install makes it: a restarted FLUJO is unlocked at once.
+  assert.equal((await api('/api/encryption/secure', { action: 'initialize_default' })).success, true);
   await api('/api/storage', { key: 'speech_settings', value: { onboarding: { completed: true }, telemetry: { enabled: false } } });
   // A plain flow needs no MCP server; idle bundled servers would only add noise.
   for (const config of await api('/api/mcp/servers')) {
@@ -242,16 +294,33 @@ async function stopServer() {
 // ---------------------------------------------------------------- one request
 const flowName = existingFlow ?? 'BurstPlain';
 const filler = 'The quick brown fox jumps over the lazy dog. '.repeat(Math.ceil(fillerTokens / 10));
+/**
+ * Like the OpenAI SDK, try again when a connection is refused before it was
+ * made: the server never saw that request. Windows queues only about 200
+ * connections a busy process has not accepted yet, which a burst can exceed in
+ * the first seconds after a restart. Retries are counted in the report.
+ */
+const CONNECTION_RETRY_DELAYS_MS = [500, 1000];
+async function connect(url, init, record) {
+  for (let attempt = 0; ; attempt++) {
+    try { return await fetch(url, init); } catch (error) {
+      if (error.cause?.code !== 'ECONNREFUSED' || attempt >= CONNECTION_RETRY_DELAYS_MS.length) throw error;
+      record.connectionRetries++;
+      await delay(CONNECTION_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+}
 async function chat(marker) {
-  const record = { marker, sent: now(), status: 0, firstContent: undefined, end: undefined, correct: false, error: undefined };
+  const record = { marker, sent: now(), status: 0, firstContent: undefined, end: undefined, correct: false, error: undefined,
+    connectionRetries: 0 };
   const body = JSON.stringify({ model: `flow-${flowName}`, stream: mode === 'stream', messages: [{ role: 'user',
     content: `Somewhere in this text is a code. ${filler.slice(0, filler.length / 2)} The code is ${marker}. `
       + `${filler.slice(filler.length / 2)} Reply with the code only.` }] });
   try {
     const url = new URL('/v1/chat/completions', base);
     url.searchParams.set('workspace', workspace);
-    const response = await fetch(url, { method: 'POST', signal: AbortSignal.timeout(requestTimeoutMs),
-      headers: { ...authorization(), 'content-type': 'application/json' }, body });
+    const response = await connect(url, { method: 'POST', signal: AbortSignal.timeout(requestTimeoutMs),
+      headers: { ...authorization(), 'content-type': 'application/json' }, body }, record);
     record.status = response.status;
     let content = '';
     if (!response.ok) {
@@ -280,7 +349,8 @@ async function chat(marker) {
     }
     record.correct = content.includes(marker);
   } catch (error) {
-    record.error = error.name === 'TimeoutError' ? 'client_timeout' : error.message.slice(0, 120);
+    const cause = error.cause?.code ?? error.cause?.name;
+    record.error = error.name === 'TimeoutError' ? 'client_timeout' : `${error.message.slice(0, 120)}${cause ? ` (${cause})` : ''}`;
   }
   record.end = now();
   return record;
@@ -331,16 +401,48 @@ function traceStats(traces) {
   };
 }
 
+// ---------------------------------------------------------------- pass rules
+/**
+ * Fixed pass rules from issue #757. FLUJO answered all 300 requests there, but
+ * waited 230 s (p50) / 417 s (p95) before its first model call, while the model
+ * itself answered 400 parallel requests in 26 s (p95). Every request must be
+ * answered correctly and none may be refused. The 95th percentile of FLUJO's
+ * own time before the first model call must stay under `firstModelCallP95Ms`,
+ * or under `coldStartFirstModelCallP95Ms` for a burst that arrives while FLUJO
+ * and its model server are still starting. A 300 burst measured about 15 s and
+ * 30 s on a shared Windows PC (docs/performance/chat-burst-load-test.md). The
+ * time rule needs the stub, so it only applies when this script started its own FLUJO.
+ */
+const PASS_RULES = Object.freeze({ firstModelCallP95Ms: 45_000, coldStartFirstModelCallP95Ms: 75_000 });
+function ruleFailures(burst, ownServer) {
+  const failures = [];
+  if (burst.correct !== parallel) failures.push(`${parallel - burst.correct} of ${parallel} requests got no correct answer`);
+  const refused = Object.entries(burst.statuses).filter(([status]) => status !== '200');
+  if (refused.length) failures.push(`refused or failed requests: ${refused.map(([status, n]) => `${n} x HTTP ${status}`).join(', ')}`);
+  if (Object.keys(burst.errors).length) failures.push(`errors: ${JSON.stringify(burst.errors)}`);
+  const firstCall = burst.firstModelCallMs.p95;
+  const bound = coldStart && burst.round === 1 ? PASS_RULES.coldStartFirstModelCallP95Ms : PASS_RULES.firstModelCallP95Ms;
+  if (ownServer && !(firstCall <= bound)) failures.push(`first model call p95 ${firstCall ?? 'missing'} ms is over ${bound} ms`);
+  return failures;
+}
+
 // ---------------------------------------------------------------- main
 const results = { schemaVersion: 1, startedUtc: new Date().toISOString(), node: process.version,
   platform: `${process.platform} ${os.release()} ${os.cpus().length} threads ${Math.round(os.totalmem() / 2 ** 30)} GB`,
   target: targetUrl ? `running FLUJO ${targetUrl}, flow ${flowName}` : `own production server from ${application}`,
   buildId: targetUrl ? undefined : await fs.readFile(path.join(application, '.next', 'BUILD_ID'), 'utf8').then(text => text.trim(), () => undefined),
-  model: targetUrl ? 'the flow\'s own model' : `stub, answers after ${stubDelayMs} ms`, parallel, rounds, mode, fillerTokens, bursts: [] };
+  model: targetUrl ? 'the flow\'s own model' : `stub, answers after ${stubDelayMs} ms`, parallel, rounds, mode, fillerTokens, coldStart,
+  passRules: PASS_RULES, bursts: [] };
 try {
   if (!targetUrl) {
     say('Starting FLUJO...');
     await startServer();
+  }
+  if (coldStart) {
+    say('Restarting FLUJO; the burst goes out as soon as it accepts connections...');
+    await stopServer();
+    launchServer();
+    await waitUntilListening();
   }
   if (warmup) {
     say('Warm-up request...');
@@ -354,19 +456,24 @@ try {
     arrivals.clear();
     say(`Round ${round}: ${parallel} parallel ${mode} requests...`);
     const started = now();
+    modelUnavailableAnswers = 0;
+    modelStarting = coldStart && round === 1;
+    modelReadyAt = undefined;
     const records = await Promise.all(Array.from({ length: parallel }, (_, index) => chat(`burst-${run}-${round}-${index}`)));
     const statuses = {};
     for (const record of records) statuses[record.status || 'none'] = (statuses[record.status || 'none'] ?? 0) + 1;
     const errors = {};
     for (const record of records) if (record.error) errors[record.error] = (errors[record.error] ?? 0) + 1;
     const burst = {
-      round, wallMs: Math.round(now() - started), statuses, errors,
+      round, wallMs: Math.round(now() - started), statuses, errors, modelUnavailableAnswers,
+      connectionRetries: records.reduce((sum, record) => sum + record.connectionRetries, 0),
       correct: records.filter(record => record.correct).length,
       firstModelCallMs: stats(records.map(record => arrivals.has(record.marker) ? arrivals.get(record.marker) - record.sent : NaN)),
       firstTokenMs: stats(records.map(record => record.firstContent === undefined ? NaN : record.firstContent - record.sent)),
       totalMs: stats(records.map(record => record.end - record.sent)),
       server: traceStats(await newTraces(parallel)),
     };
+    burst.failures = ruleFailures(burst, !targetUrl);
     results.bursts.push(burst);
     const firstCall = burst.firstModelCallMs.p50 ?? burst.server['first model call (server)'].p50;
     say(`Round ${round}: ${burst.correct}/${parallel} correct, statuses ${JSON.stringify(statuses)}, first model call p50 ${firstCall ?? '-'} ms`);
@@ -390,11 +497,14 @@ try {
 const cell = value => value === undefined ? '-' : String(value);
 const lines = [`# Parallel chat load test`, '',
   `${results.platform}, Node ${results.node}. Target: ${results.target}${results.buildId ? ` (build ${results.buildId})` : ''}. `
-    + `Model: ${results.model}. ${parallel} parallel ${mode} requests, about ${fillerTokens} filler tokens each. Times in ms from sending.`, ''];
+    + `Model: ${results.model}. ${parallel} parallel ${mode} requests${coldStart ? ' sent while FLUJO was starting' : ''}, `
+    + `about ${fillerTokens} filler tokens each. Times in ms from sending.`, ''];
 for (const burst of results.bursts) {
   lines.push(`## Round ${burst.round} (all answered after ${burst.wallMs} ms)`, '',
     `Correct answers: ${burst.correct}/${parallel}. HTTP statuses: ${JSON.stringify(burst.statuses)}.`
-      + (Object.keys(burst.errors).length ? ` Errors: ${JSON.stringify(burst.errors)}.` : ''), '',
+      + (Object.keys(burst.errors).length ? ` Errors: ${JSON.stringify(burst.errors)}.` : '')
+      + (burst.modelUnavailableAnswers ? ` The starting model server answered 503 ${burst.modelUnavailableAnswers} times.` : '')
+      + (burst.connectionRetries ? ` ${burst.connectionRetries} refused connections were tried again.` : ''), '',
     '| step | requests | p50 | p95 | max |', '|---|---:|---:|---:|---:|');
   const rows = [['first model call (stub)', burst.firstModelCallMs], ['first token', burst.firstTokenMs], ['total', burst.totalMs],
     ...Object.entries(burst.server).map(([name, value]) => [`server: ${name}`, value])];
@@ -402,11 +512,13 @@ for (const burst of results.bursts) {
     if (!value.n) continue;
     lines.push(`| ${name} | ${value.n} | ${cell(value.p50)} | ${cell(value.p95)} | ${cell(value.max)} |`);
   }
-  lines.push('');
+  lines.push('', burst.failures.length ? `**Failed:** ${burst.failures.join('; ')}.` : '**Passed** every rule.', '');
 }
 if (results.bursts.length) console.log(lines.join('\n'));
+results.passed = results.bursts.length === rounds && results.bursts.every(burst => !burst.failures.length);
 if (outFile) {
+  await fs.mkdir(path.dirname(path.resolve(outFile)), { recursive: true });
   await fs.writeFile(path.resolve(outFile), JSON.stringify(results, null, 2));
   say(`Wrote ${path.resolve(outFile)}`);
 }
-if (results.bursts.some(burst => burst.correct !== parallel)) process.exitCode ||= 2;
+if (!results.passed) process.exitCode ||= 2;
