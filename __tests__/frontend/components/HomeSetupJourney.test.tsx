@@ -146,12 +146,36 @@ describe('setup-first home journey', () => {
 
     render(<HomePage />);
 
-    await waitFor(() => expect(screen.getByText('1 created')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('FLUJO agent included')).toBeInTheDocument());
+    expect(screen.queryByText('1 created')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: aiAction })).toHaveAttribute('href', aiHref);
     expect(screen.getByRole('button', { name: 'Connect AI first' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Finish AI setup first' })).toBeDisabled();
     expect(screen.queryByRole('button', { name: 'Create another' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Create another' })).not.toBeInTheDocument();
+  });
+
+  it('on a fresh install with a saved AI, lets the person talk to the built-in agent without claiming they made one', async () => {
+    mockTryLoadModels.mockResolvedValue([{ id: 'model-1' }]);
+    mockLoadFlows.mockResolvedValue([{ id: 'default-agent-flujo', name: 'FLUJO' }]);
+
+    render(<HomePage />);
+
+    await waitFor(() => expect(screen.getByText('FLUJO agent included')).toBeInTheDocument());
+    expect(screen.queryByText('1 created')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open simple builder' })).toHaveAttribute('href', '/flows?create=assistant');
+    expect(screen.queryByRole('link', { name: 'Create another' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Start talking' })).toHaveAttribute('href', '/chat');
+  });
+
+  it('counts only the agents the person made', async () => {
+    mockTryLoadModels.mockResolvedValue([{ id: 'model-1' }]);
+    mockLoadFlows.mockResolvedValue([{ id: 'default-agent-flujo', name: 'FLUJO' }, { id: 'assistant-1' }]);
+
+    render(<HomePage />);
+
+    await waitFor(() => expect(screen.getByText('1 created')).toBeInTheDocument());
+    expect(screen.getByRole('link', { name: 'Create another' })).toHaveAttribute('href', '/flows?create=assistant');
   });
 
   it('unlocks Talk after both a model and an agent exist', async () => {

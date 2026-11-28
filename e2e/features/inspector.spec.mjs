@@ -36,7 +36,7 @@ async function openInspector(page, serverName, labels = locales[0], navigate = t
   const detailsId = await summary.getAttribute('aria-controls');
   const guide = page.locator(`[id=${JSON.stringify(detailsId)}]`);
   await expect(guide.locator('a[href="/models"]')).toBeVisible();
-  await expect(guide.locator('a[href="/flows?authoringMode=guided"]')).toBeVisible();
+  await expect(guide.locator('a[href="/flows?create=assistant"]')).toBeVisible();
   await expect(guide.locator('a[href="/docs"]')).toBeVisible();
   const appSelector = page.getByRole('combobox', { name: labelName(savedApp) });
   await appSelector.click();

@@ -7,8 +7,6 @@ export const sharedMessageRows = {
   'common.create': ['Create', 'Crear', 'Erstellen', 'Créer', 'Crea', 'Criar', '创建'],
   'common.loading': ['Loading…', 'Cargando…', 'Wird geladen…', 'Chargement…', 'Caricamento…', 'Carregando…', '正在加载…'],
   'common.search': ['Search…', 'Buscar…', 'Suchen…', 'Rechercher…', 'Cerca…', 'Pesquisar…', '搜索…'],
-  'common.collapseSection': ['Collapse section', 'Contraer sección', 'Bereich einklappen', 'Réduire la section', 'Comprimi sezione', 'Recolher seção', '折叠分区'],
-  'common.expandSection': ['Expand section', 'Expandir sección', 'Bereich ausklappen', 'Développer la section', 'Espandi sezione', 'Expandir seção', '展开分区'],
   'scrollNav.group': ['Scroll navigation', 'Navegación de desplazamiento', 'Scroll-Navigation', 'Navigation de défilement', 'Navigazione di scorrimento', 'Navegação de rolagem', '滚动导航'],
   'scrollNav.top': ['Scroll to top', 'Ir al principio', 'Nach oben scrollen', 'Aller en haut', 'Scorri in alto', 'Ir para o topo', '滚动到顶部'],
   'scrollNav.bottom': ['Scroll to bottom', 'Ir al final', 'Nach unten scrollen', 'Aller en bas', 'Scorri in basso', 'Ir para o fim', '滚动到底部'],

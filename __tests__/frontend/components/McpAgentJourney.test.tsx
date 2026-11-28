@@ -33,7 +33,9 @@ describe('first MCP-to-agent navigation', () => {
     render(<McpAgentJourney servers={[]} onConnect={onConnect} onInspect={onInspect} />);
     openGuide();
     expect(screen.getByRole('link', { name: 'AI Setup' })).toHaveAttribute('href', '/models');
-    expect(screen.getByRole('link', { name: 'Agents' })).toHaveAttribute('href', '/flows?authoringMode=guided');
+    // The guide's own words say "Open the simple builder", so the button lands there in one click.
+    expect(screen.getByRole('link', { name: 'Open simple builder' })).toHaveAttribute('href', '/flows?create=assistant');
+    expect(screen.getByText(/^Open the simple builder/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Help' })).toHaveAttribute('href', '/docs');
     expect(screen.getByRole('button', { name: 'Inspect and test tools' })).toBeDisabled();
     expect(onConnect).not.toHaveBeenCalled();

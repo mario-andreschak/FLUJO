@@ -160,9 +160,12 @@ it('preserves saved text-only metadata when a different provider switches to nat
 it('saves a local Ollama connection without asking for a key it does not need', async () => {
   const onSave = showModel('openai', 'openai');
   fireEvent.mouseDown(screen.getByRole('combobox', { name: /^Provider$/ }));
+  // Other local servers speak the same format, so the list says where they go.
+  expect(screen.getByText('On this computer: Ollama, LM Studio, vLLM, llama.cpp')).toBeInTheDocument();
   fireEvent.click(screen.getByRole('option', { name: 'Ollama' }));
   expect(screen.getByLabelText(/API key/)).not.toBeRequired();
-  expect(screen.getByText('Not needed for Ollama. Leave it empty.')).toBeInTheDocument();
+  expect(screen.getByText('Not needed for Ollama or another local server. Leave it empty.')).toBeInTheDocument();
+  expect(screen.getByText(/For LM Studio, vLLM, llama.cpp or another local server/)).toBeInTheDocument();
   fireEvent.change(screen.getByLabelText(/Display name/), { target: { value: 'Local llama' } });
   fireEvent.change(screen.getByLabelText(/Base URL/), { target: { value: 'http://127.0.0.1:11434/v1' } });
   fireEvent.change(screen.getByLabelText(/Technical name/), { target: { value: 'llama3.2:3b' } });

@@ -66,7 +66,7 @@ export default function McpAgentJourney({ servers, onConnect, onInspect, onDismi
           <Box component="li" sx={{ minWidth: 0 }}>
             <Typography component="h3" variant="subtitle2">{t('mcp.journey.agentTitle')}</Typography>
             <Typography variant="body2" sx={{ my: 1 }}>{t('mcp.journey.agentBody')}</Typography>
-            <Button component={Link} href="/flows?authoringMode=guided" variant="outlined">{t('nav.agents')}</Button>
+            <Button component={Link} href="/flows?create=assistant" variant="outlined">{t('home.agent.openBuilder')}</Button>
           </Box>
         </Box>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>{t('mcp.journey.next')}</Typography>

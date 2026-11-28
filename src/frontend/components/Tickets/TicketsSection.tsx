@@ -1,6 +1,6 @@
 'use client';
 
-import { Alert, Badge, Box, Button, CircularProgress, Stack, Typography } from '@mui/material';
+import { Alert, Badge, Box, Button, Stack, Typography } from '@mui/material';
 import { useCallback, useEffect, useState } from 'react';
 
 import { useI18n } from '@/frontend/contexts/I18nContext';
@@ -21,7 +21,6 @@ export function TicketsSection() {
   const { t } = useI18n();
   const [items, setItems] = useState<Ticket[]>([]);
   const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
   const [allOpen, setAllOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -40,8 +39,6 @@ export function TicketsSection() {
       setItems([]);
       setTotal(0);
       setError(t('tickets.toast.loadFailed'));
-    } finally {
-      setLoading(false);
     }
   }, [t]);
 
@@ -76,8 +73,9 @@ export function TicketsSection() {
     }
   };
 
-  // Keep the dashboard quiet when there is nothing to hand back to the human.
-  if (!loading && total === 0 && !error) return null;
+  // Keep the dashboard quiet when there is nothing to hand back to the human,
+  // including while the first check runs: most people have no tickets.
+  if (total === 0 && !error) return null;
 
   return (
     <Box component="section" sx={{ mt: 3, mb: 3 }}>
@@ -94,9 +92,7 @@ export function TicketsSection() {
 
         {error && <Alert severity="error" onClose={() => setError(null)}>{error}</Alert>}
 
-        {loading ? (
-          <CircularProgress size={22} />
-        ) : items.length === 0 ? (
+        {items.length === 0 ? (
           <Typography variant="body2" color="text.secondary">{t('tickets.section.empty')}</Typography>
         ) : (
           items.map((ticket) => (

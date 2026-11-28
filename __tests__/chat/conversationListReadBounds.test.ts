@@ -22,7 +22,8 @@ jest.mock('@/utils/workspace', () => ({
   getWorkspaceDataDir: () => mockDataRoot,
   workspaceCacheKey: (namespace: string, file?: string) => `${mockWorkspace}\0${namespace}${file === undefined ? '' : `\0${file}`}`,
 }));
-jest.mock('@/utils/logger', () => ({ createLogger: () => ({ info: jest.fn(), debug: jest.fn(), warn: jest.fn(), error: jest.fn() }) }));
+const mockLog = { info: jest.fn(), debug: jest.fn(), warn: jest.fn(), error: jest.fn() };
+jest.mock('@/utils/logger', () => ({ createLogger: () => mockLog }));
 jest.mock('@/backend/execution/extensions', () => ({
   exposeExecutionConversationInList: async () => true,
   isExecutionProtectedState: (state: { executionExtensionOwned?: boolean }) => !!state.executionExtensionOwned,
@@ -109,6 +110,14 @@ beforeEach(() => {
 });
 
 describe('conversation-list snapshot read admission', () => {
+  it('answers an empty list on a fresh workspace without logging an error', async () => {
+    mockFilesystem.readdir.mockRejectedValue(Object.assign(new Error('no folder yet'), { code: 'ENOENT' }));
+    expect(await get('')).toEqual({ status: 200, body: [] });
+    expect(await get('?presence=1')).toEqual({ status: 200, body: { count: 0 } });
+    expect(mockLog.error).not.toHaveBeenCalled();
+    expect(mockLog.warn).not.toHaveBeenCalled();
+  });
+
   it('preserves UTF-8 content matching and metadata without returning message bodies', async () => {
     const { status, body } = await get();
     expect(status).toBe(200);

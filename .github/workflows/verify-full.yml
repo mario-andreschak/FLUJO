@@ -767,10 +767,60 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  # The path a newcomer takes (#572), on a fresh production build with a free
+  # stand-in AI: connect and test an AI, test an app's tool, build an agent in
+  # the simple builder, run it with a tool approval, read its steps, then reuse
+  # it through the OpenAI-compatible API and the app through the MCP proxy.
+  # Desktop and phone screens; fails on any stage, page crash or a path slower
+  # than 15 minutes. Screenshots and report.json are kept either way.
+  first-use-journey:
+    name: First-use journey
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '22.23.4'
+          cache: npm
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
+      - run: npm ci --include=dev
+      - name: Install the journey's browser
+        run: npx playwright install --with-deps chromium
+      - run: npm run build
+      - name: Walk the first-use journey on a desktop screen
+        env:
+          FLUJO_DRIVE_HOME: ${{ runner.temp }}/flujo-drive
+        run: npm run journey:first-use
+      - name: Walk the first-use journey on a phone screen
+        env:
+          FLUJO_DRIVE_HOME: ${{ runner.temp }}/flujo-drive
+        run: npm run journey:first-use -- --viewport 390x844
+      # Connect a 128-tool app over Streamable HTTP and SSE through the screens,
+      # reach its last tool by keyboard and test it with a filled-in form.
+      - name: Reach every tool of a 128-tool app on the same build
+        env:
+          FEATURE_BROWSER_APP_DIR: ${{ github.workspace }}
+        run: npx playwright test --config=playwright.features-first-use.config.mjs
+      - name: Keep the journey's screenshots and reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: first-use-journey-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/flujo-drive/evidence/first-journey/
+            test-results/features-first-use/
+            feature-first-use-artifacts/
+          if-no-files-found: error
+          retention-days: 30
+
   verification:
     name: verification
     if: always()
-    needs: [production-build, release-safety, typecheck, lint, test, test-isolated, workflow-contract, dependency-security, codeql, antigravity-cli, installed-windows-acceptance, image-acceptance, system-key-store, system-key-store-linux, contributor-guide]
+    needs: [production-build, release-safety, typecheck, lint, test, test-isolated, workflow-contract, dependency-security, codeql, antigravity-cli, installed-windows-acceptance, image-acceptance, system-key-store, system-key-store-linux, contributor-guide, first-use-journey]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

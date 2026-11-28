@@ -8,9 +8,10 @@
 import type { Flow } from '@/shared/types/flow';
 import type { Model } from '@/shared/types/model';
 import { compileFlowSpec } from '@/utils/shared/flowSpecCompiler';
+import { DEFAULT_FLUJO_AGENT_ID } from '@/shared/flujoAgent';
 import { flowService } from './index';
 
-export const DEFAULT_FLUJO_AGENT_ID = 'default-agent-flujo';
+export { DEFAULT_FLUJO_AGENT_ID };
 export const DEFAULT_FLUJO_AGENT_VERSION = 2;
 export const DEFAULT_FLUJO_AGENT_SERVERS = [
   'bash',

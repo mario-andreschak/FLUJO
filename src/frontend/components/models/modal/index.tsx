@@ -783,7 +783,9 @@ export const ModelModal = ({ open, model, onSave, onClose, onReload }: ModelModa
                       ? t('models.modal.azureEndpointHelp')
                       : currentProfile.adapter === 'anthropic'
                         ? t('models.modal.anthropicBaseUrlHelp')
-                        : t('models.modal.baseUrlHelp'))}
+                        : keylessProvider
+                          ? t('models.modal.localBaseUrlHelp')
+                          : t('models.modal.baseUrlHelp'))}
                   />
                 )}
 
