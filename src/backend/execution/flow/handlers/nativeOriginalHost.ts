@@ -33,6 +33,7 @@ import { commitExecutionExtensionMutation, executionExtensionCodexProfile, execu
   type ExecutionNativeWorkerDescendant,
   type ExecutionExtensionContext } from '@/backend/execution/extensions';
 import { getConversationStates } from '@/backend/execution/flow/conversationStateRegistry';
+import { propertyOf } from '@/shared/utils/records';
 
 type Binding = { workspace: string; dispatchId: string;
   goalId: string; round: number; revisionId: string; leaseEpoch: string;
@@ -143,7 +144,7 @@ async function readLedger(binding: Binding): Promise<Ledger> {
   }
     await assertDirectories(binding);
     const value = JSON.parse(bytes.toString('utf8')) as Ledger;
-    if (Object.entries(ledgerHeader(binding)).some(([key, expected]) => (value as unknown as Record<string, unknown>)[key] !== expected)
+    if (Object.entries(ledgerHeader(binding)).some(([key, expected]) => propertyOf(value, key) !== expected)
       || !Array.isArray(value.reservations) || value.reservations.length > 256
       || value.reservations.some(item => !item.invocationId || !item.acceptanceDigest
         || !['accepted', 'registered', 'exited', 'released'].includes(item.state))) return held();

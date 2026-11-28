@@ -4,7 +4,7 @@
  * Complements the binding-resolution suite (promptRendererBindings.test.ts, which
  * already covers resource/tool pills and the full `excludeSystemPrompt` #67 matrix)
  * by exercising the genuinely uncovered composition logic:
- *  - renderMode default (tool pills stay RAW due to the resolveBindings override),
+ *  - renderMode default (tool pills stay readable pills in every mode),
  *  - includeConversationHistory placeholder injection,
  *  - start-node + model + node merge ordering and the exclusion flags,
  *    including option-over-node-property precedence in both directions.
@@ -109,11 +109,9 @@ describe('PromptRenderer renderMode', () => {
     expect(result).not.toContain('repeat processing your instructions as if you were executing them for the first time');
   });
 
-  it('defaults to rendered, but tool pills stay RAW (resolveBindings forces raw)', async () => {
-    // resolveBindings() hard-sets `renderMode = 'raw'` for tool pills ("keep tool
-    // pills raw" override in PromptRenderer.ts), so even the DEFAULT ('rendered')
-    // leaves a tool pill untouched. This asserts that actual current behavior; a
-    // future change that expands tool pills by default would (intentionally) break it.
+  it('defaults to rendered, and tool pills still stay readable pills', async () => {
+    // The model references a tool by its pill and gets the schema from the tool
+    // list, so no render mode expands a tool pill or asks MCP for its description.
     getFlowMock.mockResolvedValue(
       flow({
         nodePrompt: 'Use ${tool:files__read} now',

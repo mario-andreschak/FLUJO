@@ -24,6 +24,7 @@ import { getMcpRemoteTaskSettings } from './remoteTaskStore';
 import { getTasksExtensionSession, wasModernTasksExtensionClient, type HostTasksDispatchOptions } from './tasksExtensionSession';
 import { z } from 'zod';
 import { InputResponsesV2Schema } from '@modelcontextprotocol/ext-tasks/core/v2';
+import { propertyOf } from '@/shared/utils/records';
 
 const log = createLogger('backend/services/mcp/tasksProtocol');
 
@@ -36,14 +37,9 @@ export interface TaskNegotiation {
   generation?: McpTaskGeneration;
 }
 
-interface ClientWithCapabilities {
-  getServerCapabilities?: () => Record<string, unknown> | undefined;
-  getProtocolEra?: () => string | undefined;
-}
-
 function isModernClient(client: Client): boolean {
-  return wasModernTasksExtensionClient(client) ||
-    (client as unknown as ClientWithCapabilities).getProtocolEra?.() === 'modern';
+  return wasModernTasksExtensionClient(client)
+    || ('getProtocolEra' in client && typeof client.getProtocolEra === 'function' && client.getProtocolEra() === 'modern');
 }
 
 /**
@@ -56,8 +52,7 @@ const negotiationCache = new WeakMap<object, TaskNegotiation>();
 
 function readServerTasksCapability(client: Client): Record<string, unknown> | undefined {
   try {
-    const caps = (client as unknown as ClientWithCapabilities).getServerCapabilities?.();
-    const tasks = caps?.tasks;
+    const tasks = propertyOf(client.getServerCapabilities?.(), 'tasks');
     return typeof tasks === 'object' && tasks !== null
       ? (tasks as Record<string, unknown>)
       : undefined;
@@ -89,12 +84,12 @@ export function getTaskNegotiation(client: Client | undefined): TaskNegotiation 
   };
   if (isModernClient(client)) return none;
 
-  const cached = negotiationCache.get(client as unknown as object);
+  const cached = negotiationCache.get(client);
   if (cached) return cached;
 
   const tasks = readServerTasksCapability(client);
   if (!tasks) {
-    negotiationCache.set(client as unknown as object, none);
+    negotiationCache.set(client, none);
     return none;
   }
 
@@ -109,7 +104,7 @@ export function getTaskNegotiation(client: Client | undefined): TaskNegotiation 
     supportsCancel: typeof tasks.cancel === 'object' && tasks.cancel !== null,
     supportsList: typeof tasks.list === 'object' && tasks.list !== null,
   };
-  negotiationCache.set(client as unknown as object, negotiation);
+  negotiationCache.set(client, negotiation);
   log.debug(`Negotiated ${MCP_TASKS_EXTENSION_ID} support`, negotiation);
   return negotiation;
 }
@@ -127,7 +122,7 @@ export const modernToolResultSchema = z.custom<Record<string, unknown>>(value =>
 });
 
 export function invalidateTaskNegotiation(client: Client | undefined): void {
-  if (client) negotiationCache.delete(client as unknown as object);
+  if (client) negotiationCache.delete(client);
 }
 
 /** Per-tool `execution.taskSupport` declaration, cached briefly per client. */
@@ -143,7 +138,7 @@ async function getToolTaskSupport(
   client: Client,
   toolName: string,
 ): Promise<ToolTaskSupport> {
-  const key = client as unknown as object;
+  const key = client;
   const cached = toolSupportCache.get(key);
   if (cached && Date.now() - cached.at < TOOL_SUPPORT_TTL_MS) {
     return cached.byTool.get(toolName);
@@ -152,8 +147,7 @@ async function getToolTaskSupport(
     const listed = await client.listTools();
     const byTool = new Map<string, ToolTaskSupport>();
     for (const tool of listed.tools ?? []) {
-      const execution = (tool as unknown as { execution?: { taskSupport?: string } }).execution;
-      const support = execution?.taskSupport;
+      const support = propertyOf(propertyOf(tool, 'execution'), 'taskSupport');
       byTool.set(
         tool.name,
         support === 'optional' || support === 'required' || support === 'forbidden'
@@ -228,10 +222,6 @@ export function buildTaskAugmentation(ttlMs?: number, generation: McpTaskGenerat
   return { task: { ...(typeof ttlMs === 'number' && ttlMs > 0 ? { ttl: ttlMs } : {}) } };
 }
 
-interface RequestCapableClient {
-  request: (req: unknown, schema?: unknown, opts?: unknown) => Promise<unknown>;
-}
-
 /**
  * Send a Tasks request. Kept on the generic `request()` seam so it works
  * identically for the v1 SDK client and the v2-beta client (betaClient.ts),
@@ -241,10 +231,10 @@ async function taskRequest(
   client: Client,
   method: string,
   taskId: string,
-  schema: unknown,
+  schema: Parameters<Client['request']>[1],
   options?: { signal?: AbortSignal; timeout?: number; generation?: McpTaskGeneration },
 ): Promise<unknown> {
-  return (client as unknown as RequestCapableClient).request(
+  return client.request(
     { method, params: { taskId } },
     schema,
     { ...(options?.signal ? { signal: options.signal } : {}), ...(options?.timeout ? { timeout: options.timeout } : {}) },

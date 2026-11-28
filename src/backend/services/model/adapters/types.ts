@@ -431,6 +431,11 @@ export function assertReadOnlyAssessmentInput(input: CompletionInput): void {
   input.signal.throwIfAborted();
 }
 
+function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
+  return (typeof value === 'object' || typeof value === 'function') && value !== null
+    && Symbol.asyncIterator in value && typeof value[Symbol.asyncIterator] === 'function';
+}
+
 /**
  * Wrap one concrete SDK/CLI invocation with durable request observation. Archive
  * failures remain best-effort except bounded admission, required conversation
@@ -462,9 +467,8 @@ export async function observeSdkRequest<T>(
   };
   try {
     const result = await task();
-    const iterable = result as unknown as AsyncIterable<unknown> | null | undefined;
-    if (iterable && typeof iterable[Symbol.asyncIterator] === 'function') {
-      const asyncIterable = iterable;
+    if (isAsyncIterable(result)) {
+      const asyncIterable = result;
       async function* observedIterator(): AsyncGenerator<unknown> {
         try {
           for await (const item of asyncIterable) yield item;

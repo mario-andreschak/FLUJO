@@ -428,11 +428,14 @@ function assertSecretsOutsidePlan(plan: ResolvedInstallPlan, input: DirectInstal
   }
 }
 
+/** server.json entries name the server and list packages or remotes; the install planner checks each option. */
+function isRegistryServer(raw: Record<string, unknown>): raw is Record<string, unknown> & RegistryServer {
+  return typeof raw.name === 'string' && (Array.isArray(raw.packages) || Array.isArray(raw.remotes));
+}
+
 function registryServerFrom(value: Record<string, unknown>): RegistryServer | null {
-  const wrapped = objectRecord(value.server);
-  const raw = wrapped ?? value;
-  if (typeof raw.name !== 'string' || (!Array.isArray(raw.packages) && !Array.isArray(raw.remotes))) return null;
-  return raw as unknown as RegistryServer;
+  const raw = objectRecord(value.server) ?? value;
+  return isRegistryServer(raw) ? raw : null;
 }
 
 function chooseServerJsonOption(server: RegistryServer, preferred?: DirectInstallInput['transport']): InstallOption {

@@ -45,8 +45,6 @@ function hostOf(baseUrl: string | undefined): string | null {
   }
 }
 
-type FlowModelNode = { id: string; data?: { type?: string; properties?: Record<string, unknown> }; type?: string };
-
 export async function describeFlowModelReach(rootFlowId: string): Promise<FlowModelReach | null> {
   const root = await flowService.getFlow(rootFlowId);
   if (!root) return null;
@@ -79,7 +77,7 @@ export async function describeFlowModelReach(rootFlowId: string): Promise<FlowMo
   const walk = async (flow: Flow) => {
     if (seenFlows.has(flow.id)) return;
     seenFlows.add(flow.id);
-    for (const node of (flow.nodes ?? []) as unknown as FlowModelNode[]) {
+    for (const node of flow.nodes ?? []) {
       const type = node.data?.type ?? node.type;
       const properties = node.data?.properties ?? {};
       for (const modelId of stepModelIds(type, properties)) {

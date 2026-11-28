@@ -516,7 +516,7 @@ export function taskToolHeaders(tool: Tool | undefined, args: unknown): Record<s
 }
 
 /** Bind validation to the declaration observed before submission, including scalar JSON. */
-export function taskToolOutputValidator(tool: Tool | undefined): (result: { structuredContent?: unknown; isError?: boolean }) => void {
+export function taskToolOutputValidator(tool: Pick<Tool, 'outputSchema'> | undefined): (result: { structuredContent?: unknown; isError?: boolean }) => void {
   if (!tool?.outputSchema) return () => {};
   let validate: ReturnType<AjvJsonSchemaValidator['getValidator']>;
   try { validate = validator.getValidator(tool.outputSchema); }

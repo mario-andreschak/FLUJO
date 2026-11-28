@@ -181,13 +181,12 @@ export async function withWorkspace<T>(
  * The handler itself is unchanged and keeps resolving paths through the ordinary
  * workspace-aware services.
  */
-export function withWorkspaceRoute<
-  H extends (request: never, ...rest: never[]) => Promise<Response> | Response,
->(handler: H): H {
-  const invoke = async (...args: unknown[]): Promise<Response> => {
+export function withWorkspaceRoute<A extends unknown[]>(
+  handler: (...args: A) => Promise<Response> | Response,
+): (...args: A) => Promise<Response> {
+  const invoke = async (...args: A): Promise<Response> => {
     try {
-      // eslint-disable-next-line flujo/no-double-cast -- the wrapper forwards each route's own arguments; a generic handler type cannot be called with them without widening through unknown
-      return await (handler as unknown as (...a: unknown[]) => Promise<Response>)(...args);
+      return await handler(...args);
     } catch (error) {
       if (!(error instanceof ConversationLogReadPressureError)) throw error;
       return Response.json({ error: error.message, code: error.code }, {
@@ -196,8 +195,11 @@ export function withWorkspaceRoute<
       });
     }
   };
-  // eslint-disable-next-line flujo/no-double-cast -- the wrapper takes the same arguments as the route it wraps, which TypeScript cannot state for a generic handler
-  return (async (request: Request | undefined, ...rest: unknown[]) => {
+  return async (...args: A): Promise<Response> => {
+    const [request, ...rest]: unknown[] = args;
+    // The handler receives the caller's own arguments, with only a missing
+    // request filled in.
+    const callHandler = (first: unknown) => invoke(...([first, ...rest] as A));
     // A number of route unit tests (and a few internal callers) invoke handlers
     // such as GET()/PUT() with no argument. Normalize before workspace parsing
     // so compatibility calls cannot crash at request.headers.
@@ -230,7 +232,7 @@ export function withWorkspaceRoute<
               return new Response(JSON.stringify({ error: 'Forbidden.' }), { status: 403 });
             }
             await assertBundledFlujoWorkloadCurrent(workload.authorization, transportRequest);
-            return invoke(handlerRequest, ...rest);
+            return callHandler(handlerRequest);
           });
           await assertBundledFlujoWorkloadCurrent(workload.authorization, transportRequest);
           return selected instanceof Response
@@ -267,9 +269,8 @@ export function withWorkspaceRoute<
     }
     return withExecutionExtensionRoute((request ?? normalizedRequest) as Request, async (admittedRequest) => {
       const selected = await withWorkspace(admittedRequest, async () => {
-        const run = () => invoke(
+        const run = () => callHandler(
           admittedRequest === (request ?? normalizedRequest) ? handlerRequest : admittedRequest,
-          ...rest,
         );
         if (accountPrincipal) return runWithAccountPrincipal(accountPrincipal, run);
         if (ownerAuthorization && admittedRequest.method === 'GET' && !isWorkerMode()) {
@@ -285,5 +286,5 @@ export function withWorkspaceRoute<
         ? await bindOwnerStream(selected, ownerAuthorization, transportRequest.signal)
         : selected;
     });
-  }) as unknown as H;
+  };
 }

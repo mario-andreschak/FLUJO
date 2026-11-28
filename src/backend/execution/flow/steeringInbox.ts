@@ -25,7 +25,7 @@ import { workspaceCacheKey } from '@/utils/workspace';
  * the user has already sent.
  */
 
-const globalForInbox = globalThis as unknown as {
+const globalForInbox = globalThis as typeof globalThis & {
   __flujoSteeringInbox?: Map<string, FlujoChatMessage[]>;
   __flujoSteeringListeners?: Map<string, Set<() => void>>;
   __flujoSteeringDeliveryWaiters?: Map<string, Map<string, Set<() => void>>>;

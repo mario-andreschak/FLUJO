@@ -13,7 +13,7 @@
  */
 import { workspaceCacheKey } from '@/utils/workspace';
 
-const globalForRegistry = globalThis as unknown as {
+const globalForRegistry = globalThis as typeof globalThis & {
   __flujoToolCancels?: Map<string, Map<string, AbortController>>;
 };
 const registry: Map<string, Map<string, AbortController>> =

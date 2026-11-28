@@ -422,7 +422,7 @@ describe('actual ModelHandler / SDK / archive memory boundary', () => {
     }));
     const result = await ModelHandler.callModel({
       modelId: 'memory-model', prompt: '', messages: canonical,
-      iteration: 1, maxIterations: 1, nodeId: 'memory-node', nodeName: 'Memory', conversationId: 'memory-conversation',
+      nodeId: 'memory-node', nodeName: 'Memory', conversationId: 'memory-conversation',
       archiveModelTurns: true,
       modelInputForArchive: { systemMessage: null, wireMessages: canonical,
         provenance: canonical.map(message => ({ id: message.id, role: message.role, status: 'sent' })),

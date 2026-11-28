@@ -76,6 +76,7 @@ import {
   type RestrictedCodexProfile,
 } from './codexRestrictedProfile';
 import { testSetting } from '@/shared/testSetting';
+import { propertyOf } from '@/shared/utils/records';
 
 const log = createLogger('backend/services/model/adapters/codexAdapter');
 
@@ -1299,9 +1300,7 @@ export class CodexAdapter implements CompletionAdapter {
                 );
                 streamedText = true;
               } else if (item.type === 'agent_message') {
-                const messageMedia = extractNativeMediaParts(
-                  (item as unknown as { content?: unknown }).content,
-                );
+                const messageMedia = extractNativeMediaParts(propertyOf(item, 'content'));
                 // A message AFTER spawning means the model stopped queueing
                 // workers: end the run without accumulating post-handoff narration.
                 if (handoffCalls.length > 0) {

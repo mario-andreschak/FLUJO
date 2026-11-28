@@ -56,7 +56,7 @@ it.each(['claude-cli', 'codex-cli'])('provides communication and background exec
     return { completion: { id: 'c', object: 'chat.completion', created: 1, model: 'test', choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'done' } }] } };
   });
   const tools = [...buildSubflowCommunicationTools(), ...['start_subflow_worker', 'subflow_task_get', 'subflow_task_cancel'].map(name => ({ name, description: name, inputSchema: { type: 'object', properties: {} } }))];
-  const result = await ModelHandler.callModel({ modelId: 'model', prompt: 'Coordinate', messages: [{ id: 'u', role: 'user', content: 'Work', timestamp: 1 }], tools: tools.map(wire), iteration: 1, maxIterations: 1, nodeId: 'process', nodeName: 'Parent', conversationId: 'parent' });
+  const result = await ModelHandler.callModel({ modelId: 'model', prompt: 'Coordinate', messages: [{ id: 'u', role: 'user', content: 'Work', timestamp: 1 }], tools: tools.map(wire), nodeId: 'process', nodeName: 'Parent', conversationId: 'parent' });
   expect(result.success).toBe(true);
   expect(completion).toHaveBeenCalledTimes(1);
   expect(peekSteeringMessages('child')[0].content).toContain('Native correction');

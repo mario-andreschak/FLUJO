@@ -22,7 +22,7 @@ interface AdmissionBarrier {
   waiters: Set<() => void>;
 }
 
-const globalCoordinator = globalThis as unknown as {
+const globalCoordinator = globalThis as typeof globalThis & {
   __flujoCancellableRuns?: Map<string, Map<string, CancellableRun>>;
   __flujoAdmissionBarriers?: Map<string, AdmissionBarrier>;
   __flujoAdmissionBarrierToken?: number;

@@ -251,7 +251,6 @@ export class ModelHandler {
   }
 
   private static async callModelCore(input: ModelCallInput): Promise<Result<ModelCallResult>> {
-    // Remove iteration parameters as they are no longer handled here
     const { modelId, prompt, messages, wireMessages, tools, nodeName, nodeId, toolNameMap, maxTurns, maxTokens, compactionMode, compactionKeepTokens, onFinalWire, conversationId, runId, codexSession, onCodexSessionChange, requireToolApproval, mcpNodes } = input; // Added nodeId
     const durableContext: FlowDurableMutationContext = {
       executionAuthority: input.executionAuthority,

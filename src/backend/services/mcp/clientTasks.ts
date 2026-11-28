@@ -1,7 +1,6 @@
 import { mcpProtocolError } from './protocolErrors';
 import { taskToolOutputValidator } from './tasksExtensionSession';
 import { listCompleteTools } from './toolDiscovery';
-import type { Tool as ModernTool } from '@modelcontextprotocol/client';
 /**
  * Client-side MCP task lifecycle (issue #404, plan steps 4 & 5).
  *
@@ -587,7 +586,7 @@ export async function runRemoteTaskLifecycle(
           const signal = AbortSignal.any([pollSignal, AbortSignal.timeout(remaining)]);
           const listed = await listCompleteTools(client, { signal, timeout: remaining, maxTotalTimeout: remaining });
           const declaration = listed.tools.find(tool => tool.name === toolName);
-          taskToolOutputValidator(declaration as unknown as ModernTool | undefined)(output);
+          taskToolOutputValidator(declaration)(output);
         }
         await assertCurrent();
       }

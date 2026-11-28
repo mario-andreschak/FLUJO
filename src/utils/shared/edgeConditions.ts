@@ -11,8 +11,8 @@
  * deterministic default route that fires on ANY reply (including plain text), so
  * a process node carrying an `always` edge advances instead of silently
  * terminating when a small model does not emit a handoff tool call (issue #111).
- * It replaces the non-obvious always-matching `[\s\S]*` regex workaround and
- * needs no `value`.
+ * It replaces the non-obvious always-matching `[\s\S]*` regex flows used before,
+ * and needs no `value`.
  *
  * Conditions may also leave a Start or Static node, which lets a flow check a
  * message BEFORE any model sees it. Such a flow re-enters at its Start node on

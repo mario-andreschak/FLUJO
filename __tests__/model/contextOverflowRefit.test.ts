@@ -126,8 +126,6 @@ const callModel = (conversationId: string) =>
       },
       { role: 'tool', tool_call_id: 'call-1', content: HUGE, id: 't1', timestamp: 3 },
     ],
-    iteration: 1,
-    maxIterations: 1,
     nodeName: 'Node',
     nodeId: 'node-1',
     conversationId,
@@ -650,7 +648,7 @@ describe('context-length overflow refit', () => {
     const before = JSON.stringify(messages);
     seedState('image-refit');
     const result = await ModelHandler.callModel({ modelId: 'model-1', prompt: '', messages, maxTokens: 256,
-      iteration: 1, maxIterations: 1, nodeId: 'node-1', nodeName: 'Node', conversationId: 'image-refit' });
+      nodeId: 'node-1', nodeName: 'Node', conversationId: 'image-refit' });
     expect(result.success).toBe(true);
     expect(widths).toHaveLength(2);
     expect(widths[1]).toBeLessThan(widths[0]);
@@ -667,7 +665,7 @@ describe('context-length overflow refit', () => {
       { id: 't1', timestamp: 3, role: 'tool' as const, tool_call_id: 'call-1', content: body },
     ];
     const result = await ModelHandler.callModel({ modelId: 'model-1', prompt: '', messages,
-      iteration: 1, maxIterations: 1, nodeName: 'Node', nodeId: 'node-1', conversationId: 'codex-large-tool' });
+      nodeName: 'Node', nodeId: 'node-1', conversationId: 'codex-large-tool' });
     expect(result.success).toBe(true);
     expect(createCompletionMock).toHaveBeenCalledTimes(1);
     expect(writeRunResourceMock).toHaveBeenCalledWith(expect.objectContaining({ data: { text: body } }));
@@ -735,7 +733,7 @@ describe('context-length overflow refit', () => {
     ];
     seedState('small-store');
     const result = await ModelHandler.callModel({ modelId: 'model-1', prompt: '', messages,
-      iteration: 1, maxIterations: 1, nodeId: 'node-1', nodeName: 'Node', conversationId: 'small-store', compactionMode: 'off',
+      nodeId: 'node-1', nodeName: 'Node', conversationId: 'small-store', compactionMode: 'off',
     } as Parameters<typeof ModelHandler.callModel>[0]);
     if (!result.success) throw new Error(result.error.message);
     expect(createCompletionMock).toHaveBeenCalledTimes(1);
@@ -776,7 +774,7 @@ describe('context-length overflow refit', () => {
     const result = await ModelHandler.callModel({ modelId: 'model-1', prompt: '', messages,
       tools: [{ type: 'function', function: { name: 'optional', description: 'schema '.repeat(8_000),
         parameters: { type: 'object', properties: {} } } }],
-      iteration: 1, maxIterations: 1, nodeId: 'node-1', nodeName: 'Node', conversationId: 'small-receipt', compactionMode: 'off',
+      nodeId: 'node-1', nodeName: 'Node', conversationId: 'small-receipt', compactionMode: 'off',
     } as Parameters<typeof ModelHandler.callModel>[0]);
     if (!result.success) throw new Error(result.error.message);
     expect(JSON.stringify(calls[0])).toContain('flujo://run/small-receipt/');
@@ -918,8 +916,6 @@ describe('context-length overflow refit', () => {
       modelId: 'model-1',
       prompt: 'continue',
       messages,
-      iteration: 1,
-      maxIterations: 1,
       nodeName: 'Node',
       nodeId: 'node-1',
       conversationId: 'conv-codex-overflow',
@@ -951,8 +947,6 @@ describe('context-length overflow refit', () => {
       modelId: 'model-1',
       prompt: 'hello',
       messages: [{ role: 'user', content: 'hello', id: 'u1', timestamp: 1 }],
-      iteration: 1,
-      maxIterations: 1,
       nodeName: 'Node',
       nodeId: 'node-1',
       conversationId: 'conv-preflight',
@@ -1008,8 +1002,6 @@ describe('context-length overflow refit', () => {
       modelId: 'model-1',
       prompt: 'draw',
       messages: [{ role: 'user', content: 'draw', id: 'u1', timestamp: 1 }],
-      iteration: 1,
-      maxIterations: 1,
       nodeName: 'Node',
       nodeId: 'node-1',
       conversationId: 'conv-late-media',

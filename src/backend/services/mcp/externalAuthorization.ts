@@ -70,10 +70,6 @@ type PendingSession = {
   timer?: ReturnType<typeof setTimeout>;
 };
 
-interface ClientWithStdioOAuthMarker {
-  __flujoStdioOAuth?: true;
-}
-
 declare global {
   var __mcp_external_authorization_status:
     Map<string, CachedStatus> | undefined;
@@ -123,7 +119,7 @@ export function registerExternalAuthorizationClient(
   if (stdioOAuthClients.has(client)) return;
 
   const oauth = createStdioOAuthClient({
-    mcpClient: client as unknown as StdioOAuthMcpClient,
+    mcpClient: client as StdioOAuthMcpClient,
     installElicitationHandler: false,
     ...(mrtrController ? { mrtrController } : {}),
     onUrlElicitation: bindToCurrentWorkspace(async (request: ValidatedUrlElicitationRequest) => {
@@ -137,7 +133,6 @@ export function registerExternalAuthorizationClient(
   });
 
   stdioOAuthClients.set(client, oauth);
-  (client as unknown as ClientWithStdioOAuthMarker).__flujoStdioOAuth = true;
 }
 
 function externalAuthorizationClient(client: Client): StdioOAuthClient {
@@ -152,11 +147,7 @@ export function serverSupportsExternalAuthorization(
   client: Client | undefined,
 ): boolean {
   if (!client) return false;
-  const offered =
-    (client as unknown as ClientWithStdioOAuthMarker).__flujoStdioOAuth ===
-    true;
-  const oauth = stdioOAuthClients.get(client);
-  return offered && Boolean(oauth?.isSupported());
+  return Boolean(stdioOAuthClients.get(client)?.isSupported());
 }
 
 function blockingAuthorization(

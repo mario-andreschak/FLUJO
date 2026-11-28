@@ -127,7 +127,7 @@ export async function testModelToolConnection(model: Model, apiKey: string): Pro
       ok: true,
       durationMs: Date.now() - started,
       content: 'FLUJO tool schema accepted, arguments validated, tool executed, and result received by the model.',
-      usage: completion.usage as unknown as Record<string, unknown> | undefined,
+      usage: completion.usage ? { ...completion.usage } : undefined,
     };
   } catch (error) {
     return {

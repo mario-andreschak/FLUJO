@@ -5,7 +5,7 @@ import {
   BehaviorProposalSchema, BehaviorRevisionSchema, MemoryItemSchema, PersonaActivitySchema,
   PersonaAppGrantSchema, PersonaCreationDraftSchema, PersonaDeletionTombstoneSchema,
   PersonaLeaseSchema, PersonaMailboxItemSchema, PersonaSchema, PersonaWorkItemSchema,
-  RoleDefinitionSchema, RoleVersionSchema, type BehaviorRevision,
+  RoleDefinitionSchema, RoleVersionSchema,
 } from '@/shared/types/enduringAgent';
 import { assertValidWorkspaceName } from '@/utils/workspace';
 import { ENDURING_AGENT_COLLECTIONS as collections } from './collections';
@@ -74,20 +74,20 @@ export function validatePersonaRecoveryRecord(
     throw new PersonaRecoveryError(`Unsupported Persona recovery collection: ${collection}`);
   }
   const spec: PersonaRecoveryRecordSpec = PERSONA_RECOVERY_RECORD_SPECS[collection as PersonaRecoveryCollection];
-  const parsed = migrateAndParseRecord({
+  const migrate = <T>(schema: ZodType<T>): T => migrateAndParseRecord({
     recordKind: spec.kind,
     value,
     currentVersion: enduringAgentRecordSchemaVersion(spec.kind),
     migrations: enduringAgentRecordMigrations(spec.kind),
-    schema: spec.schema,
-  }) as Record<string, unknown>;
+    schema,
+  });
+  const behaviorRevision = spec.kind === 'BehaviorRevision' ? migrate(BehaviorRevisionSchema) : undefined;
+  const parsed = (behaviorRevision ?? migrate(spec.schema)) as Record<string, unknown>;
   if (typeof parsed.id !== 'string') throw new PersonaRecoveryError('A recovery record must have an id.');
   if ('workspaceId' in parsed && parsed.workspaceId !== sourceWorkspace) {
     throw new PersonaRecoveryError(`${spec.kind} ${parsed.id} belongs to another workspace.`);
   }
-  if (spec.kind === 'BehaviorRevision') {
-    assertBehaviorRevisionIntegrity(parsed as unknown as BehaviorRevision, value);
-  }
+  if (behaviorRevision) assertBehaviorRevisionIntegrity(behaviorRevision, value);
   const original = value as Record<string, unknown>;
   return {
     collection: collection as PersonaRecoveryCollection,

@@ -78,8 +78,8 @@ function safeMember(name: string, directory = false): string {
   return normalized;
 }
 
-function validateManifest(value: unknown): WorkerManifest {
-  if (!record(value) || value.formatVersion !== WORKER_SNAPSHOT_FORMAT_VERSION || value.layoutVersion !== WORKSPACE_LAYOUT_VERSION
+function hasManifestShape(value: unknown): value is WorkerManifest {
+  return record(value) && !(value.formatVersion !== WORKER_SNAPSHOT_FORMAT_VERSION || value.layoutVersion !== WORKSPACE_LAYOUT_VERSION
       || value.externalRootsIncluded !== false || !record(value.source)
       || value.source.version !== applicationPackage.version || typeof value.source.platform !== 'string'
       || !record(value.runtime) || !record(value.runtime.mcpTransfer)
@@ -90,11 +90,15 @@ function validateManifest(value: unknown): WorkerManifest {
       || !['default', 'user'].includes(value.runtime.encryption as string)
       || !Array.isArray(value.files) || !Array.isArray(value.subtrees)
       || value.subtrees.length !== WORKSPACE_SUBTREES.length
-      || WORKSPACE_SUBTREES.some(root => !(value.subtrees as unknown[]).includes(root))) {
+      || WORKSPACE_SUBTREES.some(root => !(value.subtrees as unknown[]).includes(root)));
+}
+
+function validateManifest(value: unknown): WorkerManifest {
+  if (!hasManifestShape(value)) {
     throw new Error('Snapshot format, FLUJO version, layout, or portable runtime metadata is incompatible.');
   }
   assertValidWorkspaceName(value.workspace);
-  return value as unknown as WorkerManifest;
+  return value;
 }
 
 async function plainDirectory(target: string, create = false): Promise<void> {

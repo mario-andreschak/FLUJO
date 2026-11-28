@@ -26,8 +26,6 @@ it('refuses a late owner-binding edit before credential resolution or adapter cr
     modelCatalogAdmission: admission,
     prompt: 'No external send',
     messages: [{ id: 'user', role: 'user', content: 'Do not send', timestamp: 1 }],
-    iteration: 1,
-    maxIterations: 1,
     nodeId: 'process',
     nodeName: 'Process',
   });

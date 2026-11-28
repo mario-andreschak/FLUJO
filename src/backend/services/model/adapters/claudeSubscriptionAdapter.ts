@@ -77,6 +77,7 @@ import {
   createStatisticsEvent,
   recordStatisticsEvent,
 } from '@/backend/services/statistics';
+import { propertyOf } from '@/shared/utils/records';
 
 const log = createLogger('backend/services/model/adapters/claudeSubscriptionAdapter');
 
@@ -505,7 +506,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
       const reusable = await findReusableSession(
         sessionTracking.key,
         sessionTracking.prefixHash,
-        messages as unknown as Array<{ role: string; [key: string]: unknown }>,
+        messages,
         leadingSystemMessageCount,
         reason => { resumeReason = reason; },
       );
@@ -1097,7 +1098,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     const sdkPromptMessage: SDKUserMessage = {
       type: 'user', parent_tool_use_id: null,
       uuid: uuidv5(canonicalSessionValue({ conversationId, nodeId, historyHash: computeHistoryHash(
-        messages as unknown as Array<{ role: string; [key: string]: unknown }>,
+        messages,
       ) }), uuidv5.URL) as SDKUserMessage['uuid'],
       message: { role: 'user', content: userContent },
     };
@@ -1660,11 +1661,12 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           ambientTasks = message.tasks.length - backgroundTasks;
         }
         if (message.type === 'system' || message.type === 'rate_limit_event') {
-          const lifecycle = message as unknown as { subtype?: string; state?: string; status?: string; attempt?: number; retry_delay_ms?: number; terminal_reason?: string; claude_code_version?: string };
-          onSessionEvent?.({ kind: lifecycle.subtype ?? message.type, state: lifecycle.state ?? lifecycle.status
+          const text = (key: string) => { const value = propertyOf(message, key); return typeof value === 'string' ? value : undefined; };
+          const count = (key: string) => { const value = propertyOf(message, key); return typeof value === 'number' ? value : undefined; };
+          onSessionEvent?.({ kind: text('subtype') ?? message.type, state: text('state') ?? text('status')
             ?? (message.type === 'rate_limit_event' ? message.rate_limit_info.status : undefined),
-            attempt: lifecycle.attempt, retryDelayMs: lifecycle.retry_delay_ms, terminalReason: lifecycle.terminal_reason,
-            runtimeVersion: lifecycle.claude_code_version });
+            attempt: count('attempt'), retryDelayMs: count('retry_delay_ms'), terminalReason: text('terminal_reason'),
+            runtimeVersion: text('claude_code_version') });
         }
         if (message.type === 'rate_limit_event') {
           for (const allowanceSignal of claudeRateLimitSignals(message.rate_limit_info)) recordAllowanceSignal(allowanceKey, allowanceSignal);
@@ -2074,7 +2076,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
           prefixHash: sessionTracking.prefixHash,
           seenMessageCount: messages.length + transcript.length,
           leadingSystemMessageCount,
-          historyHash: computeHistoryHash([...messages, ...transcript] as unknown as Array<{ role: string; [key: string]: unknown }>, leadingSystemMessageCount),
+          historyHash: computeHistoryHash([...messages, ...transcript], leadingSystemMessageCount),
           usageCheckpoint: usageTracker.getCheckpoint(),
           transcriptCheckpoint,
         });

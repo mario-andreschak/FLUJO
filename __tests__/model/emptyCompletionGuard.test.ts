@@ -80,8 +80,6 @@ const callModel = (conversationId: string, executionExtensionContext?: Execution
     modelId: 'model-1',
     prompt: 'Respond.',
     messages: [{ role: 'user', content: 'Respond.', id: 'u1', timestamp: 1 }],
-    iteration: 1,
-    maxIterations: 1,
     nodeName: 'Node',
     nodeId: 'node-1',
     conversationId,

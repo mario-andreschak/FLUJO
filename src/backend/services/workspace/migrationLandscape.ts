@@ -181,9 +181,8 @@ function modulo(value: number, divisor: number): number {
 
 function mixColor(from: Color, to: Color, amount: number): Color {
   const factor = clamp(amount, 0, 1);
-  return from.map((channel, index) =>
-    Math.round(channel + (to[index] - channel) * factor),
-  ) as unknown as Color;
+  const mix = (index: 0 | 1 | 2) => Math.round(from[index] + (to[index] - from[index]) * factor);
+  return [mix(0), mix(1), mix(2)];
 }
 
 function colorKey(color: Color): string {

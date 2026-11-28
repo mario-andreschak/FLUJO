@@ -132,6 +132,7 @@ const FlowSnapshotInputSchema = z.object({
   })
   .transform((value) => normalizeBehaviorRulesInput(value));
 
+// eslint-disable-next-line flujo/no-double-cast -- the structural check keeps authored extension fields and any `input` string, so its inferred output only approximates the Flow it was saved from.
 export const FlowSnapshotSchema = FlowSnapshotInputSchema as unknown as z.ZodType<
   Flow,
   z.input<typeof FlowSnapshotInputSchema>

@@ -20,9 +20,16 @@ import {
   buildProviderToolNameTranslation, translateToolsForProvider,
   translateMessagesForProvider, translateCompletionFromProvider,
 } from './providerToolNames';
+import { isRecord, propertyOf } from '@/shared/utils/records';
 
 /** The SDK exposes camelCase envelopes; FLUJO's Responses translator uses wire keys.
  * Only use this on protocol envelopes, never on arbitrary function parameters. */
+/** The installed SDK wraps a compaction output item as UNKNOWN; this recognizes the wrapped item. */
+function isCompactionItem(raw: unknown): raw is OpenAI.Responses.ResponseCompactionItem {
+  return isRecord(raw) && raw.type === 'compaction' && typeof raw.id === 'string'
+    && typeof raw.encrypted_content === 'string' && raw.encrypted_content.length > 0;
+}
+
 export function mapOpenRouterEnvelopeKeys(value: unknown, toWire = false): unknown {
   if (Array.isArray(value)) return value.map(item => mapOpenRouterEnvelopeKeys(item, toWire));
   if (!value || typeof value !== 'object') return value;
@@ -243,12 +250,9 @@ export class OpenRouterAgentAdapter implements CompletionAdapter {
       // UNKNOWN on output. Restore only this recognized wire item; unrelated
       // unknown envelopes still invalidate derived replay state.
       wireResponse.output = wireResponse.output.map(item => {
-        const unknown = item as unknown as { type?: string; is_unknown?: boolean;
-          raw?: OpenAI.Responses.ResponseCompactionItem };
-        return unknown.type === 'UNKNOWN' && unknown.is_unknown === true
-          && unknown.raw?.type === 'compaction' && typeof unknown.raw.id === 'string'
-          && typeof unknown.raw.encrypted_content === 'string' && unknown.raw.encrypted_content.length > 0
-          ? unknown.raw : item;
+        const raw = propertyOf(item, 'raw');
+        return propertyOf(item, 'type') === 'UNKNOWN' && propertyOf(item, 'is_unknown') === true && isCompactionItem(raw)
+          ? raw : item;
       });
       const { completion: nativeCompletion, reasoning, media } = fromResponse(wireResponse, input.model.name);
       const completion = translateCompletionFromProvider(nativeCompletion, translation);

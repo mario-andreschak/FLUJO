@@ -58,8 +58,7 @@ live.each(['codex', 'openrouter'] as const)('continues through an oversized tool
     let answer = '', reads = 0;
     for (let iteration = 0; iteration < 4; iteration++) {
       const result = await ModelHandler.callModel({ modelId: model.id, prompt: '', messages,
-        conversationId, nodeId: 'recovery', nodeName: 'Recovery', iteration, maxIterations: 4,
-        requireToolApproval: false });
+        conversationId, nodeId: 'recovery', nodeName: 'Recovery', requireToolApproval: false });
       if (!result.success) throw new Error('Live completion failed: ' + result.error.code);
       messages = result.value.messages;
       answer = result.value.content?.trim() ?? '';

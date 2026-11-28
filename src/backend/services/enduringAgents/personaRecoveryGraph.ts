@@ -103,8 +103,8 @@ export function validatePersonaRecoveryGraph(
       // A copy's sharedFlowRef is historical provenance, not its executable dependency.
       flow(target.mode === 'persona_copy' ? target.personaFlowRef : target.sharedFlowRef);
     };
-    const context = (input: unknown, activityId: unknown) => {
-      if (!input) return;
+    const context = (input: unknown, activityId: unknown): PersonaInstructionContext | undefined => {
+      if (!input) return undefined;
       const snapshot = input as PersonaInstructionContext;
       if (snapshot.personaId !== owner || snapshot.activityId !== activityId) fail('frozen context crosses Activity ownership');
       const pinned = revision(snapshot.behaviorRevisionId, null);
@@ -112,6 +112,7 @@ export function validatePersonaRecoveryGraph(
         || (pinned?.flowSnapshot as Flow).id !== snapshot.rootFlowId) fail('frozen context does not match its immutable Behavior');
       ref(c.roleVersions, snapshot.roleVersionId);
       refs(c.memoryItems, snapshot.coreMemoryItemIds, true);
+      return snapshot;
     };
 
     if (owner) ref(c.personas, owner);
@@ -191,16 +192,17 @@ export function validatePersonaRecoveryGraph(
         ref(c.flowDispatches, goal?.pendingDispatchId, true);
         break;
       }
-      case c.activities:
+      case c.activities: {
         revision(value.behaviorRevisionId);
         revision(value.coreFlowRevisionId);
-        context(value.instructionContext, value.id);
-        if (value.instructionContext && value.instructionContextDigest !== hashPersonaInstructionContext(
-          value.instructionContext as unknown as PersonaInstructionContext,
-        )) fail('frozen instruction digest does not match');
+        const instructionContext = context(value.instructionContext, value.id);
+        if (instructionContext && value.instructionContextDigest !== hashPersonaInstructionContext(instructionContext)) {
+          fail('frozen instruction digest does not match');
+        }
         if (typeof value.conversationId === 'string') conversationRefs.add(value.conversationId);
         // Lease history can be pruned under its independently verified policy.
         break;
+      }
       case BEHAVIOR_CALL_PINS_COLLECTION: {
         ref(c.activities, value.activityId, true);
         revision(value.parentBehaviorRevisionId, null);

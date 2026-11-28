@@ -123,7 +123,7 @@ function seedState(conversationId: string, messages: FlujoChatMessage[]): Shared
 
 const complete = (conversationId: string, messages: FlujoChatMessage[],
   overrides: Partial<Parameters<typeof ModelHandler.callModel>[0]> = {}) => ModelHandler.callModel({
-  modelId: 'claude-model', prompt: '', messages, iteration: 1, maxIterations: 1,
+  modelId: 'claude-model', prompt: '', messages,
   nodeName: 'Claude', nodeId: 'node-1', conversationId,
   compactionMode: 'off', archiveModelTurns: false, ...overrides,
 });

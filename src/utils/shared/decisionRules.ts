@@ -72,6 +72,11 @@ export const MAX_DECISION_LOG = 200;
 const MAX_CONDITION_DEPTH = 16;
 const RESERVED_KEYS = ['__proto__', 'constructor', 'prototype'];
 
+/** A leaf is any object with a known condition kind. */
+function isConditionLeaf(when: Record<string, unknown>): when is Record<string, unknown> & EdgeCondition {
+  return isValidConditionKind(when.kind);
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
@@ -92,8 +97,8 @@ export function decisionConditionMatches(
   if ('all' in when) return Array.isArray(when.all) && when.all.length > 0 && when.all.every(inner);
   if ('any' in when) return Array.isArray(when.any) && when.any.some(inner);
   if ('not' in when) return isPlainObject(when.not) && !inner(when.not);
-  if (!isValidConditionKind(when.kind)) return false;
-  const leaf = when as unknown as EdgeCondition;
+  if (!isConditionLeaf(when)) return false;
+  const leaf = when;
   return conditionMatches(
     typeof leaf.variable === 'string' && !leaf.target ? { ...leaf, target: 'variable' } : leaf,
     messages,

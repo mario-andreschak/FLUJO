@@ -110,6 +110,7 @@ import { isPersonaControlledPlannedExecution } from '@/shared/types/plannedExecu
 import type { MCPServerConfig, EnvVarValue, MCPHeaderValue } from '@/shared/types/mcp';
 import { remapFlowModelBindings } from '@/utils/shared/flowModelReplacement';
 import { hasConflictingFlowClaim, resolvePackageFlowIds } from './packageFlowIdentity';
+import { propertyOf } from '@/shared/utils/records';
 export { deterministicFlowId } from './packageFlowIdentity';
 
 const log = createLogger('backend/services/packages/installPackage');
@@ -295,17 +296,22 @@ async function hasProtectedExecutionCollision(
  * still installs, just with the placeholder unresolved).
  */
 function resolveSecretPlaceholders<T>(value: T, secrets: Record<string, string>): T {
+  // Only strings change, and they stay strings, so the copy has the input's shape.
+  return resolvePlaceholdersIn(value, secrets) as T;
+}
+
+function resolvePlaceholdersIn(value: unknown, secrets: Record<string, string>): unknown {
   if (typeof value === 'string') {
     if (!value.includes('{{secret.')) return value;
     const re = new RegExp(SECRET_PLACEHOLDER_REGEX.source, 'g');
     return value.replace(re, (match, name: string) =>
       Object.prototype.hasOwnProperty.call(secrets, name) ? secrets[name] : match,
-    ) as unknown as T;
+    );
   }
-  if (Array.isArray(value)) return value.map((v) => resolveSecretPlaceholders(v, secrets)) as unknown as T;
+  if (Array.isArray(value)) return value.map((v) => resolvePlaceholdersIn(v, secrets));
   if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value as Record<string, unknown>)
-      .map(([key, item]) => [key, resolveSecretPlaceholders(item, secrets)])) as T;
+    return Object.fromEntries(Object.entries(value)
+      .map(([key, item]) => [key, resolvePlaceholdersIn(item, secrets)]));
   }
   return value;
 }
@@ -388,17 +394,17 @@ async function collectRenameErrors(
   let existingExecutionNames: string[] = [];
   try {
     // The scheduler is mocked in tests — tolerate a service without `list()`.
-    const scheduler = getSchedulerService() as unknown as {
-      list?: () => Promise<Array<{ execution?: { id?: string; name?: string } }>>;
-    };
+    const scheduler = getSchedulerService();
     if (typeof scheduler?.list === 'function') {
       const ownedIds = new Set(executionCandidates.map((c) => deterministicExecutionId(manifest.name, c.key)));
-      const executions = await scheduler.list();
-      existingExecutionNames = (executions ?? [])
-        .map((entry) => entry?.execution)
-        .filter((e): e is { id?: string; name?: string } => Boolean(e))
-        .filter((e) => typeof e.id !== 'string' || !ownedIds.has(e.id))
-        .map((e) => e.name)
+      const executions: unknown = await scheduler.list();
+      existingExecutionNames = (Array.isArray(executions) ? executions : [])
+        .map((entry) => propertyOf(entry, 'execution'))
+        .filter((execution) => {
+          const id = propertyOf(execution, 'id');
+          return typeof id !== 'string' || !ownedIds.has(id);
+        })
+        .map((execution) => propertyOf(execution, 'name'))
         .filter((n): n is string => typeof n === 'string');
     }
   } catch (err) {

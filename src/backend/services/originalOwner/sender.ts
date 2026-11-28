@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { Agent, fetch as ownerFetch } from 'undici';
+import { Agent, fetch as ownerFetch, type Response as OwnerResponse } from 'undici';
 import {
   assertExecutionModelStepNodeId, MAX_EXECUTION_MODEL_STEP_ORDINAL,
   type ExecutionBoundModelIdentity, type ExecutionModelStepSlot, type ExecutionOwnerModelDispatchRequest,
@@ -354,7 +354,7 @@ export async function dispatchOriginalOwnerModelRequest(value: unknown, input: E
   const abortSignal = request.signal ? AbortSignal.any([request.signal, step.authority.signal]) : step.authority.signal;
   const controller = new AbortController();
   const senderId = randomUUID();
-  let pending: Promise<Response> | undefined;
+  let pending: Promise<OwnerResponse> | undefined;
   let claimed = false;
   try {
     await step.authority.assertModelPlan({ nodeId: step.slot.nodeId, modelId: step.model.id });
@@ -404,7 +404,7 @@ export async function dispatchOriginalOwnerModelRequest(value: unknown, input: E
       // No redirect, retry wrapper, SDK or global fetch may open another socket.
       activeSends.set(step.id, senderId);
       pending = ownerFetch(request.url, { method: 'POST', headers, body: request.body,
-        redirect: 'manual', signal: controller.signal, dispatcher: transport }) as unknown as Promise<Response>;
+        redirect: 'manual', signal: controller.signal, dispatcher: transport });
       // Observe immediately in case post-commit durability/current checks fail.
       void pending.catch(() => {});
     }));
@@ -456,7 +456,7 @@ export async function dispatchOriginalOwnerModelRequest(value: unknown, input: E
   abortSignal.addEventListener('abort', onAbort, { once: true });
   if (abortSignal.aborted) onAbort();
   void observe().catch(() => {});
-  let response: Response;
+  let response: OwnerResponse;
   try { response = await Promise.race([pending, interrupted]); }
   catch {
     await fail('original_owner_model_outcome_unknown').catch(() => {});

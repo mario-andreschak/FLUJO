@@ -1,5 +1,6 @@
 // Logger utility
 import { FEATURES } from '@/config/features';
+import { propertyOf } from '@/shared/utils/records';
 
 export const LOG_LEVEL = {
   VERBOSE: -1, // Most verbose level for extremely detailed logging
@@ -26,7 +27,7 @@ function errorToPlain(err: unknown, depth = 0): unknown {
 
   for (const key of Object.getOwnPropertyNames(err)) {
     if (key === 'name' || key === 'message') continue;
-    const value = (err as unknown as Record<string, unknown>)[key];
+    const value = propertyOf(err, key);
     if (typeof value === 'function') continue;
     if (key === 'stack') {
       plain.set('stack', value);

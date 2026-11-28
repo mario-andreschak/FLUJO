@@ -14,6 +14,7 @@ import type { OpenRouterMediaKind } from './adapters';
 import { fromResponse } from './adapters/openaiResponsesAdapter';
 import { testModelToolConnection } from './testToolConnection';
 import { inspectAntigravityRuntime } from './adapters/antigravityCliDiscovery';
+import { isRecord } from '@/shared/utils/records';
 
 const log = createLogger('backend/services/model/testConnection');
 
@@ -41,12 +42,12 @@ function looksLikeTransportError(message: string | undefined): boolean {
   return TRANSPORT_ERROR_PATTERNS.some(p => m.includes(p));
 }
 
-function pickHeaders(headers: Record<string, unknown> | undefined): Record<string, string> | undefined {
+function pickHeaders(headers: object | undefined): Record<string, string> | undefined {
   if (!headers) return undefined;
   const keep = ['retry-after', 'x-ratelimit-reset', 'x-ratelimit-remaining', 'x-ratelimit-limit'];
   const out: Record<string, string> = {};
-  for (const k of Object.keys(headers)) {
-    if (keep.includes(k.toLowerCase())) out[k.toLowerCase()] = String(headers[k]);
+  for (const [k, value] of Object.entries(headers)) {
+    if (keep.includes(k.toLowerCase())) out[k.toLowerCase()] = String(value);
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }
@@ -77,9 +78,7 @@ async function attemptViaSdk(modelName: string, baseUrl: string | undefined, api
     const durationMs = Date.now() - started;
 
     // Some providers (OpenRouter) return 200 with an error object in the body.
-    const maybeError = 'error' in raw && raw.error && typeof raw.error === 'object'
-      ? raw.error as unknown as Record<string, unknown>
-      : undefined;
+    const maybeError = 'error' in raw && isRecord(raw.error) ? raw.error : undefined;
     if (maybeError) {
       return {
         ok: false,
@@ -103,7 +102,7 @@ async function attemptViaSdk(modelName: string, baseUrl: string | undefined, api
       status: 200,
       durationMs,
       content: completion.choices?.[0]?.message?.content?.slice(0, 500) ?? '',
-      usage: completion.usage as unknown as Record<string, unknown> | undefined,
+      usage: completion.usage ? { ...completion.usage } : undefined,
     };
   } catch (error) {
     const durationMs = Date.now() - started;
@@ -187,7 +186,7 @@ async function attemptViaAxios(modelName: string, baseUrl: string | undefined, a
           status: response.status,
           code: body?.code !== undefined ? String(body.code) : undefined,
           type: body?.type,
-          headers: pickHeaders(response.headers as unknown as Record<string, unknown>),
+          headers: pickHeaders(response.headers),
           body,
         },
       };
@@ -249,7 +248,7 @@ async function attemptViaAdapter(model: Model, apiKey: string): Promise<ModelTes
       status: 200,
       durationMs,
       content: completion.choices?.[0]?.message?.content?.slice(0, 500) ?? '',
-      usage: completion.usage as unknown as Record<string, unknown> | undefined,
+      usage: completion.usage ? { ...completion.usage } : undefined,
     };
   } catch (error) {
     const durationMs = Date.now() - started;

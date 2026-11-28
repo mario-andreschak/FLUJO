@@ -15,6 +15,7 @@ import { parseRetryAfterMs } from '@/backend/execution/flow/retryAfter';
 import { isFlowExecutionAuthorityError } from '@/backend/execution/flow/executionAuthority';
 import type { CompletionAdapter, CompletionInput, CompletionResult } from './types';
 import { executionExtensionSinglePhysicalAttempt, ExecutionExtensionError } from '@/backend/execution/extensions';
+import { propertyOf } from '@/shared/utils/records';
 
 const cooldowns = new Map<string, { until: number; reason: FallbackTrigger }>();
 
@@ -137,7 +138,7 @@ export class FallbackAdapter implements CompletionAdapter {
           ? await adapter.createStreamCompletion(memberInput)
           : await adapter.createCompletion(memberInput);
         input.signal?.throwIfAborted();
-        const inBandError = (result.completion as unknown as { error?: unknown })?.error;
+        const inBandError = propertyOf(result.completion, 'error');
         if (inBandError) throw inBandError;
         if (!result.completion?.choices?.length) throw new Error('Invalid response from policy member.');
         routing.attempts.push({ modelId: id, outcome: 'completed' });

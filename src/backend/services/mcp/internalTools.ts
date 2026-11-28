@@ -825,7 +825,7 @@ async function listFlowVersionsTool(args: Record<string, unknown>): Promise<Call
   };
   return {
     content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
-    structuredContent: page as unknown as Record<string, unknown>,
+    structuredContent: { ...page },
   };
 }
 

@@ -29,17 +29,11 @@ interface PromptNodeProperties {
   excludeSystemPromptSections?: unknown;
 }
 
-interface DescribedTool {
-  description?: string;
-  inputSchema?: {
-    properties?: Record<string, { description?: string }>;
-  };
-}
-
 export interface PromptRenderOptions {
   /** Process preparation's detached catalog model; never reread it mid-render. */
   admittedModel?: Model;
-  renderMode?: 'raw' | 'rendered'; // For tool pills: raw shows ${_-_-_server_-_-_name}, rendered shows descriptions
+  /** The caller's requested view, recorded in the render log; tool pills stay readable pills in both. */
+  renderMode?: 'raw' | 'rendered';
   includeConversationHistory?: boolean;
   excludeModelPrompt?: boolean; // Override node's excludeModelPrompt setting
   excludeStartNodePrompt?: boolean; // Override node's excludeStartNodePrompt setting
@@ -232,8 +226,8 @@ export class PromptRenderer {
       completePrompt += nodePrompt + `\n`;
     }
 
-    // 4. Resolve binding pills: tool pills per renderMode, resource pills always inlined
-    completePrompt = await this.resolveBindings(completePrompt, renderMode, functionCallingSchema, options?.onResourceRead, options?.rejectResourceBindings);
+    // 4. Resolve binding pills: tool pills stay readable, resource pills are inlined
+    completePrompt = await this.resolveBindings(completePrompt, options?.onResourceRead, options?.rejectResourceBindings);
 
     // 5. Add placeholder for conversation history if requested
     if (includeConversationHistory) {
@@ -418,24 +412,20 @@ export class PromptRenderer {
   /**
    * Resolve binding pills (`${tool:...}` / `${resource:...}`, plus legacy `${_-_-_..}`).
    *
-   * Tool pills follow renderMode (raw = left as the readable pill for the model to
-   * reference; rendered = expanded into a tool description). Resource pills are ALWAYS
-   * resolved to their contents regardless of renderMode — a literal `${resource:...}` in
-   * the prompt would be meaningless to the model; the whole point of binding a resource is
-   * to inline its data at run time.
+   * Tool pills stay as the readable pill in every render mode: the model references
+   * the tool by that name and receives its schema through the tool list. Resource
+   * pills are always resolved to their contents — a literal `${resource:...}` in the
+   * prompt would be meaningless to the model; the whole point of binding a resource
+   * is to inline its data at run time.
    *
    * Walks matches by index against the original string so duplicate pills resolve
    * independently (no fragile first-occurrence `.replace`).
    */
   private async resolveBindings(
     prompt: string,
-    renderMode: 'raw' | 'rendered',
-    functionCallingSchema?: string | null,
     onResourceRead?: PromptRenderOptions['onResourceRead'],
     rejectResourceBindings = false,
   ): Promise<string> {
-    renderMode = 'raw'; // for now, keep tool pills raw (resources still always resolve)
-
     const matches = findBindings(prompt);
     if (rejectResourceBindings && matches.some(match => match.kind === 'resource')) {
       throw new ExecutionExtensionError('execution_resource_binding_forbidden');
@@ -443,9 +433,7 @@ export class PromptRenderer {
     if (matches.length === 0) {
       return prompt;
     }
-    log.debug(`Resolving ${matches.length} binding pills`, { renderMode });
-
-    const formatType = this.resolveFormatType(functionCallingSchema);
+    log.debug(`Resolving ${matches.length} binding pills`);
 
     let result = '';
     let cursor = 0;
@@ -453,31 +441,14 @@ export class PromptRenderer {
       result += prompt.slice(cursor, m.index);
       cursor = m.index + m.fullMatch.length;
 
-      if (m.kind === 'resource') {
-        result += await this.renderResourceBinding(m.server, m.name, onResourceRead);
-      } else if (renderMode === 'raw') {
-        // Leave the readable tool pill in place for the model to reference.
-        result += m.fullMatch;
-      } else {
-        result += await this.renderToolBinding(m.server, m.name, formatType, m.fullMatch);
-      }
+      result += m.kind === 'resource'
+        ? await this.renderResourceBinding(m.server, m.name, onResourceRead)
+        : m.fullMatch;
     }
     result += prompt.slice(cursor);
 
     log.debug('Resolved binding pills');
     return result;
-  }
-
-  /** Pick the tool-description format from the model's function-calling schema. */
-  private resolveFormatType(functionCallingSchema?: string | null): 'json' | 'xml' | 'text' {
-    if (!functionCallingSchema) return 'text';
-    if (functionCallingSchema.includes('"tool"') && functionCallingSchema.includes('"parameters"')) {
-      return 'json';
-    }
-    if (functionCallingSchema.includes('<') && functionCallingSchema.includes('</')) {
-      return 'xml';
-    }
-    return 'text';
   }
 
   /** Ensure a server is connected, force-connecting once if needed. */
@@ -489,43 +460,6 @@ export class PromptRenderer {
       status = await mcpService.getServerStatus(serverName);
     }
     return status.status === 'connected';
-  }
-
-  /** Expand a tool pill into a description (rendered mode), retrying a few times. */
-  private async renderToolBinding(
-    serverName: string,
-    toolName: string,
-    formatType: 'json' | 'xml' | 'text',
-    fullMatch: string
-  ): Promise<string> {
-    for (let retryCount = 0; retryCount < 3; retryCount++) {
-      try {
-        if (await this.ensureConnected(serverName)) {
-          const toolsResult = await mcpService.listServerTools(serverName);
-          const tool = toolsResult.tools?.find(t => t.name === toolName);
-          if (tool) {
-            switch (formatType) {
-              case 'json':
-                return this.formatToolDescriptionJSON(serverName, toolName, tool);
-              case 'xml':
-                return this.formatToolDescriptionXML(serverName, toolName, tool);
-              default: {
-                const paramsText = this.formatToolParameters(tool);
-                return `[The user is referencing a tool \`tool:${serverName}__${toolName}\` (${tool.description || 'No description'})${paramsText}]`;
-              }
-            }
-          }
-          log.warn(`Tool not found: ${toolName} in server ${serverName}`);
-        } else {
-          log.warn(`Server not connected: ${serverName}`);
-        }
-      } catch (error) {
-        log.warn(`Error resolving tool pill (attempt ${retryCount + 1}): ${fullMatch}`, error);
-      }
-      await this.delay(Math.pow(2, retryCount + 1) * 100);
-    }
-    log.error(`Failed to resolve tool pill after multiple retries: ${fullMatch}`);
-    return fullMatch; // leave the pill rather than dropping the reference
   }
 
   /**
@@ -593,74 +527,6 @@ export class PromptRenderer {
         return JSON.stringify(c);
       })
       .join('\n\n');
-  }
-
-  /**
-   * Format tool description in JSON format
-   */
-  private formatToolDescriptionJSON(serverName: string, toolName: string, tool: DescribedTool): string {
-    // Generate JSON format description with proper TypeScript typing
-    const toolObj: {
-      tool: string;
-      parameters: { [key: string]: string };
-    } = {
-      tool: `${toolName}`,  // Just the tool name, not the fully qualified name
-      parameters: {}
-    };
-    
-    // Add parameters if available
-    if (tool.inputSchema?.properties) {
-      for (const key in tool.inputSchema.properties) {
-        const prop = tool.inputSchema.properties[key];
-        // Use the property description as an example value
-        toolObj.parameters[key] = prop.description || key;
-      }
-    }
-    
-    // Return stringified JSON with explanation
-    return `[Tool: \`tool:${serverName}__${toolName}\` (${tool.description || 'No description'})
-Example usage:
-${JSON.stringify(toolObj, null, 2)}]`;
-  }
-
-  /**
-   * Format tool description in XML format
-   */
-  private formatToolDescriptionXML(serverName: string, toolName: string, tool: DescribedTool): string {
-    // Generate XML format description
-    let xmlExample = `<${toolName}>\n`;
-    
-    // Add parameters if available
-    if (tool.inputSchema?.properties) {
-      for (const key in tool.inputSchema.properties) {
-        const prop = tool.inputSchema.properties[key];
-        // Use the property description as example value
-        xmlExample += `  <${key}>${prop.description || key}</${key}>\n`;
-      }
-    }
-    
-    xmlExample += `</${toolName}>`;
-    
-    // Return XML with explanation
-    return `[Tool: \`tool:${serverName}__${toolName}\` (${tool.description || 'No description'})
-Example usage:
-${xmlExample}]`;
-  }
-
-  // Helper method to format tool parameters
-  private formatToolParameters(tool: DescribedTool): string {
-    if (!tool.inputSchema || !tool.inputSchema.properties) {
-      return '';
-    }
-
-    const params: string[] = [];
-    for (const key in tool.inputSchema.properties) {
-      const prop = tool.inputSchema.properties[key];
-      const description = prop.description ? `(${prop.description})` : '';
-      params.push(`\`${key}\` ${description}`);
-    }
-
-    return params.length > 0 ? ` with parameters ${params.join(', ')}` : '';
   }
 
   // Helper method for delay between retries

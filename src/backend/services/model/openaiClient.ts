@@ -22,10 +22,7 @@ const openAITransport = new Agent({
   bodyTimeout: LLM_REQUEST_TIMEOUT_MS,
 });
 
-// The SDK's Fetch alias is expressed in terms of the DOM Request type while
-// Undici adds Node-only fields such as `duplex`. The runtime signatures are
-// compatible for the URL + RequestInit calls the SDK makes; keep the cast at
-// this single transport boundary instead of leaking it into every client.
+// eslint-disable-next-line flujo/no-double-cast -- the OpenAI SDK takes a DOM-typed fetch; Undici's fetch is the same call with its own Request and Response classes.
 const openAIFetch = undiciFetch as unknown as typeof globalThis.fetch;
 
 /** Never inherit OPENAI_BASE_URL for an owner-bound protected request. */
@@ -134,6 +131,7 @@ export function createProtectedOpenAIClient(
 /** Called only after the guarded fetch has taken its immutable request snapshot,
  * received the owner's claim and synchronously rechecked local authority. */
 export function sendPinnedOpenAIFetch(url: string, init: RequestInit): Promise<Response> {
+  // eslint-disable-next-line flujo/no-double-cast -- `dispatcher` is Undici's own fetch option, which the DOM RequestInit type does not declare.
   return openAIFetch(url, {
     ...init,
     redirect: 'error',

@@ -49,6 +49,7 @@ import {
   type McpTaskGeneration,
 } from '@/shared/types/mcp/tasks';
 import { DEFAULT_WORKSPACE, getCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
+import { isRecord, propertyOf } from '@/shared/utils/records';
 
 const log = createLogger('backend/services/mcp/remoteTaskStore');
 
@@ -123,16 +124,18 @@ function sha256Hex(input: string, chars = 32): string {
  */
 export function serverIdentityFingerprint(config: MCPServerConfig | undefined): string {
   if (!config) return 'unknown';
-  const anyConfig = config as unknown as Record<string, unknown>;
+  const field = (key: string) => propertyOf(config, key);
+  const keysOf = (value: unknown) => (isRecord(value) ? Object.keys(value).sort() : []);
+  const args = field('args');
   const material = {
     name: config.name,
     transport: config.transport,
-    command: anyConfig.command ?? null,
-    args: Array.isArray(anyConfig.args) ? anyConfig.args : null,
-    serverUrl: anyConfig.serverUrl ?? anyConfig.websocketUrl ?? null,
-    envKeys: Object.keys((anyConfig.env as Record<string, unknown>) ?? {}).sort(),
-    headerKeys: Object.keys((anyConfig.headers as Record<string, unknown>) ?? {}).sort(),
-    oauth: Boolean(anyConfig.oauth ?? anyConfig.oauthTokens),
+    command: field('command') ?? null,
+    args: Array.isArray(args) ? args : null,
+    serverUrl: field('serverUrl') ?? field('websocketUrl') ?? null,
+    envKeys: keysOf(field('env')),
+    headerKeys: keysOf(field('headers')),
+    oauth: Boolean(field('oauth') ?? field('oauthTokens')),
   };
   return sha256Hex(stableStringify(material), 32);
 }
@@ -423,7 +426,7 @@ export async function sweepOldMcpRemoteTasks(
 // Bounded poll concurrency (global + per server)
 // ---------------------------------------------------------------------------
 
-const globalForSlots = globalThis as unknown as {
+const globalForSlots = globalThis as typeof globalThis & {
   __flujoMcpTaskPollSlots?: { total: number; perServer: Map<string, number> };
 };
 const slots =

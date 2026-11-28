@@ -22,6 +22,7 @@ import {
   translateMessagesForProvider,
   translateToolsForProvider,
 } from './providerToolNames';
+import { isRecord } from '@/shared/utils/records';
 
 const log = createLogger('backend/services/model/adapters/openaiResponsesAdapter');
 
@@ -258,7 +259,7 @@ export function withResponsesCacheBreakpoints(input: ResponseInputItem[]): Respo
   const cacheableTypes = new Set(['input_text', 'input_image', 'input_file']);
   const candidates: number[] = [];
   input.forEach((item, index) => {
-    const record = item as unknown as Record<string, unknown>;
+    const record: Record<string, unknown> = { ...item };
     if (record.role === 'system' || record.role === 'developer') return;
     const content = record.type === 'function_call_output' ? record.output : record.content;
     if ((typeof content === 'string' && content.length > 0) || (Array.isArray(content) &&
@@ -267,13 +268,15 @@ export function withResponsesCacheBreakpoints(input: ResponseInputItem[]): Respo
   const marked = new Set(candidates.slice(-4));
   return input.map((item, index) => {
     if (!marked.has(index)) return item;
-    const record = item as unknown as Record<string, unknown>;
+    const copy = { ...item };
+    const record: Record<string, unknown> = copy;
     const field = record.type === 'function_call_output' ? 'output' : 'content';
     const content = record[field];
-    const parts = typeof content === 'string' ? [{ type: 'input_text', text: content }] : content as Record<string, unknown>[];
-    const boundary = parts.findLastIndex(part => part && cacheableTypes.has(String(part.type)));
-    return { ...record, [field]: parts.map((part, partIndex) => partIndex === boundary
-      ? { ...part, prompt_cache_breakpoint: { mode: 'explicit' } } : part) } as unknown as ResponseInputItem;
+    const parts: unknown[] = typeof content === 'string' ? [{ type: 'input_text', text: content }] : Array.isArray(content) ? content : [];
+    const boundary = parts.findLastIndex(part => isRecord(part) && cacheableTypes.has(String(part.type)));
+    Object.assign(copy, { [field]: parts.map((part, partIndex) => partIndex === boundary && isRecord(part)
+      ? { ...part, prompt_cache_breakpoint: { mode: 'explicit' } } : part) });
+    return copy;
   });
 }
 
@@ -372,6 +375,7 @@ function userContent(content: unknown): ResponseInputItem {
     })
     .filter((p): p is NonNullable<typeof p> => p !== undefined);
 
+  // eslint-disable-next-line flujo/no-double-cast -- the parts include the provider audio shape { type: 'input_audio', data, format }, which the SDK's input content type does not declare.
   return {
     role: 'user',
     content: parts,
@@ -419,7 +423,7 @@ export function toResponsesInput(
         if (anchor && carriedReasoning?.has(anchor) && !emitted.has(anchor)) {
           emitted.add(anchor);
           for (const item of carriedReasoning.get(anchor)!) {
-            input.push(item as unknown as ResponseInputItem);
+            input.push(item);
           }
         }
 
@@ -541,7 +545,7 @@ export function fromResponse(
   const media: ModelMediaPart[] = [];
 
   for (const item of response.output ?? []) {
-    const nativeItem = item as unknown as Record<string, unknown>;
+    const nativeItem: Record<string, unknown> = { ...item };
     if (nativeItem.type === 'message') {
       const content = Array.isArray(nativeItem.content) ? nativeItem.content : [];
       for (const rawPart of content) {
@@ -818,6 +822,7 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
           { adapter: 'openai-responses', operation: 'responses.create', request: body },
           async () => {
             const response = await openai.responses.create(
+              // eslint-disable-next-line flujo/no-double-cast -- the body carries provider extensions (prompt_cache_options, provider, reasoning.enabled) that the SDK request type does not declare.
               body as unknown as OpenAI.Responses.ResponseCreateParamsNonStreaming,
               readOnlyAssessment || getHarnessExecution() ? { signal, maxRetries: 0, fetchOptions: { redirect: 'error' as const } } : signal ? { signal } : undefined,
             );
@@ -940,6 +945,7 @@ export class OpenAiResponsesAdapter implements CompletionAdapter {
         { adapter: 'openai-responses', operation: 'responses.create(stream)', request: body },
         async () => {
           const stream = await openai.responses.create(
+            // eslint-disable-next-line flujo/no-double-cast -- the body carries provider extensions (prompt_cache_options, provider, reasoning.enabled) that the SDK request type does not declare.
             body as unknown as OpenAI.Responses.ResponseCreateParamsStreaming,
             signal ? { signal } : undefined,
           );

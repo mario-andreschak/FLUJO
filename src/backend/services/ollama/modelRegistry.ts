@@ -62,7 +62,7 @@ export function withOllamaLock<T>(root: OllamaRootUrl, fn: () => Promise<T>): Pr
   // the returned promise (not through the chain, which must never reject).
   const finalized = existing.chain
     .then(fn)
-    .finally(resolveSlot) as unknown as Promise<T>;
+    .finally(resolveSlot);
 
   registry.set(root, { ...existing, chain: slot });
 

@@ -284,7 +284,7 @@ export async function waitForRetryWindow(
       settle('aborted');
     }
 
-    const timer = setTimeout(() => settle('ready'), delayMs) as unknown as NodeJS.Timeout;
+    const timer = setTimeout(() => settle('ready'), delayMs);
     timer.unref?.();
 
     if (shouldAbort) {

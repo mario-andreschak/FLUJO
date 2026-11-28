@@ -869,16 +869,11 @@ export async function deriveSecretsForSelection(
     const { modelService } = await import('@/backend/services/model');
     deriveOptions.model = {
       modelIdentifier: options.modelIdentifier,
-      completion: async (params) => {
-        const res = await modelService.generateChatCompletion({
-          modelIdentifier: params.modelIdentifier,
-          messages: params.messages as unknown as Parameters<
-            typeof modelService.generateChatCompletion
-          >[0]['messages'],
-          temperature: params.temperature,
-        });
-        return res as unknown as import('./secretModelPass').CompletionResultLike;
-      },
+      completion: (params) => modelService.generateChatCompletion({
+        modelIdentifier: params.modelIdentifier,
+        messages: params.messages,
+        temperature: params.temperature,
+      }),
     };
   }
 
