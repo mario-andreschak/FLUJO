@@ -6,6 +6,7 @@
  * (list/preview reads swallow errors; build returns a structured result).
  */
 import { createLogger } from '@/utils/logger';
+import { lazyBrowserService } from '@/frontend/services/lazyBrowserService';
 import type {
   BuildManifestResult,
   PackageMetadataInput,
@@ -185,25 +186,9 @@ class PackageService {
   }
 }
 
-let _packageService: PackageService | null = null;
+const lazyPackageService = lazyBrowserService('PackageService', () => new PackageService());
 
-export const getPackageService = (): PackageService => {
-  if (typeof window === 'undefined') {
-    throw new Error('PackageService can only be used in browser environment');
-  }
-  if (!_packageService) {
-    _packageService = new PackageService();
-  }
-  return _packageService;
-};
-
-// Lazy proxy so importing this module never throws during SSR/prerender.
-export const packageService: PackageService = new Proxy({} as PackageService, {
-  get(_target, prop) {
-    const service = getPackageService();
-    const value = (service as unknown as Record<string | symbol, unknown>)[prop];
-    return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(service) : value;
-  },
-});
+export const getPackageService = lazyPackageService.get;
+export const packageService = lazyPackageService.service;
 
 export type { PackageSelection, PackageMetadataInput, BuildManifestResult, ResolvedSelection, InstallSummary, RegistryPackageSearchResult };

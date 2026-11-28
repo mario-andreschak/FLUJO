@@ -868,9 +868,6 @@
     }
   },
   "src/frontend/components/Personas/PersonaGoalCard.tsx": {
-    "react-hooks/purity": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -993,11 +990,6 @@
   },
   "src/frontend/components/Settings/ExperimentalFeaturesSettings.tsx": {
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/Settings/GlobalEnvSettings.tsx": {
-    "flujo/no-raw-timers": {
       "count": 1
     }
   },
@@ -1254,11 +1246,6 @@
       "count": 1
     }
   },
-  "src/frontend/components/shared/CopyLinkButton.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
   "src/frontend/components/shared/FolderPickerDialog.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -1349,21 +1336,6 @@
       "count": 5
     },
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/frontend/services/model/index.ts": {
-    "flujo/no-double-cast": {
-      "count": 1
-    }
-  },
-  "src/frontend/services/packages/index.ts": {
-    "flujo/no-double-cast": {
-      "count": 1
-    }
-  },
-  "src/frontend/services/registry/index.ts": {
-    "flujo/no-double-cast": {
       "count": 1
     }
   },

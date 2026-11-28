@@ -5,6 +5,7 @@ import { Alert, Box, Button, Checkbox, Chip, FormControlLabel, Paper, Stack, Tex
 import { useEffect, useState, type ReactNode } from 'react';
 
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useReachedAt } from '@/frontend/hooks/timing';
 import { personasService } from '@/frontend/services/personas';
 import type { PersonaWorkItem } from '@/shared/types/enduringAgent';
 
@@ -23,6 +24,7 @@ export default function PersonaGoalCard({ item, busy, mutate, children }: {
   const [dailyLimit, setDailyLimit] = useState(String(goal?.maxRoundsPerDay ?? ''));
   const [dirty, setDirty] = useState(false);
   const [expectedUpdatedAt, setExpectedUpdatedAt] = useState(item.updatedAt);
+  const nextRunReached = useReachedAt(goal?.pendingTaskId ? goal.nextRunAt : undefined);
   useEffect(() => {
     if (dirty) return;
     setCriteria(goal?.successCriteria ?? '');
@@ -34,7 +36,7 @@ export default function PersonaGoalCard({ item, busy, mutate, children }: {
   }, [dirty, goal?.successCriteria, goal?.completionPolicy, goal?.continuationIntervalMs, goal?.maxRounds, goal?.maxRoundsPerDay, item.updatedAt]);
   if (!goal) return null;
   const terminal = goal.state === 'completed' || goal.state === 'stopped';
-  const currentSession = Boolean(goal.pendingTaskId) && (goal.nextRunAt === undefined || goal.nextRunAt <= Date.now());
+  const currentSession = Boolean(goal.pendingTaskId) && (goal.nextRunAt === undefined || nextRunReached);
   const criteriaValid = criteria.trim().length > 0;
   const cadenceValid = Number.isInteger(Number(cadence)) && Number(cadence) >= 10 && Number(cadence) <= 604_800;
   const limitValid = !limit || (Number.isInteger(Number(limit)) && Number(limit) > 0);

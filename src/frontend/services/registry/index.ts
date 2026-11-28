@@ -6,6 +6,7 @@
  * backend stores/decrypts them; the browser only ever sees masked status.
  */
 import { createLogger } from '@/utils/logger';
+import { lazyBrowserService } from '@/frontend/services/lazyBrowserService';
 import type {
   RegistryAccountStatus,
   RegistryAuthAction,
@@ -149,25 +150,9 @@ class RegistryService {
   }
 }
 
-let _registryService: RegistryService | null = null;
+const lazyRegistryService = lazyBrowserService('RegistryService', () => new RegistryService());
 
-export const getRegistryService = (): RegistryService => {
-  if (typeof window === 'undefined') {
-    throw new Error('RegistryService can only be used in browser environment');
-  }
-  if (!_registryService) {
-    _registryService = new RegistryService();
-  }
-  return _registryService;
-};
-
-// Lazy proxy so importing this module never throws during SSR/prerender.
-export const registryService: RegistryService = new Proxy({} as RegistryService, {
-  get(_target, prop) {
-    const service = getRegistryService();
-    const value = (service as unknown as Record<string | symbol, unknown>)[prop];
-    return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(service) : value;
-  },
-});
+export const getRegistryService = lazyRegistryService.get;
+export const registryService = lazyRegistryService.service;
 
 export type { RegistryAccountStatus, RegistryAuthResult, RegistryPublishResult, RegistryDeleteResult };

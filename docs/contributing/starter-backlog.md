@@ -6,13 +6,8 @@ account.
 
 The live list is every open issue labelled
 [`good first issue`](https://github.com/mario-andreschak/FLUJO/labels/good%20first%20issue).
-These were opened on November 25, 2026:
-
-| Issue | What you will do | Skills |
-| --- | --- | --- |
-| [#1438](https://github.com/mario-andreschak/FLUJO/issues/1438) Clear the "Copied" and "Saved" messages with the shared timer hook | Swap two raw timers for `useTimeout`, add two small component tests | React, Jest |
-| [#1439](https://github.com/mario-andreschak/FLUJO/issues/1439) Share one lazy-loading helper for the three browser services | Replace three copies of the same code with one typed helper and a test | TypeScript |
-| [#1440](https://github.com/mario-andreschak/FLUJO/issues/1440) Persona goal card: stop reading the clock while drawing | Make a card switch its label on time, with a fake-timer test | React, Jest |
+None is open right now: the last three (#1438, #1439 and #1440) were finished on
+November 28, 2026. New ones are listed here when they are opened.
 
 ## How to take one
 
@@ -30,6 +25,6 @@ These were opened on November 25, 2026:
   command that proves it, and needs no access, account or payment. Login,
   encryption, release permissions and concurrency changes are never starters.
 - **Kept fresh.** When one is done, the maintainer (or anyone who helps maintain
-  this list) opens a replacement and updates the table above. Good sources are the
+  this list) opens a replacement and lists it above. Good sources are the
   old lint exceptions in `eslint-suppressions.json` (one rule in one or two files)
   and setup problems newcomers report.
