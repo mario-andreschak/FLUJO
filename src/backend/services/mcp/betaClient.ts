@@ -38,6 +38,7 @@ import {
   type TransportCreationOptions,
 } from "./connection";
 import { createOAuthClientProvider } from "./oauth";
+import { rejectRepeatedToolCursors } from "./toolDiscovery";
 import { McpIsolationError } from '../security/isolatedMcp';
 import { attachMcpIsolation } from './isolation';
 import { attachTrustedHost, trustedHostBrokerEnvironment } from './trustedHost';
@@ -142,7 +143,8 @@ export function createNewBetaClient(
             : {}),
         },
   };
-  const client = new BetaClient(clientInfo, {
+  // A tools page that points back to itself must fail discovery, not shorten the list.
+  const client = rejectRepeatedToolCursors(new BetaClient(clientInfo, {
       capabilities: clientCapabilities,
       // The SDK opens modern listen streams, validates acknowledgment/correlation,
       // invalidates catalog caches, and closes streams with this generation.
@@ -154,7 +156,7 @@ export function createNewBetaClient(
       // Never 'pin': FLUJO must keep working against every existing server.
       versionNegotiation: config.transport === "stdio" ? stdioVersionNegotiation(config) : { mode: "auto" },
     },
-  );
+  ));
 
   const rootsHandler = createRootsListHandler(config, client);
   const samplingHandler = serverHasSampling ? createSamplingHandler(config) : undefined;

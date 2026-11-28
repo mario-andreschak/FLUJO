@@ -3,6 +3,8 @@ import type { ListToolsResult, Request } from '@modelcontextprotocol/sdk/types.j
 import type { RequestOptions } from '@modelcontextprotocol/sdk/shared/protocol.js';
 import type { AnySchema, SchemaOutput } from '@modelcontextprotocol/sdk/server/zod-compat.js';
 
+const REPEATED_CURSOR = "Tool discovery returned a repeated cursor; check the server's pagination.";
+
 /** Complete inventory or an error; a partial inventory must never authorize calls. */
 export async function collectToolPages(
   readPage: (cursor?: string) => Promise<ListToolsResult>,
@@ -17,14 +19,40 @@ export async function collectToolPages(
     firstPage ??= response;
     tools.push(...response.tools);
     if (response.nextCursor === undefined) break;
-    if (seenCursors.has(response.nextCursor)) {
-      throw new Error("Tool discovery returned a repeated cursor; check the server's pagination.");
-    }
+    if (seenCursors.has(response.nextCursor)) throw new Error(REPEATED_CURSOR);
     seenCursors.add(response.nextCursor);
     cursor = response.nextCursor;
   }
   const { nextCursor: _cursor, ...result } = firstPage;
   return { ...result, tools };
+}
+
+interface PageRequester {
+  request(...args: unknown[]): Promise<unknown>;
+}
+
+const field = (value: unknown, key: string): unknown => (
+  typeof value === 'object' && value !== null && key in value ? Reflect.get(value, key) : undefined
+);
+
+/**
+ * SDK v2 walks tools/list pages itself and stops quietly when a page points back to the
+ * cursor it was fetched with, returning the tools so far as if they were all of them.
+ * Watching each page on this client turns that into the same repeated-cursor error
+ * SDK v1 discovery gives. Longer cycles already fail at the SDK's page limit.
+ */
+export function rejectRepeatedToolCursors<C extends PageRequester>(client: C): C {
+  const target: PageRequester = client;
+  const request = target.request.bind(client);
+  target.request = async (...args: unknown[]) => {
+    const result = await request(...args);
+    const cursor = field(field(args[0], 'params'), 'cursor');
+    if (field(args[0], 'method') === 'tools/list' && cursor !== undefined && field(result, 'nextCursor') === cursor) {
+      throw new Error(REPEATED_CURSOR);
+    }
+    return result;
+  };
+  return client;
 }
 
 /** Also supports client adapters that expose individual pages through listTools. */

@@ -807,6 +807,13 @@ jobs:
         env:
           FEATURE_BROWSER_APP_DIR: ${{ github.workspace }}
         run: npx playwright test --config=playwright.features-first-use.config.mjs
+      # The tool tester on that build: all 128 tools by keyboard, a run with its
+      # embedded app, unfinished form input kept through slow and failed
+      # refreshes with the "earlier list" warning, and seven languages.
+      - name: Test the tool tester on the same build
+        env:
+          FEATURE_BROWSER_APP_DIR: ${{ github.workspace }}
+        run: npx playwright test --config=playwright.features.config.mjs
       - name: Keep the journey's screenshots and reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -816,6 +823,8 @@ jobs:
             ${{ runner.temp }}/flujo-drive/evidence/first-journey/
             test-results/features-first-use/
             feature-first-use-artifacts/
+            test-results/features/
+            feature-browser-artifacts/
           if-no-files-found: error
           retention-days: 30
 
