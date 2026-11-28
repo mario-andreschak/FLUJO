@@ -23,6 +23,7 @@ import path from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { NextRequest } from 'next/server';
 import { createClaudeSdkRelay } from '../model/fixtures/claudeSdkStandIn';
+import { stopBackgroundWorkers } from '../helpers/backgroundWorkers';
 import { startAnthropicStandIn, systemTextOf, textOf } from '../../scripts/anthropic-stand-in.mjs';
 
 jest.mock('@/utils/logger', () => ({ createLogger: () => ({ debug: () => {}, verbose: () => {}, info: () => {}, warn: () => {}, error: () => {} }) }));
@@ -155,16 +156,6 @@ beforeAll(async () => {
     }
   });
 });
-
-/** FLUJO's start-up begins a background worker for its test profiles; let its current pass end and stop its timer. */
-async function stopBackgroundWorkers(): Promise<void> {
-  const workers = (globalThis as { __flujoHarnessWorkers?: Map<string, { timer?: ReturnType<typeof setInterval>; running: boolean }> })
-    .__flujoHarnessWorkers;
-  for (const worker of workers?.values() ?? []) if (worker.timer) clearInterval(worker.timer);
-  for (let wait = 0; wait < 400 && [...workers?.values() ?? []].some(worker => worker.running); wait++) {
-    await new Promise(resolve => setTimeout(resolve, 25));
-  }
-}
 
 afterAll(async () => {
   await relay.settled();

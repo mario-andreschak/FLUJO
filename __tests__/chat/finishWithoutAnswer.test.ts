@@ -25,6 +25,7 @@ import type { MCPStreamableConfig } from '@/shared/types/mcp';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import { FINISH_ANSWER_INSTRUCTION, NO_ANSWER_TEXT } from '@/backend/execution/flow/finishAnswer';
 import { createClaudeSdkRelay, startClaudeModelStandIn, type ClaudeModelStandIn, type StandInBlock } from '../model/fixtures/claudeSdkStandIn';
+import { stopBackgroundWorkers } from '../helpers/backgroundWorkers';
 
 jest.mock('@/utils/logger', () => ({ createLogger: () => ({ debug: () => {}, verbose: () => {}, info: () => {}, warn: () => {}, error: () => {} }) }));
 const queryMock = jest.fn();
@@ -184,6 +185,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await settle();
   await relay.settled();
+  await stopBackgroundWorkers();
   const { runWithWorkspace } = await import('@/utils/workspace');
   const { mcpService } = await import('@/backend/services/mcp');
   const { retireIdleWorkspaceWriterRegistration } = await import('@/backend/services/enduringAgents/runtimeLock');

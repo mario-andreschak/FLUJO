@@ -33,6 +33,7 @@ import {
   ListToolsRequestSchema, ReadResourceRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import type { MCPStreamableConfig } from '@/shared/types/mcp';
+import { stopBackgroundWorkers } from '../helpers/backgroundWorkers';
 
 jest.mock('@/utils/logger', () => ({ createLogger: () => ({ debug: () => {}, verbose: () => {}, info: () => {}, warn: () => {}, error: () => {} }) }));
 
@@ -212,6 +213,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await settle();
+  await stopBackgroundWorkers();
   const { runWithWorkspace } = await import('@/utils/workspace');
   const { mcpService } = await import('@/backend/services/mcp');
   const { retireIdleModelCatalogReader, retireIdleWorkspaceWriterRegistration } = await import('@/backend/services/enduringAgents/runtimeLock');
