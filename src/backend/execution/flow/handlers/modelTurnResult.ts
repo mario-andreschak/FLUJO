@@ -6,7 +6,6 @@ import { FlujoChatMessage } from '@/shared/types/chat';
 import { Result } from '../errors';
 import { decodeToolName } from './toolNamespace';
 import OpenAI from 'openai';
-import { type Model } from '@/shared/types/model';
 import { mapOpenAiUsage } from '@/backend/services/model/adapters/openaiUsage';
 import { requireFunctionToolCalls } from '@/shared/types/openai';
 import { extractAssistantMedia } from '@/backend/services/model/adapters/messageUtils';
