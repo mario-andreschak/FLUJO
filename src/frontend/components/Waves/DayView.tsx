@@ -26,6 +26,7 @@ import RepeatRoundedIcon from '@mui/icons-material/RepeatRounded';
 import PauseCircleOutlineRoundedIcon from '@mui/icons-material/PauseCircleOutlineRounded';
 import type { AutomationMapResponse } from '@/shared/types/waves/automationMap';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useInterval } from '@/frontend/hooks/timing';
 import type { Translator } from '@/frontend/i18n/core';
 import DayViewMiniMonth from './DayViewMiniMonth';
 import {
@@ -595,11 +596,7 @@ export default function DayView({
   );
 
   const clockNow = suppliedNow ?? liveNow;
-  useEffect(() => {
-    if (suppliedNow !== undefined) return;
-    const timer = setInterval(() => setLiveNow(Date.now()), 30_000);
-    return () => clearInterval(timer);
-  }, [suppliedNow]);
+  useInterval(() => setLiveNow(Date.now()), suppliedNow === undefined ? 30_000 : null);
 
   const setDate = useCallback((next: Date) => {
     const normalized = normalizeCalendarDay(next);

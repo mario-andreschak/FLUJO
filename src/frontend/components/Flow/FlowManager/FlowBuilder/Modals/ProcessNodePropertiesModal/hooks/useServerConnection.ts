@@ -272,12 +272,9 @@ const useServerConnection = (open: boolean, node: Flow['nodes'][number] | null, 
     }));
     
     try {
-      // Restart the server
+      // Restarting re-enables the server, which returns once it is connected again.
       await mcpService.restartServer(serverName);
-      
-      // Wait a bit for the server to restart
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
+
       // Load tools for this server
       const result = await mcpService.listServerTools(serverName);
       

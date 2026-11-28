@@ -72,6 +72,7 @@ import UrlWatchPanel from './UrlWatchPanel';
 import FlowEventPanel from './FlowEventPanel';
 import FlowSelector from '@/frontend/components/Chat/FlowSelector';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useDebouncedCallback } from '@/frontend/hooks/timing';
 
 const log = createLogger('frontend/components/PlannedExecutions/ExecutionModal');
 
@@ -354,6 +355,15 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
     return () => observer.disconnect();
   }, [open, execution, scrollContainer]);
 
+  // A smooth scroll settles within this time; the observer follows the user again after it.
+  const releaseAfterSmoothScroll = useDebouncedCallback(() => {
+    programmaticScroll.current = false;
+  }, 500);
+  // Focus waits for the section that holds the control to be drawn.
+  const focusAfterRender = useDebouncedCallback((target: () => HTMLElement | null | undefined) => {
+    target()?.focus();
+  }, 0);
+
   const handleSectionClick = (section: ExecutionSection) => {
     setActiveSection(section);
     programmaticScroll.current = true;
@@ -361,9 +371,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
     if (target && typeof target.scrollIntoView === 'function') {
       target.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
-    window.setTimeout(() => {
-      programmaticScroll.current = false;
-    }, 500);
+    releaseAfterSmoothScroll();
   };
 
   const selectStartRestriction = (restriction: StartRestriction) => {
@@ -414,7 +422,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
 
     if (!section || !focusTarget) return false;
     handleSectionClick(section);
-    window.setTimeout(() => focusTarget?.()?.focus(), 0);
+    focusAfterRender(focusTarget);
     return true;
   };
 
@@ -425,9 +433,9 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
     if (conditionError) {
       setSaveError(conditionError);
       handleSectionClick('when');
-      window.setTimeout(() => {
-        scrollContainer?.querySelector<HTMLElement>('#automation-ai-condition textarea, #automation-ai-condition input')?.focus();
-      }, 0);
+      focusAfterRender(() => scrollContainerRef.current?.querySelector<HTMLElement>(
+        '#automation-ai-condition textarea, #automation-ai-condition input',
+      ));
       return;
     }
     setSaving(true);

@@ -59,6 +59,7 @@ import { getNodeProperties } from './ProcessNodePropertiesModal/utils'; // Adjus
 import { createLogger } from '@/utils/logger';
 import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useDebouncedCallback, useTimeout } from '@/frontend/hooks/timing';
 import { normalizeExcludedSystemPromptSections, type FlujoSystemPromptSectionId } from '@/shared/utils/flujoSystemPrompt';
 
 const log = createLogger('frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal');
@@ -449,25 +450,30 @@ export const ProcessNodePropertiesModal = ({
     }
   }
 
-  // Scroll the opening section into view whenever the modal target or open state changes.
+  // Scroll the opening section into view whenever the modal target or open state changes,
+  // once the dialog content is drawn. The section observer ignores that scroll.
+  const openingTarget = useMemo(() => ({ node, mode, authoringMode }), [node, mode, authoringMode]);
   useEffect(() => {
     if (!open) return;
-    const initialSection = initialProcessSection(mode, authoringMode, node);
     isProgrammaticScroll.current = true;
-    const frame = window.requestAnimationFrame(() => {
-      const target = sectionRefs[initialSection].current;
-      if (target && typeof target.scrollIntoView === 'function') {
-        target.scrollIntoView({ behavior: 'auto', block: 'start' });
-      } else if (scrollContainerRef.current) {
-        scrollContainerRef.current.scrollTop = target?.offsetTop ?? 0;
-      }
-      isProgrammaticScroll.current = false;
-    });
     return () => {
-      window.cancelAnimationFrame(frame);
       isProgrammaticScroll.current = false;
     };
-  }, [node, open, mode, authoringMode]);
+  }, [open, openingTarget]);
+  useTimeout(() => {
+    const target = sectionRefs[initialProcessSection(mode, authoringMode, node)].current;
+    if (target && typeof target.scrollIntoView === 'function') {
+      target.scrollIntoView({ behavior: 'auto', block: 'start' });
+    } else if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = target?.offsetTop ?? 0;
+    }
+    isProgrammaticScroll.current = false;
+  }, open ? 0 : null, openingTarget);
+
+  const releaseProgrammaticScroll = () => { isProgrammaticScroll.current = false; };
+  // A smooth scroll settles within this time; the observer follows the user again after it.
+  const releaseAfterSmoothScroll = useDebouncedCallback(releaseProgrammaticScroll, 700);
+  const releaseAfterJump = useDebouncedCallback(releaseProgrammaticScroll, 0);
 
   // Issue #300: keep the active tab in sync with the section scrolled into view.
   useEffect(() => {
@@ -498,8 +504,7 @@ export const ProcessNodePropertiesModal = ({
     } else if (scrollContainerRef.current) {
       scrollContainerRef.current.scrollTop = target?.offsetTop ?? 0;
     }
-    // Re-enable observer once the smooth scroll has settled.
-    window.setTimeout(() => { isProgrammaticScroll.current = false; }, 700);
+    releaseAfterSmoothScroll();
   };
 
   const handleTaskDividerPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -528,7 +533,7 @@ export const ProcessNodePropertiesModal = ({
     if (activeSection !== 'task') return;
     isProgrammaticScroll.current = true;
     taskRef.current?.scrollIntoView({ block: 'start' });
-    window.setTimeout(() => { isProgrammaticScroll.current = false; }, 0);
+    releaseAfterJump();
   };
 
   const promptBuilderRef = useRef<PromptBuilderRef>(null);

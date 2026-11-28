@@ -616,51 +616,6 @@
       "count": 1
     }
   },
-  "src/frontend/components/Flow/FlowManager/FlowBuilder/CustomNodes/index.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 2
-    }
-  },
-  "src/frontend/components/Flow/FlowManager/FlowBuilder/FlowPreview.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/Flow/FlowManager/FlowBuilder/FlowValidationButton.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 3
-    }
-  },
-  "src/frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 3
-    }
-  },
-  "src/frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal/ServerTools/ServerTools.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 2
-    }
-  },
-  "src/frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal/hooks/useServerConnection.ts": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/Flow/FlowManager/FlowBuilder/NodePalette.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/Flow/FlowManager/FlowBuilder/index.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 5
-    }
-  },
-  "src/frontend/components/Flow/FlowManager/GenerateFlowDialog.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
   "src/frontend/components/HarnessLab/TargetVersions.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -724,37 +679,7 @@
       "count": 2
     }
   },
-  "src/frontend/components/Personas/PersonasGallery.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/Personas/index.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
   "src/frontend/components/PhoneHostBoundary.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/PlannedExecutions/ExecutionModal.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 3
-    }
-  },
-  "src/frontend/components/PlannedExecutions/SchedulePanel.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/PlannedExecutions/WebhookPanel.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/PlannedExecutions/index.tsx": {
     "flujo/no-raw-timers": {
       "count": 1
     }
@@ -841,31 +766,6 @@
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
-    }
-  },
-  "src/frontend/components/Waves/DayView.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/Waves/FactoryObservatoryPanel.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/Waves/PlaygroundCanvas.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/Waves/WaveCanvas.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 2
-    }
-  },
-  "src/frontend/components/Waves/index.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 2
     }
   },
   "src/frontend/components/mcp/MCPCapabilitiesManager/index.tsx": {

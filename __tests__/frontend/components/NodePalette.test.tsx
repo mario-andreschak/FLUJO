@@ -60,4 +60,35 @@ describe('NodePalette', () => {
 
     expect(screen.getByLabelText('Search actions to add')).toHaveFocus();
   });
+
+  const startDrag = () => {
+    const setDragImage = jest.fn();
+    const item = screen.getByRole('button', { name: /Ask AI:/i });
+    fireEvent.dragStart(item, { dataTransfer: { setData: jest.fn(), setDragImage, effectAllowed: '' } });
+    return { item, preview: setDragImage.mock.calls[0][0] as HTMLElement };
+  };
+
+  it('keeps the drag picture off-screen in the page until the drag ends', () => {
+    render(<NodePalette authoringMode="guided" />);
+
+    const { item, preview } = startDrag();
+    expect(preview).toHaveTextContent('Ask AI');
+    expect(preview.isConnected).toBe(true);
+    expect(preview.style.top).toBe('-1000px');
+
+    fireEvent.dragEnd(item);
+    expect(preview.isConnected).toBe(false);
+  });
+
+  it('replaces the drag picture on the next drag and removes it when the palette closes', () => {
+    const view = render(<NodePalette authoringMode="guided" />);
+
+    const first = startDrag().preview;
+    const second = startDrag().preview;
+    expect(first.isConnected).toBe(false);
+    expect(second.isConnected).toBe(true);
+
+    view.unmount();
+    expect(second.isConnected).toBe(false);
+  });
 });

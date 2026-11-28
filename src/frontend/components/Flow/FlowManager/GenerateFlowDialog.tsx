@@ -201,6 +201,7 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
             || event.type === 'step-added'
             || event.type === 'suggestion-decision';
           if (animate && process.env.NODE_ENV !== 'test') {
+            // eslint-disable-next-line flujo/no-raw-timers -- paces the live build animation: the stream reader waits for each step to show, and a hook cannot be awaited
             await new Promise((resolve) => window.setTimeout(resolve, 140));
           }
         }, controller.signal);

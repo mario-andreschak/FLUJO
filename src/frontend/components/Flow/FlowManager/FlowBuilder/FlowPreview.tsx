@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -14,6 +14,7 @@ import { useTheme } from '@mui/material/styles';
 import { Flow, FlowNode } from '@/shared/types/flow';
 import { nodeTypes, edgeTypes } from './Canvas/Canvas';
 import { computeAutoLayout } from './Canvas/utils/autoLayout';
+import { useTimeout } from '@/frontend/hooks/timing';
 
 interface FlowPreviewProps {
   flow: Flow;
@@ -59,13 +60,13 @@ const FlowPreviewInner: React.FC<FlowPreviewProps> = ({
     [relayoutTopToBottom, edges, flow.nodes],
   );
 
-  useEffect(() => {
-    if (!fitViewOnChange || !instanceRef.current) return;
-    const timer = window.setTimeout(() => {
-      void instanceRef.current?.fitView({ padding: 0.18, duration: 260 });
-    }, 40);
-    return () => window.clearTimeout(timer);
-  }, [fitViewOnChange, nodes]);
+  // The first layout is framed by `fitView`; later changes re-frame once the new nodes are drawn.
+  const [firstNodes] = useState(nodes);
+  useTimeout(
+    () => { void instanceRef.current?.fitView({ padding: 0.18, duration: 260 }); },
+    fitViewOnChange && nodes !== firstNodes ? 40 : null,
+    nodes,
+  );
 
   const defaultEdgeOptions = useMemo(
     () => ({

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -27,6 +27,7 @@ import {
   type WaveWindowKey,
 } from './waveTimeline';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useDebouncedCallback, useInterval } from '@/frontend/hooks/timing';
 
 /** Y of the bottom time axis — sits just above the root lane (#209). */
 const AXIS_Y = BASE_Y - 48;
@@ -78,22 +79,15 @@ function WaveCanvasInner({ wave, height = 460 }: WaveCanvasProps) {
   // Click-to-pin (#209): a pinned chain holds open (ignoring hover-out) until the
   // canvas background is clicked. The pin always wins over transient hover.
   const [pinnedKey, setPinnedKey] = useState<string | null>(null);
-  const clearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Grace period so the mouse can travel to a freshly-revealed child.
+  const clearHoverAfterGrace = useDebouncedCallback(() => setHoveredKey(null), 800);
 
   const effectiveKey = pinnedKey ?? hoveredKey;
 
   const hasTimeline = useMemo(() => wave.nodes.some((n) => n.timing.mode === 'timeline'), [wave]);
 
   // 30s tick keeps the "in Xh Ym" labels + drift fresh without thrashing.
-  useEffect(() => {
-    if (!hasTimeline) return;
-    const t = setInterval(() => setNow(Date.now()), 30_000);
-    return () => clearInterval(t);
-  }, [hasTimeline]);
-
-  useEffect(() => () => {
-    if (clearTimer.current) clearTimeout(clearTimer.current);
-  }, []);
+  useInterval(() => setNow(Date.now()), hasTimeline ? 30_000 : null);
 
   const windowMs = WAVE_WINDOWS[windowKey];
 
@@ -188,18 +182,14 @@ function WaveCanvasInner({ wave, height = 460 }: WaveCanvasProps) {
         preventScrolling={true}
         panOnDrag
         onNodeMouseEnter={(_e, node) => {
-          if (clearTimer.current) clearTimeout(clearTimer.current);
+          clearHoverAfterGrace.cancel();
           if (node.type === 'clock' || node.type === 'tick') {
             setHoveredKey(null);
             return;
           }
           setHoveredKey(node.id);
         }}
-        onNodeMouseLeave={() => {
-          if (clearTimer.current) clearTimeout(clearTimer.current);
-          // Grace period so the mouse can travel to a freshly-revealed child.
-          clearTimer.current = setTimeout(() => setHoveredKey(null), 800);
-        }}
+        onNodeMouseLeave={() => clearHoverAfterGrace()}
         onNodeClick={(_e, node) => {
           if (node.type === 'clock' || node.type === 'tick') return;
           // Toggle the pin: click the pinned node again to release it (#209).

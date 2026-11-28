@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Box, Button, Chip, Paper, Stack, Typography } from '@mui/material';
 import type { FactoryObservatorySnapshot } from '@/shared/types/factoryObservatory';
+import { useInterval } from '@/frontend/hooks/timing';
 
 const POLL_MS = 30_000;
 
@@ -45,9 +46,8 @@ export default function FactoryObservatoryPanel() {
   }), []);
   useEffect(() => {
     void refresh();
-    const timer = window.setInterval(() => { void refresh(); }, POLL_MS);
-    return () => window.clearInterval(timer);
   }, [refresh]);
+  useInterval(() => { void refresh(); }, POLL_MS);
   const cells = useMemo(() => treeOrder(snapshot?.cells ?? []), [snapshot]);
   const taskCounts = useMemo(() => {
     const counts = new Map<string, number>();

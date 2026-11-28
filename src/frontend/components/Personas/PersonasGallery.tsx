@@ -17,6 +17,7 @@ import {
 } from '@mui/material';
 import { alpha, useTheme } from '@mui/material/styles';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useInterval } from '@/frontend/hooks/timing';
 
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { PersonaSummary } from '@/frontend/services/personas/summary';
@@ -141,21 +142,20 @@ export default function PersonasGallery({
     };
   }, [fetchPage]);
 
+  const refreshVisible = useCallback(() => {
+    if (document.visibilityState !== 'hidden' && !busy && !loading && !loadingMore && !activeRequest.current) {
+      void load({ force: true, quiet: true, retainCount: items.length });
+    }
+  }, [busy, items.length, load, loading, loadingMore]);
+  useInterval(refreshVisible, 10_000);
   useEffect(() => {
-    const refreshVisible = () => {
-      if (document.visibilityState !== 'hidden' && !busy && !loading && !loadingMore && !activeRequest.current) {
-        void load({ force: true, quiet: true, retainCount: items.length });
-      }
-    };
-    const timer = window.setInterval(refreshVisible, 10_000);
     window.addEventListener('focus', refreshVisible);
     document.addEventListener('visibilitychange', refreshVisible);
     return () => {
-      window.clearInterval(timer);
       window.removeEventListener('focus', refreshVisible);
       document.removeEventListener('visibilitychange', refreshVisible);
     };
-  }, [busy, items.length, load, loading, loadingMore]);
+  }, [refreshVisible]);
 
   const refresh = () => {
     invalidatePersonaSummaryCache(getSelectedWorkspace());

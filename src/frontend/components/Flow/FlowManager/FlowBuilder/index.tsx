@@ -105,6 +105,7 @@ import type { Model } from '@/shared/types/model';
 import type { MCPServerConfig } from '@/shared/types/mcp';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useEditLease } from '@/frontend/hooks/useEditLease';
+import { useDebouncedCallback, useTimeout } from '@/frontend/hooks/timing';
 import { clearEditBase, flowRevision, setEditBase } from '@/frontend/services/sharedItems';
 import EditingNotice from '@/frontend/components/shared/sharedEditing/EditingNotice';
 import ChangeHistoryDialog from '@/frontend/components/shared/sharedEditing/ChangeHistoryDialog';
@@ -309,6 +310,11 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
 
   const [nodes, setNodes] = useState<FlowNode[]>(initialFlow?.nodes || []);
 
+  // The tutorial filters the app picker once the selected step's inspector has opened it.
+  const filterTutorialAppPicker = useDebouncedCallback((query: string) => emitBigTutorialEvent({
+    type: 'filter-app-picker',
+    query,
+  }), 150);
   useEffect(() => {
     const listener = (event: Event) => {
       if (!isBigTutorialEvent(event) || event.detail.type !== 'prepare-app-picker') return;
@@ -317,14 +323,11 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
         ...node,
         selected: node.id === processNodeId,
       })));
-      window.setTimeout(() => emitBigTutorialEvent({
-        type: 'filter-app-picker',
-        query,
-      }), 150);
+      filterTutorialAppPicker(query);
     };
     window.addEventListener(BIG_TUTORIAL_EVENT, listener);
     return () => window.removeEventListener(BIG_TUTORIAL_EVENT, listener);
-  }, []);
+  }, [filterTutorialAppPicker]);
   // Initialize with the *filtered* edges (same rule the init effect applies)
   // so the very first render already matches what history is seeded with —
   // otherwise an unfiltered→filtered diff could itself mark the flow dirty.
@@ -1177,8 +1180,8 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
 
   const showBuilderNotice = useCallback((message: string) => {
     setBuilderNotice(message);
-    setTimeout(() => setBuilderNotice(current => current === message ? null : current), 5000);
   }, []);
+  useTimeout(() => setBuilderNotice(null), builderNotice ? 5000 : null, builderNotice);
 
   const handleCreateNode = useCallback((
     nodeType: NodeType,
@@ -1613,6 +1616,13 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
     nodes,
   ]);
 
+  // Selecting a step redraws its card, so the highlight goes on after that redraw.
+  const highlightNodeCardAfterRedraw = useDebouncedCallback((nodeId: string) => {
+    const element = [...document.querySelectorAll('.react-flow__node')]
+      .find(candidate => candidate.getAttribute('data-id') === nodeId) ?? null;
+    highlightAskFlujoElement(element);
+  }, 0);
+
   const highlightAskFlowNode = useCallback((nodeId: string) => {
     const node = nodes.find(candidate => candidate.id === nodeId);
     if (!node) return false;
@@ -1621,13 +1631,10 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       selected: candidate.id === nodeId,
     })));
     reactFlowInstance?.setCenter(node.position.x, node.position.y, { zoom: 1.2, duration: 450 });
-    window.requestAnimationFrame(() => {
-      const element = [...document.querySelectorAll('.react-flow__node')]
-        .find(candidate => candidate.getAttribute('data-id') === nodeId) ?? null;
-      highlightAskFlujoElement(element);
-    });
+    highlightNodeCardAfterRedraw(nodeId);
     return true;
-  }, [nodes, reactFlowInstance]);
+  }, [highlightNodeCardAfterRedraw, nodes, reactFlowInstance]);
+  const highlightAskFlowNodeAfterRedraw = useDebouncedCallback(highlightAskFlowNode, 0);
 
   const handleAskFlujoAction = useCallback((action: AskFlujoUiAction) => {
     if (action.target.kind === 'flow-node' && action.target.id && action.type === 'highlight') {
@@ -1685,12 +1692,12 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
       }
       setNodes(current => current.map(node => node.id === nodeId ? updatedNode : node));
       markDirty();
-      window.requestAnimationFrame(() => highlightAskFlowNode(nodeId));
+      highlightAskFlowNodeAfterRedraw(nodeId);
       return { success: true, message: 'Updated the step in the unsaved flow. Review it, then Save.' };
     }
 
     return { success: false, message: 'That flow UI target is not supported.' };
-  }, [highlightAskFlowNode, markDirty, nodes, validateFlowName]);
+  }, [highlightAskFlowNode, highlightAskFlowNodeAfterRedraw, markDirty, nodes, validateFlowName]);
 
   useAskFlujoPage({
     scopeId: `flow:${currentFlow.id}`,
@@ -1783,11 +1790,12 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
   // opt-in action (kept out of the primary toolbar; reachable from the
   // overflow "more actions" menu) since it no longer doubles as the default
   // de-overlap action. fitView re-frames after the new positions are applied.
+  const fitViewAfterRedraw = useDebouncedCallback(() => reactFlowInstance?.fitView({ padding: 0.2 }), 0);
   const handleRelayout = useCallback(() => {
     log.debug('handleRelayout: re-arranging flow nodes top-to-bottom');
     setNodes(prev => computeAutoLayout(prev, edges));
-    requestAnimationFrame(() => reactFlowInstance?.fitView({ padding: 0.2 }));
-  }, [edges, reactFlowInstance]);
+    fitViewAfterRedraw();
+  }, [edges, fitViewAfterRedraw]);
 
   const updateNodeData = useCallback((nodeId: string, data: FlowNode['data']) => {
     log.debug(`handleNodeUpdate: Updating node ${nodeId} properties`);

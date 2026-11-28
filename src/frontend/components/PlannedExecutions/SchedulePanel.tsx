@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useId, useMemo, useState } from 'react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   Accordion,
   AccordionDetails,
@@ -20,6 +20,7 @@ import {
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { plannedExecutionsService, type SchedulePreviewResult } from '@/frontend/services/plannedExecutions';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useTimeout } from '@/frontend/hooks/timing';
 
 type PresetMode = 'seconds' | 'minutes' | 'hours' | 'daily' | 'weekdays' | 'custom';
 
@@ -116,21 +117,24 @@ const SchedulePanel = ({
     }
   }, [cron]);
 
-  // Debounced live preview of the next fire times.
+  // Debounced live preview of the next fire times. Only the answer for the
+  // latest inputs is kept, even when an older request finishes later.
+  const previewRequest = useMemo(
+    () => ({ cron, timezone, attempt: previewAttempt }),
+    [cron, timezone, previewAttempt],
+  );
+  const latestPreviewRequest = useRef(previewRequest);
   useEffect(() => {
-    let cancelled = false;
-    const handle = setTimeout(() => {
-      plannedExecutionsService
-        .previewSchedule(cron, timezone)
-        .then(result => {
-          if (!cancelled) setPreviewState({ cron, timezone, attempt: previewAttempt, result });
-        });
-    }, 300);
-    return () => {
-      cancelled = true;
-      clearTimeout(handle);
-    };
-  }, [cron, timezone, previewAttempt]);
+    latestPreviewRequest.current = previewRequest;
+  }, [previewRequest]);
+  useTimeout(() => {
+    const request = previewRequest;
+    void plannedExecutionsService
+      .previewSchedule(request.cron, request.timezone)
+      .then(result => {
+        if (latestPreviewRequest.current === request) setPreviewState({ ...request, result });
+      });
+  }, 300, previewRequest);
 
   return (
     <Box sx={{ minWidth: 0 }}>

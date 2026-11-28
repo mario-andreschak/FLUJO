@@ -66,6 +66,7 @@ import {
 import { useWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
 import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
 import { useListScrollNav } from '@/frontend/hooks/useListScrollNav';
+import { useInterval } from '@/frontend/hooks/timing';
 import CollapsibleCardSection from '@/frontend/components/shared/CollapsibleCardSection';
 import PageHeader from '@/frontend/components/shared/PageHeader';
 import StickySearchBar from '@/frontend/components/shared/StickySearchBar';
@@ -185,15 +186,11 @@ const PlannedExecutionsManager = () => {
   // "Running… → completed/error" transition surfaces within a few seconds
   // instead of up to 10s (issue #50); relax back to 10s when nothing runs.
   const anyRunning = entries.some(entry => entry.status.running);
-  useEffect(() => {
-    const intervalMs = anyRunning ? 3_000 : 10_000;
-    const timer = setInterval(() => {
-      if (!document.hidden && !refreshingRef.current) {
-        void refresh();
-      }
-    }, intervalMs);
-    return () => clearInterval(timer);
-  }, [refresh, anyRunning]);
+  useInterval(() => {
+    if (!document.hidden && !refreshingRef.current) {
+      void refresh();
+    }
+  }, anyRunning ? 3_000 : 10_000);
 
   const handleTogglePaused = async (nextPaused: boolean) => {
     if (!loaded || pausePendingRef.current || deletePendingRef.current) return;

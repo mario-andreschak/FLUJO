@@ -16,6 +16,7 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import CheckIcon from '@mui/icons-material/Check';
 import { WebhookTriggerConfig } from '@/shared/types/plannedExecution';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useTimeout } from '@/frontend/hooks/timing';
 import Trans from '@/frontend/components/shared/Trans';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 
@@ -36,6 +37,7 @@ interface WebhookPanelProps {
 const WebhookPanel = ({ config, onChange, executionId, saved }: WebhookPanelProps) => {
   const { t } = useI18n();
   const [copied, setCopied] = useState<string | null>(null);
+  useTimeout(() => setCopied(null), copied ? 1500 : null, copied);
 
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
   const url = withWorkspaceUrl(`${origin}/api/webhooks/${encodeURIComponent(executionId)}`);
@@ -44,7 +46,6 @@ const WebhookPanel = ({ config, onChange, executionId, saved }: WebhookPanelProp
     try {
       await navigator.clipboard.writeText(value);
       setCopied(label);
-      setTimeout(() => setCopied(null), 1500);
     } catch {
       /* clipboard unavailable */
     }

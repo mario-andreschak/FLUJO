@@ -51,6 +51,7 @@ import {
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useInterval } from '@/frontend/hooks/timing';
 import { v4 as uuidv4 } from 'uuid';
 
 import ServerCard from '@/frontend/components/mcp/MCPServerManager/ServerCard';
@@ -228,30 +229,26 @@ export default function PersonasDesk({ initialPersonaId }: PersonasDeskProps) {
     invalidatePersonaSummaryCache();
   }, [initialPersonaId]);
 
+  const watchingSelected = Boolean(initialPersonaId && selected);
+  const selectedWorking = !!selected && (
+    selected.persona.lifecycleState === 'busy'
+    || selected.persona.lifecycleState === 'waiting'
+    || selected.runtime.projection.mailbox.ready > 0
+    || selected.runtime.projection.mailbox.queued > 0
+  );
+  const refreshVisibleSelected = useCallback(() => {
+    if (document.visibilityState !== 'hidden') void refreshSelected().catch(() => undefined);
+  }, [refreshSelected]);
+  useInterval(refreshVisibleSelected, !watchingSelected ? null : selectedWorking ? 3_000 : 10_000);
   useEffect(() => {
-    if (!initialPersonaId || !selected) return;
-    const working = selected.persona.lifecycleState === 'busy'
-      || selected.persona.lifecycleState === 'waiting'
-      || selected.runtime.projection.mailbox.ready > 0
-      || selected.runtime.projection.mailbox.queued > 0;
-    const refreshVisible = () => {
-      if (document.visibilityState !== 'hidden') void refreshSelected().catch(() => undefined);
-    };
-    const timer = window.setInterval(() => {
-      refreshVisible();
-    }, working ? 3_000 : 10_000);
-    window.addEventListener('focus', refreshVisible);
-    document.addEventListener('visibilitychange', refreshVisible);
+    if (!watchingSelected) return;
+    window.addEventListener('focus', refreshVisibleSelected);
+    document.addEventListener('visibilitychange', refreshVisibleSelected);
     return () => {
-      window.clearInterval(timer);
-      window.removeEventListener('focus', refreshVisible);
-      document.removeEventListener('visibilitychange', refreshVisible);
+      window.removeEventListener('focus', refreshVisibleSelected);
+      document.removeEventListener('visibilitychange', refreshVisibleSelected);
     };
-  }, [
-    initialPersonaId,
-    refreshSelected,
-    selected,
-  ]);
+  }, [refreshVisibleSelected, watchingSelected]);
 
   const mutate = useCallback(async (action: () => Promise<unknown>, success?: string) => {
     setBusy(true);
