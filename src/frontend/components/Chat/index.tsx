@@ -25,6 +25,9 @@ import DataObjectRoundedIcon from '@mui/icons-material/DataObjectRounded';
 import { useLocalStorage, StorageKey } from '@/utils/storage';
 import ChatHistory from './ChatHistory';
 import { LocalOnlyConversationIds } from './localOnlyConversations';
+import { startSidebarRefresh } from './sidebarRefresh';
+import { withDeadline } from './deadline';
+import { useBatchedCallback, useTimeout } from '@/frontend/hooks/timing';
 import { useKeyChange, useKeyedState } from './hooks/useKeyedState';
 import { readWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
 import { CONVERSATION_PINS_PREFERENCE } from '@/utils/shared/conversationPins';
@@ -546,8 +549,8 @@ const Chat: React.FC = () => {
   // in flight (issue #177). Keyed by conversation id; drained one-at-a-time by
   // the drain effect once the conversation is idle and unblocked.
   const [queuedMessages, setQueuedMessages] = useState<QueueMap>({});
-  // Guards the drain effect against re-entrancy (one dequeue per idle window).
-  const drainingRef = useRef<boolean>(false);
+  // True while a queued message is being sent (one dequeue per idle window).
+  const [queueDraining, setQueueDraining] = useState(false);
   // Keep this failure as a key so changing language also updates a visible
   // pending-input error. Its recovery belongs to the current input controls.
   const pendingInputErrorKeys = {
@@ -907,13 +910,13 @@ const Chat: React.FC = () => {
   const openaiRef = useRef<OpenAI | null>(null);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
-  const pendingModelDeltasRef = useRef<ModelDeltaEvent[]>([]);
-  const modelDeltaFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const flushModelDeltasRef = useRef<() => void>(() => undefined);
   const eventStreamGenerationRef = useRef(0);
-  const eventStreamRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingToolProgressRef = useRef<Extract<ExecutionEvent, { type: 'tool:progress' }> | null>(null);
-  const toolProgressFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // After the server resets a stream, reconnect a few seconds later from this position.
+  const [streamRecovery, setStreamRecovery] = useState<{
+    conversationId: string;
+    nextSeq: number;
+    generation: number;
+  } | null>(null);
   // The debugger toggle is defined before handleDebugClose (it is handed to the
   // composer); this ref lets it call the latest close/detach implementation.
   const handleDebugCloseRef = useRef<(() => Promise<void>) | null>(null);
@@ -1200,92 +1203,12 @@ const Chat: React.FC = () => {
     fetchConversations();
   }, []); // Empty array ensures this runs only once on mount
 
-  // Keep the sidebar live from the server's filtered global lifecycle stream.
-  // A slow timeout remains as a safety net for non-execution changes (for
-  // example, another tab creating or renaming an idle conversation). Unlike an
-  // interval, it schedules only after the previous request settles, and all
-  // refreshes pause while the tab is hidden.
-  useEffect(() => {
-    const FALLBACK_REFRESH_MS = 30_000;
-    const EVENT_DEBOUNCE_MS = 200;
-    const MIN_EVENT_REFRESH_MS = 5_000;
-    let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
-    let eventTimer: ReturnType<typeof setTimeout> | null = null;
-    let sidebarEvents: EventSource | null = null;
-    let disposed = false;
-    let lastRefreshStartedAt = 0;
-
-    const clearTimers = () => {
-      if (fallbackTimer) clearTimeout(fallbackTimer);
-      if (eventTimer) clearTimeout(eventTimer);
-      fallbackTimer = null;
-      eventTimer = null;
-    };
-    const scheduleFallback = () => {
-      if (fallbackTimer) clearTimeout(fallbackTimer);
-      if (disposed || document.visibilityState !== 'visible') return;
-      fallbackTimer = setTimeout(() => {
-        fallbackTimer = null;
-        lastRefreshStartedAt = Date.now();
-        void fetchConversations(undefined, { silent: true }).finally(scheduleFallback);
-      }, FALLBACK_REFRESH_MS);
-    };
-    const refreshFromEvent = () => {
-      if (disposed || document.visibilityState !== 'visible') return;
-      // One scheduled refresh represents every lifecycle event in its window.
-      // This preserves the old five-second worst-case cadence under a large
-      // subflow queue instead of turning each child start/done into a scan.
-      if (eventTimer) return;
-      const sinceLastRefresh = Date.now() - lastRefreshStartedAt;
-      const delay = Math.max(EVENT_DEBOUNCE_MS, MIN_EVENT_REFRESH_MS - sinceLastRefresh);
-      eventTimer = setTimeout(() => {
-        eventTimer = null;
-        lastRefreshStartedAt = Date.now();
-        void fetchConversations(undefined, { silent: true }).finally(scheduleFallback);
-      }, delay);
-    };
-    const connect = () => {
-      if (sidebarEvents || disposed || document.visibilityState !== 'visible') return;
-      sidebarEvents = chatService.subscribeToSidebarEvents({
-        onEvent: refreshFromEvent,
-        onReset: () => {
-          if (disposed) return;
-          clearTimers();
-          disconnect();
-          lastRefreshStartedAt = Date.now();
-          void fetchConversations(undefined, { silent: true }).finally(() => {
-            if (disposed || document.visibilityState !== 'visible' || sidebarEvents) return;
-            eventTimer = setTimeout(() => { eventTimer = null; connect(); scheduleFallback(); }, 3000);
-          });
-        },
-      });
-    };
-    const disconnect = () => {
-      sidebarEvents?.close();
-      sidebarEvents = null;
-    };
-    const onVisibilityChange = () => {
-      if (document.visibilityState !== 'visible') {
-        clearTimers();
-        disconnect();
-        return;
-      }
-      connect();
-      lastRefreshStartedAt = Date.now();
-      void fetchConversations(undefined, { silent: true }).finally(scheduleFallback);
-    };
-
-    lastRefreshStartedAt = Date.now(); // the mount effect just started the initial list load
-    connect();
-    scheduleFallback();
-    document.addEventListener('visibilitychange', onVisibilityChange);
-    return () => {
-      disposed = true;
-      clearTimers();
-      disconnect();
-      document.removeEventListener('visibilitychange', onVisibilityChange);
-    };
-  }, [fetchConversations]);
+  // Keep the sidebar live from the server's filtered global lifecycle stream
+  // (sidebarRefresh.ts says how often and when it pauses).
+  useEffect(() => startSidebarRefresh({
+    refresh: () => fetchConversations(undefined, { silent: true }),
+    subscribe: (handlers) => chatService.subscribeToSidebarEvents(handlers),
+  }), [fetchConversations]);
 
   const hydratePendingInputs = useCallback((id: string, snapshot: PendingInputSnapshot | undefined, generation: number) => {
     if (!snapshot || generation !== pendingInputSnapshotGenerationRef.current || stoppedConversationIdsRef.current.has(id)) return;
@@ -1510,11 +1433,11 @@ const Chat: React.FC = () => {
 
   // The child latches the positive auto-launch command. Retire transient ids so
   // a later render-window remount cannot replay the same historical launch.
-  useEffect(() => {
-    if (autoOpenMcpAppResultIds.size === 0) return undefined;
-    const timer = window.setTimeout(() => setAutoOpenMcpAppResultIds(new Set()), 1_500);
-    return () => window.clearTimeout(timer);
-  }, [autoOpenMcpAppResultIds]);
+  useTimeout(
+    () => setAutoOpenMcpAppResultIds(NO_KEYS),
+    autoOpenMcpAppResultIds.size === 0 ? null : 1_500,
+    autoOpenMcpAppResultIds,
+  );
 
   const recoveryParentSummary = detailedConversation?.parentConversationId
     ? conversationList.find((conversation) => conversation.id === detailedConversation.parentConversationId)
@@ -2043,11 +1966,7 @@ const Chat: React.FC = () => {
 
   // Clear the highlight a couple of seconds after landing so it doesn't linger
   // forever, and reset it whenever the viewed conversation changes.
-  useEffect(() => {
-    if (!anchorMessageId) return;
-    const timeout = window.setTimeout(() => setAnchorMessageId(null), 4000);
-    return () => window.clearTimeout(timeout);
-  }, [anchorMessageId]);
+  useTimeout(() => setAnchorMessageId(null), anchorMessageId ? 4000 : null, anchorMessageId);
   useKeyChange(currentConversationId, () => setAnchorMessageId(null));
 
   // --- Quick Chat (issue #61): a model + optional MCP servers, no saved flow ---
@@ -2117,14 +2036,9 @@ const Chat: React.FC = () => {
   }, []);
 
   // --- Live execution event stream (SSE) ---
-  const flushToolProgress = useCallback(() => {
-    if (toolProgressFlushTimerRef.current !== null) {
-      clearTimeout(toolProgressFlushTimerRef.current);
-      toolProgressFlushTimerRef.current = null;
-    }
-    const event = pendingToolProgressRef.current;
-    pendingToolProgressRef.current = null;
-    if (!event) return;
+  // Tool progress commits at most every TOOL_PROGRESS_COMMIT_INTERVAL_MS; the newest event wins.
+  const enqueueToolProgress = useBatchedCallback<Extract<ExecutionEvent, { type: 'tool:progress' }>>((events) => {
+    const event = events[events.length - 1];
     if (event.laneIndex != null) {
       setLiveLanes(prev => applyLaneEvent(prev, event));
     }
@@ -2135,35 +2049,37 @@ const Chat: React.FC = () => {
       startedAt: prev?.startedAt ?? Date.now(),
       lastEventAt: Date.now(),
     }));
-  }, []);
+  }, TOOL_PROGRESS_COMMIT_INTERVAL_MS);
+  const flushToolProgress = enqueueToolProgress.flush;
 
-  const enqueueToolProgress = useCallback((event: Extract<ExecutionEvent, { type: 'tool:progress' }>) => {
-    pendingToolProgressRef.current = event;
-    if (toolProgressFlushTimerRef.current !== null) return;
-    toolProgressFlushTimerRef.current = setTimeout(
-      flushToolProgress,
-      TOOL_PROGRESS_COMMIT_INTERVAL_MS,
-    );
-  }, [flushToolProgress]);
+  // Cap transcript reconciliation at 10 fps while preserving every byte of
+  // the streamed response. The final/non-delta event flushes synchronously,
+  // so this introduces no ordering gap at model or run completion.
+  const enqueueModelDelta = useBatchedCallback<ModelDeltaEvent>((pending) => {
+    setDetailedConversation(prev => prev ? applyModelDeltaBatch(prev, pending) : prev);
+    setLiveStats(prev => ({
+      totalTokens: prev?.totalTokens ?? 0,
+      ...(prev?.tokensNotReported ? { tokensNotReported: true } : {}),
+      activeNode: prev?.activeNode ?? null,
+      startedAt: prev?.startedAt ?? Date.now(),
+      lastEventAt: Date.now(),
+    }));
+  }, MODEL_DELTA_COMMIT_INTERVAL_MS);
+  const flushModelDeltas = enqueueModelDelta.flush;
 
   const closeEventStream = useCallback(() => {
     eventStreamGenerationRef.current++;
-    if (eventStreamRetryTimerRef.current !== null) clearTimeout(eventStreamRetryTimerRef.current);
-    eventStreamRetryTimerRef.current = null;
+    setStreamRecovery(null);
     // Preserve any final delta-only burst even when navigation/unmount closes
     // the stream before a terminal non-delta event arrives.
-    flushModelDeltasRef.current();
-    if (toolProgressFlushTimerRef.current !== null) {
-      clearTimeout(toolProgressFlushTimerRef.current);
-      toolProgressFlushTimerRef.current = null;
-    }
-    pendingToolProgressRef.current = null;
+    flushModelDeltas();
+    enqueueToolProgress.cancel();
     if (eventSourceRef.current) {
       log.debug('Closing execution event stream');
       eventSourceRef.current.close();
       eventSourceRef.current = null;
     }
-  }, []);
+  }, [enqueueToolProgress, flushModelDeltas]);
 
   // Patch one conversation's sidebar status in place. No re-sort: a status
   // change alone must not reshuffle the list; identity is kept when unchanged.
@@ -2179,38 +2095,6 @@ const Chat: React.FC = () => {
     },
     []
   );
-
-  const flushModelDeltas = useCallback(() => {
-    if (modelDeltaFlushTimerRef.current !== null) {
-      clearTimeout(modelDeltaFlushTimerRef.current);
-      modelDeltaFlushTimerRef.current = null;
-    }
-    const pending = pendingModelDeltasRef.current;
-    if (pending.length === 0) return;
-    pendingModelDeltasRef.current = [];
-
-    setDetailedConversation(prev => prev ? applyModelDeltaBatch(prev, pending) : prev);
-    setLiveStats(prev => ({
-      totalTokens: prev?.totalTokens ?? 0,
-      ...(prev?.tokensNotReported ? { tokensNotReported: true } : {}),
-      activeNode: prev?.activeNode ?? null,
-      startedAt: prev?.startedAt ?? Date.now(),
-      lastEventAt: Date.now(),
-    }));
-  }, []);
-  useLayoutEffect(() => { flushModelDeltasRef.current = flushModelDeltas; }, [flushModelDeltas]);
-
-  const enqueueModelDelta = useCallback((event: ModelDeltaEvent) => {
-    pendingModelDeltasRef.current.push(event);
-    if (modelDeltaFlushTimerRef.current !== null) return;
-    // Cap transcript reconciliation at 10 fps while preserving every byte of
-    // the streamed response. The final/non-delta event flushes synchronously,
-    // so this introduces no ordering gap at model or run completion.
-    modelDeltaFlushTimerRef.current = setTimeout(
-      flushModelDeltas,
-      MODEL_DELTA_COMMIT_INTERVAL_MS,
-    );
-  }, [flushModelDeltas]);
 
   // Apply a single execution event from the SSE stream to local UI state.
   const applyExecutionEvent = useCallback((event: ExecutionEvent) => {
@@ -2707,7 +2591,8 @@ const Chat: React.FC = () => {
     // Lane rows are rebuilt from the replay; without this, rows from a
     // previously-viewed conversation would merge with the replayed ones.
     setLiveLanes(EMPTY_LIVE_LANES);
-    return new Promise<void>((resolve) => {
+    // Safety: never block the run for more than ~1.5s waiting to connect.
+    return withDeadline(new Promise<void>((resolve) => {
       let settled = false;
       const settle = () => {
         if (!settled) {
@@ -2742,25 +2627,30 @@ const Chat: React.FC = () => {
               const recoveryGeneration = eventStreamGenerationRef.current;
               void fetchDetailedConversation(conversationId).then(() => {
                 if (eventStreamGenerationRef.current !== recoveryGeneration || currentConversationIdRef.current !== conversationId) return;
-                eventStreamRetryTimerRef.current = setTimeout(() => {
-                  eventStreamRetryTimerRef.current = null;
-                  if (eventStreamGenerationRef.current !== recoveryGeneration || currentConversationIdRef.current !== conversationId) return;
-                  void openEventStream(conversationId, control.nextSeq, { activityOnly: true });
-                }, 3000);
+                setStreamRecovery({ conversationId, nextSeq: control.nextSeq, generation: recoveryGeneration });
               }).catch(err => log.warn('Failed to recover execution snapshot', { conversationId, err }));
             },
           },
           fromSeq,
           replayOptions,
         );
-        // Safety: never block the run for more than ~1.5s waiting to connect.
-        setTimeout(settle, 1500);
       } catch (err) {
         log.error('Failed to open execution event stream', { conversationId, err });
         settle();
       }
-    });
+    }), 1500, () => undefined);
   }, [applyExecutionEvent, closeEventStream, fetchDetailedConversation, refreshPendingInputs]);
+
+  useTimeout(() => {
+    const recovery = streamRecovery;
+    setStreamRecovery(null);
+    if (
+      !recovery
+      || eventStreamGenerationRef.current !== recovery.generation
+      || currentConversationIdRef.current !== recovery.conversationId
+    ) return;
+    void openEventStream(recovery.conversationId, recovery.nextSeq, { activityOnly: true });
+  }, streamRecovery ? 3000 : null, streamRecovery);
 
   // Re-attach to a run that is still in progress on the backend — e.g. after
   // navigating to another page (which unmounts Chat and tears down the stream)
@@ -5090,30 +4980,30 @@ const Chat: React.FC = () => {
   // and unblocked (issue #177). FIFO, one run at a time: pop the head and push
   // it through the normal send path. Never drains while a run is in flight,
   // awaiting tool approval, paused in the debugger, ended in error, or was just
-  // stopped by the user. `drainingRef` guards against re-entrancy so a single
+  // stopped by the user. `queueDraining` guards against re-entrancy so a single
   // idle window sends exactly one queued message; the next drains after that
-  // run's run:done flips runningConvs back off.
-  useEffect(() => {
+  // run's run:done flips runningConvs back off. `queueDraining` is state, so
+  // the end of a send is itself a reason to look at the queue again.
+  // Sending relies on detailedConversation being the viewed conversation.
+  const queueHead = currentConversationId && detailedConversation?.id === currentConversationId
+    ? peekMsgQueue(queuedMessages, currentConversationId)
+    : undefined;
+  const queueDrainable = !queueDraining && !!queueHead && !!currentConversationId && canDrainQueue({
+    running: runningConvs.has(currentConversationId),
+    pendingApproval: !!pendingToolCalls,
+    debugPaused: isDebugPaused,
+    hasError: currentConversationSummary?.status === 'error',
+    stopped: viewedConversationStopped,
+  });
+  useTimeout(() => {
     const convId = currentConversationId;
-    if (!convId || drainingRef.current) return;
-    // Sending relies on detailedConversation being the viewed conversation.
-    if (!detailedConversation || detailedConversation.id !== convId) return;
-    const head = peekMsgQueue(queuedMessages, convId);
-    if (!head) return;
-    const eligible = canDrainQueue({
-      running: runningConvs.has(convId),
-      pendingApproval: !!pendingToolCalls,
-      debugPaused: isDebugPaused,
-      hasError: currentConversationSummary?.status === 'error',
-      stopped: viewedConversationStopped,
-    });
-    if (!eligible) return;
-    drainingRef.current = true;
+    if (!convId || !queueHead || !queueDrainable) return;
+    setQueueDraining(true);
     // Non-lossy drain (#221): peek the head first; only remove it from the queue
     // AFTER the send has committed the optimistic bubble. On failure, re-enqueue
     // at the front so the message is retried and never silently dropped.
-    const capturedHead = head; // close over the identity
-    const timer = setTimeout(async () => {
+    const capturedHead = queueHead; // close over the identity
+    void (async () => {
       try {
         // Dequeue by id (not position) just before we send, so the pending
         // bubble disappears from the "synthetic" layer and gets promoted to a
@@ -5129,25 +5019,10 @@ const Chat: React.FC = () => {
         // Send failed — put it back at the front so it is the next to drain.
         setQueuedMessages(prev => requeueFrontMsg(prev, convId, capturedHead));
       } finally {
-        drainingRef.current = false;
+        setQueueDraining(false);
       }
-    }, 0);
-    return () => clearTimeout(timer);
-    // handleSendMessage is intentionally omitted (stable behavior; including it
-    // would re-run this effect every render on its fresh identity).
-  }, [
-    currentConversationId,
-    detailedConversation,
-    queuedMessages,
-    runningConvs,
-    pendingToolCalls,
-    isDebugPaused,
-    currentConversationSummary?.status,
-    viewedConversationStopped,
-  ]);
-
-  // ChatHistory is memoized because this parent updates for every streamed chat
-  // event. These wrappers keep its action props stable while always invoking
+    })();
+  }, queueDrainable ? 0 : null, queuedMessages);
   // the latest implementation/closure.
   const sidebarDeleteConversation = useStableCallback(deleteConversation);
   const sidebarBulkDeleteConversations = useStableCallback(bulkDeleteConversations);

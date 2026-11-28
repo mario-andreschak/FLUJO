@@ -87,6 +87,7 @@ import StickySearchBar from '@/frontend/components/shared/StickySearchBar';
 import ProjectsPanel from '@/frontend/components/Projects/ProjectsPanel';
 import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
 import { useKeyedState } from './hooks/useKeyedState';
+import { useAnimationFrame, useTimeout } from '@/frontend/hooks/timing';
 
 interface ChatHistoryProps {
   conversations: ConversationListItem[]; // Use ConversationListItem[]
@@ -313,46 +314,47 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   // matching page. Further pages are explicit via the same Load more control as
   // normal sidebar browsing. This prevents a single keystroke from launching a
   // full cursor traversal of the entire conversation collection.
+  // Each query gets its own request signal; a newer query aborts the older one at once.
   React.useEffect(() => {
-    const q = trimmedSearch;
-    if (q.length === 0) {
+    if (trimmedSearch.length === 0) {
       searchAbortRef.current?.abort();
       searchAbortRef.current = null;
-      return;
+      return undefined;
     }
-    const key = `${searchDimension}\u0000${originFilter}\u0000${q}`;
     const controller = new AbortController();
     searchAbortRef.current?.abort();
     searchAbortRef.current = controller;
-    const timer = setTimeout(() => {
-      chatService.listConversationPage({
-        limit: SEARCH_PAGE_SIZE,
-        search: q,
-        dimension: searchDimension,
-        ...(originFilter !== 'all' ? { origin: originFilter } : {}),
-        signal: controller.signal,
-      })
-        .then((page) => {
-          if (controller.signal.aborted) return;
-          setSearchPage({ key, ...page });
-        })
-        .catch((error: unknown) => {
-          if (controller.signal.aborted || (error as { name?: string })?.name === 'AbortError') return;
-          setSearchPage({ key, items: [], total: 0, hasMore: false });
-          setSearchErrorKey(key);
-        })
-        .finally(() => {
-          if (searchAbortRef.current === controller && !controller.signal.aborted) {
-            setIsSearching(false);
-          }
-        });
-    }, 300);
     return () => {
-      clearTimeout(timer);
       controller.abort();
       if (searchAbortRef.current === controller) searchAbortRef.current = null;
     };
-  }, [trimmedSearch, searchDimension, originFilter]);
+  }, [searchKey]);
+  useTimeout(() => {
+    const controller = searchAbortRef.current;
+    if (!controller || controller.signal.aborted) return;
+    const key = searchKey;
+    chatService.listConversationPage({
+      limit: SEARCH_PAGE_SIZE,
+      search: trimmedSearch,
+      dimension: searchDimension,
+      ...(originFilter !== 'all' ? { origin: originFilter } : {}),
+      signal: controller.signal,
+    })
+      .then((page) => {
+        if (controller.signal.aborted) return;
+        setSearchPage({ key, ...page });
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted || (error as { name?: string })?.name === 'AbortError') return;
+        setSearchPage({ key, items: [], total: 0, hasMore: false });
+        setSearchErrorKey(key);
+      })
+      .finally(() => {
+        if (searchAbortRef.current === controller && !controller.signal.aborted) {
+          setIsSearching(false);
+        }
+      });
+  }, trimmedSearch.length > 0 ? 300 : null, searchKey);
 
   const loadMoreSearchResults = React.useCallback(async () => {
     const page = currentSearchPage;
@@ -642,6 +644,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
   const pendingRevealKeyRef = React.useRef<number | null>(null);
   const revealAttemptsRef = React.useRef(0);
   const [revealAttempt, setRevealAttempt] = React.useState(0);
+  const requestFrame = useAnimationFrame();
 
   React.useEffect(() => {
     if (!revealRequest) return;
@@ -702,7 +705,7 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
     //    they have committed open), or scroll the mounted row once.
     //    `block: 'nearest'` keeps an already visible row exactly where it is
     //    instead of re-centering the list.
-    const frame = window.requestAnimationFrame(() => {
+    return requestFrame(() => {
       if (collapsedAncestors.length > 0) {
         setExpandedChains((prev) => {
           const next = { ...prev };
@@ -729,7 +732,6 @@ const ChatHistory: React.FC<ChatHistoryProps> = ({
       }
       setRevealAttempt((attempt) => attempt + 1);
     });
-    return () => window.cancelAnimationFrame(frame);
   }, [
     revealRequest,
     currentConversationId,

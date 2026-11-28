@@ -26,6 +26,8 @@ import { createLogger } from '@/utils/logger';
 import { StartNode, ProcessNode, FinishNode, MCPNode, SubflowNode, ResourceNode, SignalNode } from '@/frontend/components/Flow/FlowManager/FlowBuilder/CustomNodes';
 import { CustomEdge, MCPEdge, ResourceEdge } from '@/frontend/components/Flow/FlowManager/FlowBuilder/CustomEdges';
 import { LiveActivity, LIVE_HIGHLIGHT_TTL_MS } from '@/utils/shared/liveActivity';
+import { useInterval } from '@/frontend/hooks/timing';
+import { useKeyedState } from './hooks/useKeyedState';
 
 const log = createLogger('frontend/components/Chat/ExecutedFlowPanel');
 
@@ -135,17 +137,15 @@ const ExecutedFlowPanel: React.FC<ExecutedFlowPanelProps> = ({
   // entry is younger than the TTL, a low-frequency interval bumps `now` so the
   // pulse fades; it self-stops once everything has aged out.
   const [now, setNow] = useState<number>(() => Date.now());
-  useEffect(() => {
-    if (!liveActivity) return;
-    const hasYoung = () =>
-      Object.values(liveActivity.byNode).some(e => Date.now() - e.ts < LIVE_HIGHLIGHT_TTL_MS);
-    if (!hasYoung()) return;
-    const interval = setInterval(() => {
-      setNow(Date.now());
-      if (!hasYoung()) clearInterval(interval);
-    }, 350);
-    return () => clearInterval(interval);
-  }, [liveActivity]);
+  // Each new activity map starts the fade again.
+  const [fading, setFading] = useKeyedState(liveActivity, Boolean(liveActivity));
+  useInterval(() => {
+    const current = Date.now();
+    setNow(current);
+    const young = !!liveActivity
+      && Object.values(liveActivity.byNode).some(e => current - e.ts < LIVE_HIGHLIGHT_TTL_MS);
+    if (!young) setFading(false);
+  }, fading ? 350 : null);
 
   // Derived nodes for display: executed nodes get a green border + soft glow;
   // the currently-running node (live) pulses in the primary colour; every other

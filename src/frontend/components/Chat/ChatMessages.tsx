@@ -60,6 +60,7 @@ import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import { copyText } from '@/frontend/components/shared/CopyLinkButton';
 import RevertPreviewDialog from './RevertPreviewDialog';
 import { useKeyedState } from './hooks/useKeyedState';
+import { useAnimationFrame, useTimeout } from '@/frontend/hooks/timing';
 import type { QueuedMessage } from './chatQueue'; // #221: inline pending bubbles
 import OpenAI from 'openai'; // Import OpenAI types for tool calls
 import { displayToolName } from '@/utils/shared/common'; // Friendly tool-name decode
@@ -1235,11 +1236,7 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
     setCopyStatus(copied ? 'copied' : 'failed');
   }, [copyableText]);
 
-  useEffect(() => {
-    if (copyStatus === 'idle') return;
-    const timeout = window.setTimeout(() => setCopyStatus('idle'), 1500);
-    return () => window.clearTimeout(timeout);
-  }, [copyStatus]);
+  useTimeout(() => setCopyStatus('idle'), copyStatus === 'idle' ? null : 1500, copyStatus);
 
   const copyLabel = copyStatus === 'copied'
     ? t('chat.actions.copied')
@@ -1871,17 +1868,17 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
     [messages, hiddenCount]
   );
 
-  // Scroll the mounted anchor into view; the highlight itself is driven by
-  // `isAnchor` on MessageBubble.
+  // Scroll the mounted anchor into view on the next frame; the highlight
+  // itself is driven by `isAnchor` on MessageBubble.
+  const requestFrame = useAnimationFrame();
   useEffect(() => {
-    if (!anchorMessageId || anchorIndex === -1) return;
-    if (typeof document === 'undefined' || typeof window === 'undefined') return;
-    const raf = window.requestAnimationFrame(() => {
+    if (!anchorMessageId || anchorIndex === -1) return undefined;
+    if (typeof document === 'undefined' || typeof window === 'undefined') return undefined;
+    return requestFrame(() => {
       document
         .querySelector(`[data-ask-flujo-message-id="${anchorMessageId}"]`)
         ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
-    return () => window.cancelAnimationFrame(raf);
   }, [anchorMessageId, messages, totalCount, visibleCount]);
 
   // #95 (follow-up): group each contiguous assistant run's (non-handoff) tool

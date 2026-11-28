@@ -192,6 +192,7 @@ jest.mock('@/frontend/components/Chat/ChatMessages', () => ({
   }) => (
     <>
       <div data-testid="rendered-message-count">{messages?.length ?? 0}</div>
+      <div data-testid="last-message-text">{String((messages?.at(-1) as { content?: unknown } | undefined)?.content ?? '')}</div>
       {pendingToolCalls?.length ? <div data-testid="approval-card">{pendingToolCalls.map((call) => call.function.name).join(',')}</div> : null}
       {pendingToolCalls?.map((call) => (
         <button key={call.id} type="button" onClick={() => onApproveToolCall?.(call.id)}>{`Approve ${call.function.name}`}</button>
@@ -735,6 +736,35 @@ describe('Talk conversation Agent switch terminology', () => {
     const view = render(<Chat />);
     try {
       expect(await screen.findByTestId('approval-card')).toHaveTextContent('send_email');
+    } finally { view.unmount(); }
+  });
+
+  it('streams the reply in short batches and paints the rest at once when the next event arrives', async () => {
+    const running = { ...detailedConversation, status: 'running' };
+    mockListConversations.mockResolvedValue([{ ...conversationSummary, status: 'running' }]);
+    mockGetConversation.mockResolvedValue(running);
+    const delta = (seq: number, text: string) => ({
+      type: 'model:delta', conversationId: 'conversation-current', messageId: 'assistant-1', seq, timestamp: seq, delta: text,
+    }) as never;
+
+    const view = render(<Chat />);
+    try {
+      await waitFor(() => expect(screen.getByTestId('rendered-message-count')).toHaveTextContent('1'));
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+      const handlers = mockSubscribeToEvents.mock.calls.at(-1)![1] as EventStreamHandlers;
+
+      act(() => handlers.onEvent(delta(1, 'Hello ')));
+      expect(screen.getByTestId('last-message-text')).not.toHaveTextContent('Hello');
+      await waitFor(() => expect(screen.getByTestId('last-message-text')).toHaveTextContent('Hello'));
+
+      act(() => {
+        handlers.onEvent(delta(2, 'world'));
+        handlers.onEvent({
+          type: 'node:enter', conversationId: 'conversation-current', seq: 3, timestamp: 3,
+          node: { nodeId: 'node-writer', nodeName: 'Writer' },
+        } as never);
+      });
+      expect(screen.getByTestId('last-message-text')).toHaveTextContent('Hello world');
     } finally { view.unmount(); }
   });
 

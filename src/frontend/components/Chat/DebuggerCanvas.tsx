@@ -45,7 +45,7 @@ import {
 } from '@/utils/shared/debugBreakpoints';
 import RunResourcesPanel from './RunResourcesPanel';
 import { useKeyChange, useKeyedState } from './hooks/useKeyedState';
-import { useTimeout } from '@/frontend/hooks/timing';
+import { useInterval, useTimeout } from '@/frontend/hooks/timing';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { debugBoundaryEdgeIds } from '@/utils/shared/debugBoundaryGraph';
 
@@ -522,23 +522,18 @@ const DebuggerCanvas: React.FC<DebuggerCanvasProps> = ({
   const [now, setNow] = useState<number>(() => Date.now());
   // New events read the clock again right after they commit.
   useTimeout(() => setNow(Date.now()), 0, executionEvents.length);
-  useEffect(() => {
-    if (!liveActivity) return;
-    const hasYoung = () => {
-      const t = Date.now();
-      return [
-        ...Object.values(liveActivity.byNode),
-        ...Object.values(liveActivity.byResource),
-        ...Object.values(liveActivity.byResourceName),
-      ].some(entry => t - entry.ts < LIVE_HIGHLIGHT_TTL_MS);
-    };
-    if (!hasYoung()) return;
-    const interval = setInterval(() => {
-      setNow(Date.now());
-      if (!hasYoung()) clearInterval(interval);
-    }, 350);
-    return () => clearInterval(interval);
-  }, [liveActivity]);
+  // Each new activity map starts the fade again.
+  const [fading, setFading] = useKeyedState(liveActivity, Boolean(liveActivity));
+  useInterval(() => {
+    const current = Date.now();
+    setNow(current);
+    const young = !!liveActivity && [
+      ...Object.values(liveActivity.byNode),
+      ...Object.values(liveActivity.byResource),
+      ...Object.values(liveActivity.byResourceName),
+    ].some(entry => current - entry.ts < LIVE_HIGHLIGHT_TTL_MS);
+    if (!young) setFading(false);
+  }, fading ? 350 : null);
 
   // Resolve a node's live activity: process/subflow nodes match by node id;
   // resource nodes ALSO match by their artifact identity (server+uri for

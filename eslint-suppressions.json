@@ -433,47 +433,14 @@
       "count": 1
     }
   },
-  "src/frontend/components/Chat/ChatHistory.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 2
-    }
-  },
-  "src/frontend/components/Chat/ChatInput.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
   "src/frontend/components/Chat/ChatMessages.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 2
-    },
     "react-hooks/error-boundaries": {
       "count": 2
-    }
-  },
-  "src/frontend/components/Chat/DebuggerCanvas.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 1
     }
   },
   "src/frontend/components/Chat/DebuggerConversation.tsx": {
     "flujo/no-double-cast": {
       "count": 1
-    }
-  },
-  "src/frontend/components/Chat/ExecutedFlowPanel.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/Chat/LiveRunIndicator.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/Chat/McpAppFrame.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 7
     }
   },
   "src/frontend/components/Chat/ModelTurnInspector.tsx": {
@@ -487,11 +454,8 @@
     }
   },
   "src/frontend/components/Chat/index.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 10
-    },
     "react-hooks/immutability": {
-      "count": 4
+      "count": 3
     },
     "react-hooks/purity": {
       "count": 3

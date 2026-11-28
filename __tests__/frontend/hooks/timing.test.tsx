@@ -1,5 +1,13 @@
 import { act, renderHook } from '@testing-library/react';
-import { useDebouncedCallback, useDebouncedValue, useInterval, useReachedAt, useTimeout } from '@/frontend/hooks/timing';
+import {
+  useAnimationFrame,
+  useBatchedCallback,
+  useDebouncedCallback,
+  useDebouncedValue,
+  useInterval,
+  useReachedAt,
+  useTimeout,
+} from '@/frontend/hooks/timing';
 
 describe('timing hooks', () => {
   beforeEach(() => {
@@ -131,5 +139,63 @@ describe('timing hooks', () => {
     result.current('e');
     unmount();
     expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it('useBatchedCallback lets a steady stream through on time, in order, with flush and cancel', () => {
+    const callback = jest.fn();
+    const { result, unmount } = renderHook(() => useBatchedCallback<string>(callback, 100));
+    const batched = result.current;
+
+    act(() => {
+      for (let tick = 0; tick < 5; tick += 1) {
+        batched(`token-${tick}`);
+        jest.advanceTimersByTime(30);
+      }
+    });
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(callback).toHaveBeenLastCalledWith(['token-0', 'token-1', 'token-2', 'token-3']);
+
+    act(() => {
+      batched('last');
+      batched.flush();
+    });
+    expect(callback).toHaveBeenLastCalledWith(['token-4', 'last']);
+    expect(jest.getTimerCount()).toBe(0);
+
+    act(() => {
+      batched('dropped');
+      batched.cancel();
+      jest.advanceTimersByTime(200);
+    });
+    expect(callback).toHaveBeenCalledTimes(2);
+
+    act(() => batched.flush());
+    expect(callback).toHaveBeenCalledTimes(2);
+    expect(result.current).toBe(batched);
+
+    batched('left over');
+    unmount();
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it('useAnimationFrame runs on the next frame, can be cancelled, and leaves nothing behind', () => {
+    const { result, unmount } = renderHook(() => useAnimationFrame());
+    const requestFrame = result.current;
+    const ran = jest.fn();
+    const cancelled = jest.fn();
+    const leftOver = jest.fn();
+
+    requestFrame(ran);
+    const cancel = requestFrame(cancelled);
+    cancel();
+    expect(ran).not.toHaveBeenCalled();
+    act(() => jest.advanceTimersByTime(20));
+    expect(ran).toHaveBeenCalledTimes(1);
+    expect(cancelled).not.toHaveBeenCalled();
+
+    requestFrame(leftOver);
+    unmount();
+    act(() => jest.advanceTimersByTime(20));
+    expect(leftOver).not.toHaveBeenCalled();
   });
 });

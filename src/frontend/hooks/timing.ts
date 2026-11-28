@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 // The only place UI code may start raw timers (lint rule flujo/no-raw-timers).
 // Each hook owns its timer and clears it on unmount, so timers cannot leak or pile up.
@@ -96,6 +96,83 @@ function createDebouncer<Args extends unknown[]>(
     pending = args;
     id = setTimeout(flush, delayMs());
   }, { cancel, flush });
+}
+
+export interface BatchedCallback<Item> {
+  (item: Item): void;
+  /** Hands the waiting items over now, if there are any. */
+  flush(): void;
+  /** Drops the waiting items. */
+  cancel(): void;
+}
+
+function createBatcher<Item>(
+  deliver: (items: Item[]) => void,
+  intervalMs: () => number,
+): BatchedCallback<Item> {
+  let id: ReturnType<typeof setTimeout> | undefined;
+  let items: Item[] = [];
+  const cancel = () => {
+    clearTimeout(id);
+    id = undefined;
+    items = [];
+  };
+  const flush = () => {
+    const batch = items;
+    cancel();
+    if (batch.length > 0) deliver(batch);
+  };
+  return Object.assign((item: Item) => {
+    items.push(item);
+    if (id === undefined) id = setTimeout(flush, intervalMs());
+  }, { cancel, flush });
+}
+
+/**
+ * Returns a stable function that collects items and hands them to `callback` at most once every
+ * `intervalMs`, counted from the first waiting item. Unlike a debounce, a steady stream still goes
+ * through on time. Waiting items are dropped on unmount.
+ */
+export function useBatchedCallback<Item>(
+  callback: (items: Item[]) => void,
+  intervalMs: number,
+): BatchedCallback<Item> {
+  const latest = useLatest(callback);
+  const delay = useLatest(intervalMs);
+  const batched = useMemo(
+    () => createBatcher<Item>((items) => latest.current(items), () => delay.current),
+    [latest, delay],
+  );
+  useEffect(() => batched.cancel, [batched]);
+  return batched;
+}
+
+/**
+ * Returns a stable `requestFrame(callback)`: runs `callback` on the next animation frame, for work
+ * that needs the committed layout (scrolling a row into view), and returns a function that cancels
+ * it. Frames still waiting are cancelled on unmount.
+ */
+export function useAnimationFrame(): (callback: () => void) => () => void {
+  const pending = useRef(new Set<number>());
+  useEffect(() => {
+    const frames = pending.current;
+    return () => {
+      frames.forEach((id) => cancelAnimationFrame(id));
+      frames.clear();
+    };
+  }, []);
+  return useCallback((callback: () => void) => {
+    const frames = pending.current;
+    const id = requestAnimationFrame(() => {
+      frames.delete(id);
+      callback();
+    });
+    frames.add(id);
+    return () => {
+      cancelAnimationFrame(id);
+      frames.delete(id);
+    };
+  }, []);
 }
 
 /** Returns a stable function that calls `callback` with the latest arguments once calls stop for `delayMs`. */

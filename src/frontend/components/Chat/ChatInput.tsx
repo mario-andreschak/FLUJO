@@ -55,6 +55,7 @@ import {
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { PointerDragShield, usePointerDrag } from './floatingPanel';
 import { useKeyedState } from './hooks/useKeyedState';
+import { useInterval } from '@/frontend/hooks/timing';
 import {
   SLASH_COMMANDS,
   filterSlashCommands,
@@ -243,7 +244,8 @@ const ChatInput: React.FC<ChatInputProps> = ({
   }, []);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
-  const recordingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // The recording clock ticks while recording.
+  useInterval(() => setRecordingTime((previous) => previous + 1), isRecording ? 1000 : null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const editorRef = useRef<GlobalReferenceEditorRef>(null);
   const dragDepthRef = useRef(0);
@@ -270,11 +272,6 @@ const ChatInput: React.FC<ChatInputProps> = ({
     return () => {
       mountedRef.current = false;
       recordingAttemptRef.current += 1;
-
-      if (recordingIntervalRef.current) {
-        clearInterval(recordingIntervalRef.current);
-        recordingIntervalRef.current = null;
-      }
 
       const recorder = mediaRecorderRef.current;
       mediaRecorderRef.current = null;
@@ -839,10 +836,6 @@ const ChatInput: React.FC<ChatInputProps> = ({
           recordingAttemptRef.current === attemptId
         ) {
           recordingAttemptRef.current += 1;
-          if (recordingIntervalRef.current) {
-            clearInterval(recordingIntervalRef.current);
-            recordingIntervalRef.current = null;
-          }
           setRecordingTime(0);
           setIsRecording(false);
           setIsProcessing(false);
@@ -912,10 +905,6 @@ const ChatInput: React.FC<ChatInputProps> = ({
 
       mediaRecorder.start();
       setIsRecording(true);
-
-      recordingIntervalRef.current = setInterval(() => {
-        setRecordingTime((previous) => previous + 1);
-      }, 1000);
     } catch (error) {
       if (!mountedRef.current || recordingAttemptRef.current !== attemptId) return;
 
@@ -949,12 +938,6 @@ const ChatInput: React.FC<ChatInputProps> = ({
       } finally {
         stopRecordingResources();
         setIsRecording(false);
-
-        if (recordingIntervalRef.current) {
-          clearInterval(recordingIntervalRef.current);
-          recordingIntervalRef.current = null;
-        }
-
         setRecordingTime(0);
       }
     }
