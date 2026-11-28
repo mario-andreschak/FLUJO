@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Alert,
   Box,
@@ -59,12 +59,15 @@ const QuickChangeModelsDialog = ({
   const usages = useMemo(() => collectFlowModelUsage(flows, models), [flows, models]);
   const modelById = useMemo(() => new Map(models.map((model) => [model.id, model])), [models]);
 
-  useEffect(() => {
-    if (!open) return;
-    setTargetBySource({});
-    setApplying(false);
-    setError(null);
-  }, [open]);
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) {
+      setTargetBySource({});
+      setApplying(false);
+      setError(null);
+    }
+  }
 
   const replacements = useMemo<FlowModelReplacementMap>(() => {
     const result: FlowModelReplacementMap = {};

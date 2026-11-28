@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useMemo } from 'react';
 import { FlowNode } from '@/frontend/types/flow/flow';
 import { Edge } from '@xyflow/react';
 import { createLogger } from '@/utils/logger';
@@ -82,8 +82,6 @@ const useHandoffTools = (
   flowEdges: Edge[], 
   flowNodes: FlowNode[]
 ) => {
-  const [handoffTools, setHandoffTools] = useState<HandoffTool[]>([]);
-  const [isLoadingHandoffTools, setIsLoadingHandoffTools] = useState<boolean>(false);
 
   // Find connected non-MCP nodes (potential handoff targets)
   const connectedNodeIds = useMemo(() => {
@@ -94,43 +92,36 @@ const useHandoffTools = (
   // Generate handoff tools based on connected nodes. When the node has no
   // outgoing connections yet (a normal state while building a flow), the
   // list is simply empty — the tab renders its empty state.
-  useEffect(() => {
-    if (open && node) {
-      setIsLoadingHandoffTools(true);
+  const handoffTools = useMemo<HandoffTool[]>(() => {
+    if (!open || !node) return [];
+    try {
+      // Resolve the target nodes, then name them with the SAME shared helper
+      // the runtime uses so the preview matches the real handoff tool names.
+      const targetNodes = connectedNodeIds
+        .map(id => flowNodes.find(n => n.id === id))
+        .filter((n): n is FlowNode => Boolean(n));
 
-      try {
-        // Resolve the target nodes, then name them with the SAME shared helper
-        // the runtime uses so the preview matches the real handoff tool names.
-        const targetNodes = connectedNodeIds
-          .map(id => flowNodes.find(n => n.id === id))
-          .filter((n): n is FlowNode => Boolean(n));
+      const nameMap = buildHandoffToolNameMap(
+        targetNodes.map(n => ({ id: n.id, label: n.data.label, type: n.type || n.data.type })),
+      );
 
-        const nameMap = buildHandoffToolNameMap(
-          targetNodes.map(n => ({ id: n.id, label: n.data.label, type: n.type || n.data.type })),
-        );
+      const tools: HandoffTool[] = targetNodes.map(targetNode => ({
+        name: nameMap.get(targetNode.id) || `handoff_to_${targetNode.id}`,
+        description: formatHandoffDescription(buildPreviewSummary(targetNode)),
+        inputSchema: {
+          type: 'object',
+          properties: {},
+          required: [],
+        },
+      }));
 
-        const tools: HandoffTool[] = targetNodes.map(targetNode => ({
-          name: nameMap.get(targetNode.id) || `handoff_to_${targetNode.id}`,
-          description: formatHandoffDescription(buildPreviewSummary(targetNode)),
-          inputSchema: {
-            type: 'object',
-            properties: {},
-            required: [],
-          },
-        }));
-
-        setHandoffTools(tools);
-        log.debug('Generated handoff tools', { toolsCount: tools.length });
-      } catch (error) {
-        log.error('Error generating handoff tools', error);
-        setHandoffTools([]);
-      } finally {
-        setIsLoadingHandoffTools(false);
-      }
-    } else {
-      setHandoffTools([]);
+      log.debug('Generated handoff tools', { toolsCount: tools.length });
+      return tools;
+    } catch (error) {
+      log.error('Error generating handoff tools', error);
+      return [];
     }
-  }, [open, node, connectedNodeIds, flowEdges, flowNodes]);
+  }, [open, node, connectedNodeIds, flowNodes]);
 
   // Find non-MCP nodes this Process node hands off to: targets of outgoing
   // edges, plus sources of bidirectional edges pointing at this node.
@@ -154,7 +145,7 @@ const useHandoffTools = (
 
   return {
     handoffTools,
-    isLoadingHandoffTools
+    isLoadingHandoffTools: false,
   };
 };
 

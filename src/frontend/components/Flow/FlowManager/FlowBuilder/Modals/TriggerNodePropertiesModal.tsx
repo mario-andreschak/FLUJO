@@ -132,23 +132,27 @@ const TriggerNodePropertiesModal = ({
   const [isSaved, setIsSaved] = useState(false);
 
   // Load data from the existing node on open
-  useEffect(() => {
-    if (!open || !node) return;
-    setSaveError(null);
-    const props = node.data.properties || {};
-    setName(typeof props.name === 'string' ? props.name : t('flows.trigger.defaultName'));
-    setEnabled(props.enabled !== false);
-    setTrigger((props.trigger as TriggerConfig) || DEFAULT_SCHEDULE);
-    setOverlapStrategy((props.overlapStrategy as OverlapStrategy) || 'skip');
-    setPrompt(typeof props.prompt === 'string' ? props.prompt : '');
-    if (typeof props.executionId === 'string' && props.executionId) {
-      setExecutionId(props.executionId);
-      setIsSaved(true);
-    } else {
-      setExecutionId(crypto.randomUUID());
-      setIsSaved(false);
+  const seedDeps = [open, node, t];
+  const [seededFor, setSeededFor] = useState<readonly unknown[] | null>(null);
+  if (!seededFor || seedDeps.some((dep, index) => dep !== seededFor[index])) {
+    setSeededFor(seedDeps);
+    if (open && node) {
+      setSaveError(null);
+      const props = node.data.properties || {};
+      setName(typeof props.name === 'string' ? props.name : t('flows.trigger.defaultName'));
+      setEnabled(props.enabled !== false);
+      setTrigger((props.trigger as TriggerConfig) || DEFAULT_SCHEDULE);
+      setOverlapStrategy((props.overlapStrategy as OverlapStrategy) || 'skip');
+      setPrompt(typeof props.prompt === 'string' ? props.prompt : '');
+      if (typeof props.executionId === 'string' && props.executionId) {
+        setExecutionId(props.executionId);
+        setIsSaved(true);
+      } else {
+        setExecutionId(crypto.randomUUID());
+        setIsSaved(false);
+      }
     }
-  }, [open, node, t]);
+  }
 
   // Load flows for the FlowEvent panel
   useEffect(() => {

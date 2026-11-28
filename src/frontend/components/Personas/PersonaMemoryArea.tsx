@@ -260,10 +260,10 @@ export default function PersonaMemoryArea({
     [memories],
   );
 
-  useEffect(() => {
-    const visible = new Set(visibleReviewIds);
-    setSelectedReviewIds(current => current.filter(id => visible.has(id)));
-  }, [visibleReviewIds]);
+  const visibleReviewSet = useMemo(() => new Set(visibleReviewIds), [visibleReviewIds]);
+  if (selectedReviewIds.some(id => !visibleReviewSet.has(id))) {
+    setSelectedReviewIds(current => current.filter(id => visibleReviewSet.has(id)));
+  }
 
   const isPending = busy || pendingKey !== null;
   const addValidFrom = availabilityTimestamp(addValidFromDate, undefined, 'start');

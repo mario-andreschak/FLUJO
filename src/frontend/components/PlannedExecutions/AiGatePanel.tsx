@@ -26,11 +26,18 @@ export default function AiGatePanel({ config, onChange, flows, loadingFlows }: {
   const [retry, setRetry] = useState(0);
   const needsModels = config?.mode === 'llm-gate';
 
+  const [modelsLoadedFor, setModelsLoadedFor] = useState<{ needsModels: boolean; retry: number } | null>(null);
+  if (!modelsLoadedFor || modelsLoadedFor.needsModels !== needsModels || modelsLoadedFor.retry !== retry) {
+    setModelsLoadedFor({ needsModels, retry });
+    if (needsModels) {
+      setLoadingModels(true);
+      setModelsError(false);
+    }
+  }
+
   useEffect(() => {
     if (!needsModels) return;
     let cancelled = false;
-    setLoadingModels(true);
-    setModelsError(false);
     modelService.tryLoadModels().then(list => {
       if (list === null) throw new Error('Models unavailable');
       if (!cancelled) setModels(Array.isArray(list) ? list : []);

@@ -66,6 +66,7 @@ import {
 import { useWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
 import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
 import { useListScrollNav } from '@/frontend/hooks/useListScrollNav';
+import { useInterval } from '@/frontend/hooks/timing';
 import CollapsibleCardSection from '@/frontend/components/shared/CollapsibleCardSection';
 import PageHeader from '@/frontend/components/shared/PageHeader';
 import StickySearchBar from '@/frontend/components/shared/StickySearchBar';
@@ -91,7 +92,7 @@ const PlannedExecutionsManager = () => {
   const [paused, setPaused] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
+  const [refreshing, setRefreshing] = useState(true);
   const [changingPause, setChangingPause] = useState(false);
   const [pauseRetry, setPauseRetry] = useState<boolean | null>(null);
   const [deletePending, setDeletePending] = useState(false);
@@ -136,13 +137,10 @@ const PlannedExecutionsManager = () => {
   const [groupAnchorEl, setGroupAnchorEl] = useState<null | HTMLElement>(null);
   const collapsedKeys = useMemo(() => new Set(collapsedList), [collapsedList]);
 
-  const refresh = useCallback(async () => {
-    if (pausePendingRef.current || deletePendingRef.current) return;
+  const fetchEntries = useCallback(() => {
     const currentRequest = ++requestId.current;
     refreshingRef.current = true;
-    setRefreshing(true);
-    try {
-      const response = await plannedExecutionsService.list({ throwOnError: true });
+    return plannedExecutionsService.list({ throwOnError: true }).then((response) => {
       if (currentRequest !== requestId.current) return;
       setEntries(response.executions);
       setPaused(response.paused);
@@ -159,22 +157,28 @@ const PlannedExecutionsManager = () => {
         setDeleting(null);
         setDeleteError(false);
       }
-    } catch (error) {
+    }).catch((error) => {
       if (currentRequest !== requestId.current) return;
       log.warn('Failed to refresh schedules', error);
       setLoadError(true);
-    } finally {
+    }).finally(() => {
       if (currentRequest === requestId.current) {
         refreshingRef.current = false;
         setRefreshing(false);
       }
-    }
+    });
   }, []);
 
+  const refresh = useCallback(() => {
+    if (pausePendingRef.current || deletePendingRef.current) return Promise.resolve();
+    setRefreshing(true);
+    return fetchEntries();
+  }, [fetchEntries]);
+
   useEffect(() => {
-    void refresh();
+    void fetchEntries();
     return () => { requestId.current += 1; };
-  }, [refresh]);
+  }, [fetchEntries]);
 
   // Triggers fire in the background (schedules, external webhooks, watchers),
   // so poll for fresh statuses while the page is actually being looked at.
@@ -182,15 +186,11 @@ const PlannedExecutionsManager = () => {
   // "Running… → completed/error" transition surfaces within a few seconds
   // instead of up to 10s (issue #50); relax back to 10s when nothing runs.
   const anyRunning = entries.some(entry => entry.status.running);
-  useEffect(() => {
-    const intervalMs = anyRunning ? 3_000 : 10_000;
-    const timer = setInterval(() => {
-      if (!document.hidden && !refreshingRef.current) {
-        void refresh();
-      }
-    }, intervalMs);
-    return () => clearInterval(timer);
-  }, [refresh, anyRunning]);
+  useInterval(() => {
+    if (!document.hidden && !refreshingRef.current) {
+      void refresh();
+    }
+  }, anyRunning ? 3_000 : 10_000);
 
   const handleTogglePaused = async (nextPaused: boolean) => {
     if (!loaded || pausePendingRef.current || deletePendingRef.current) return;
@@ -363,13 +363,13 @@ const PlannedExecutionsManager = () => {
           key={entry.execution.id}
           entry={entry}
           folders={folders}
-          onSetFolder={(folder) => void handleSetFolder(entry.execution, folder)}
+          onSetFolder={handleSetFolder}
           onEdit={() => {
             setEditing(entry.execution);
             setModalOpen(true);
           }}
           onDelete={() => { failedDeleteId.current = null; setDeleteError(false); setDeleting(entry.execution); }}
-          onToggleEnabled={(enabled) => handleToggleEnabled(entry.execution, enabled)}
+          onToggleEnabled={handleToggleEnabled}
           onRanNow={() => void refresh()}
           paused={paused}
         />

@@ -15,7 +15,7 @@ import BoltRoundedIcon from '@mui/icons-material/BoltRounded';
 import Inventory2OutlinedIcon from '@mui/icons-material/Inventory2Outlined';
 import PlayArrowRoundedIcon from '@mui/icons-material/PlayArrowRounded';
 import SubdirectoryArrowRightRoundedIcon from '@mui/icons-material/SubdirectoryArrowRightRounded';
-import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { matchCronPreset } from '@/frontend/components/PlannedExecutions/triggerSummary';
 import type { Translator } from '@/frontend/i18n/core';
@@ -60,9 +60,8 @@ export interface PlaygroundNodeActions {
   activeWaveId?: string | null;
 }
 
-function PlaygroundPackageNodeComponent({ data }: NodeProps) {
+function PlaygroundPackageNodeComponent({ data: node }: NodeProps<Node<PlaygroundPackageData>>) {
   const theme = useTheme();
-  const node = data as unknown as PlaygroundPackageData;
   const accent = PACKAGE_TONES[node.tone % PACKAGE_TONES.length];
   return (
     <Box
@@ -110,9 +109,8 @@ function PlaygroundPackageNodeComponent({ data }: NodeProps) {
   );
 }
 
-function PlaygroundFlowFrameNodeComponent({ data }: NodeProps) {
+function PlaygroundFlowFrameNodeComponent({ data: node }: NodeProps<Node<PlaygroundFlowFrameData>>) {
   const theme = useTheme();
-  const node = data as unknown as PlaygroundFlowFrameData;
   return (
     <Box
       data-testid={`playground-flow-frame-${node.flowId}`}
@@ -145,11 +143,10 @@ function PlaygroundFlowFrameNodeComponent({ data }: NodeProps) {
   );
 }
 
-function PlaygroundSimpleFlowNodeComponent({ data }: NodeProps) {
+function PlaygroundSimpleFlowNodeComponent({ data: node }: NodeProps<Node<PlaygroundSimpleFlowData & PlaygroundNodeActions>>) {
   const theme = useTheme();
   const { t, tp } = useI18n();
   const reducedMotion = useMediaQuery('(prefers-reduced-motion: reduce)');
-  const node = data as unknown as PlaygroundSimpleFlowData & PlaygroundNodeActions;
   const steps = node.stepLabels.slice(0, 3);
   const remainingSteps = Math.max(0, node.stepLabels.length - steps.length);
   const signals = node.signalTopics.slice(0, 2);
@@ -373,10 +370,9 @@ function PlaygroundSimpleFlowNodeComponent({ data }: NodeProps) {
   );
 }
 
-function PlaygroundTriggerNodeComponent({ data }: NodeProps) {
+function PlaygroundTriggerNodeComponent({ data: node }: NodeProps<Node<PlaygroundTriggerData & PlaygroundNodeActions>>) {
   const theme = useTheme();
   const { t } = useI18n();
-  const node = data as unknown as PlaygroundTriggerData & PlaygroundNodeActions;
   const active = Boolean(node.activeWaveId && node.execution.waveIds.includes(node.activeWaveId));
   return (
     <>
@@ -429,8 +425,7 @@ function PlaygroundTriggerNodeComponent({ data }: NodeProps) {
   );
 }
 
-function PlaygroundRelationAnchorNodeComponent({ data }: NodeProps) {
-  const node = data as unknown as PlaygroundRelationAnchorData;
+function PlaygroundRelationAnchorNodeComponent({ data: node }: NodeProps<Node<PlaygroundRelationAnchorData>>) {
   return (
     <>
       <Handle

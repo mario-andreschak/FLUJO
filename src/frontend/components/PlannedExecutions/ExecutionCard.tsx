@@ -37,6 +37,7 @@ import BoltRoundedIcon from '@mui/icons-material/BoltRounded';
 import HistoryRoundedIcon from '@mui/icons-material/HistoryRounded';
 import {
   normalizeStartRestrictions,
+  PlannedExecution,
   RunRecord,
   RunRecordStatus,
 } from '@/shared/types/plannedExecution';
@@ -128,11 +129,11 @@ interface ExecutionCardProps {
   paused: boolean;
   onEdit: () => void;
   onDelete: () => void;
-  onToggleEnabled: (enabled: boolean) => void;
+  onToggleEnabled: (execution: PlannedExecution, enabled: boolean) => void;
   /** Existing folder names offered by the shared folder picker. */
   folders: string[];
   /** Assign or clear this execution's organizing folder. */
-  onSetFolder: (folder: string | undefined) => void;
+  onSetFolder: (execution: PlannedExecution, folder: string | undefined) => void;
   /** Called after a manual run finishes so the list can refresh lastRun. */
   onRanNow: () => void;
 }
@@ -169,23 +170,32 @@ const ExecutionCard = ({
       })
     : '';
 
-  const loadRuns = useCallback(async () => {
-    setLoadingRuns(true);
-    const loaded = await plannedExecutionsService.loadRuns(execution.id);
+  const fetchRuns = useCallback(() => plannedExecutionsService.loadRuns(execution.id).then((loaded) => {
     // Newest first for display.
     setRuns([...loaded].reverse());
     // Start each (re)load at the first page; older runs are revealed on demand.
     setVisibleCount(RUNS_PAGE_SIZE);
     setLoadingRuns(false);
-  }, [execution.id]);
+  }), [execution.id]);
+
+  const loadRuns = () => {
+    setLoadingRuns(true);
+    return fetchRuns();
+  };
 
   // Reload on expand AND whenever the list poller reports a fresh last run,
   // so an expanded history keeps up with background fires (webhooks, schedules).
+  const runsDeps = [expanded, execution.id, lastRun?.runId];
+  const [runsLoadedFor, setRunsLoadedFor] = useState<readonly unknown[] | null>(null);
+  if (!runsLoadedFor || runsDeps.some((dep, index) => dep !== runsLoadedFor[index])) {
+    setRunsLoadedFor(runsDeps);
+    if (expanded) setLoadingRuns(true);
+  }
   useEffect(() => {
     if (expanded) {
-      void loadRuns();
+      void fetchRuns();
     }
-  }, [expanded, loadRuns, lastRun?.runId]);
+  }, [expanded, fetchRuns, lastRun?.runId]);
 
   const handleRunNow = async () => {
     setRunningNow(true);
@@ -529,7 +539,7 @@ const ExecutionCard = ({
               <Box sx={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
                 <Switch
                   checked={execution.enabled}
-                  onChange={(event) => onToggleEnabled(event.target.checked)}
+                  onChange={(event) => onToggleEnabled(execution, event.target.checked)}
                   size="small"
                   slotProps={{ input: {
                     'aria-label': execution.enabled
@@ -721,7 +731,7 @@ const ExecutionCard = ({
         >
           <Switch
             checked={execution.enabled}
-            onChange={(e) => onToggleEnabled(e.target.checked)}
+            onChange={(e) => onToggleEnabled(execution, e.target.checked)}
           />
         </Tooltip>
         <Tooltip title={t('automations.card.edit')}>
@@ -856,7 +866,7 @@ const ExecutionCard = ({
         currentFolder={execution.folder}
         folders={folders}
         onClose={() => setFolderAnchorEl(null)}
-        onAssign={onSetFolder}
+        onAssign={(folder) => onSetFolder(execution, folder)}
       />
 
       <Dialog open={detail !== null} onClose={() => setDetail(null)} maxWidth="md" fullWidth>

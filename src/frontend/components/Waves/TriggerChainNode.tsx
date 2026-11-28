@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { Handle, Position, type Node, type NodeProps } from '@xyflow/react';
 import { Box, Chip, Stack, Tooltip, Typography } from '@mui/material';
 import BoltIcon from '@mui/icons-material/Bolt';
 import UnfoldMoreIcon from '@mui/icons-material/UnfoldMore';
@@ -34,10 +34,9 @@ export interface TriggerChainNodeData {
  * signals (#144), and the statically-resolved subflow tree. Downstream links are
  * revealed by hovering (handled by the canvas).
  */
-export default function TriggerChainNode({ data }: NodeProps) {
+export default function TriggerChainNode({ data }: NodeProps<Node<TriggerChainNodeData>>) {
   const { t } = useI18n();
-  const { chainNode, now, runAt, isRoot, hasSuccessors, expanded, pinned } =
-    data as unknown as TriggerChainNodeData;
+  const { chainNode, now, runAt, isRoot, hasSuccessors, expanded, pinned } = data;
   const meta = triggerKindMeta(chainNode.triggerKind);
 
   let timingLabel = '';
