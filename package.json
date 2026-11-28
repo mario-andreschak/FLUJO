@@ -43,6 +43,7 @@
     "scripts/exposure-mode.mjs",
     "scripts/migration-landscape-demo.mjs",
     "scripts/local-test-dependencies.cjs",
+    "scripts/bundled-mcp-build.cjs",
     "scripts/run-local-jest.cjs",
     "bin/**/*",
     "mcp-servers/README.md",

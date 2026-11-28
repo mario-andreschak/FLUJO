@@ -8,6 +8,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { ListRootsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { itWithRealShell, requireRealShellResult } from '../helpers/childProcessCapability';
+import { bundledMcpEntry } from '../helpers/bundledMcpEntry';
 
 jest.setTimeout(30_000);
 
@@ -32,7 +33,7 @@ async function connectPackage(
   }));
   await client.connect(new StdioClientTransport({
     command: process.execPath,
-    args: [path.resolve(process.cwd(), 'mcp-servers', name, 'dist', 'index.js')],
+    args: [bundledMcpEntry(name)],
     env: cleanEnv(env),
     stderr: 'pipe',
   }));

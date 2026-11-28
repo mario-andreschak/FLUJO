@@ -66,7 +66,9 @@ npm run build:mcp
   4 minutes. Warnings about deprecated packages are normal.
 - `npm run build:mcp` builds the four built-in MCP servers in `mcp-servers/`
   (about 30 seconds). The app and every test that creates a workspace need them.
-  Without this step those tests fail with `ENOENT ... mcp-servers/flujo/dist`.
+  If you skip this step, the test runner and `npm run dev` build them for you the
+  first time. When a package is still missing, FLUJO names it and tells you to
+  run `npm run build:mcp`.
 
 If `npm ci` fails, keep the error and your Node.js, npm and OS versions and open
 an issue. Do not copy `node_modules` from another folder or delete the lock file:
