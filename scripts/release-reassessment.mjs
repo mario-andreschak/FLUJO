@@ -227,6 +227,23 @@ export async function readLiveFacts(facts, { now }) {
   };
 }
 
+/**
+ * Match the open code-scanning alerts against alert-triage.json at the
+ * assessed commit. Only the result is kept: like the evidence page, the
+ * reassessment never lists open alerts by rule and file.
+ */
+export function summarizeAlertTriage(alerts, triage, now) {
+  if (!Array.isArray(alerts)) return { error: alerts?.error ?? 'Open alerts were not readable.' };
+  if (!triage) return { triageFile: false };
+  try {
+    const result = evaluateSecurityResponse({ now: now.getTime(), privateReporting: true, codeScanning: alerts, triage });
+    const serious = result.rows.filter((row) => row.severity === 'critical' || row.severity === 'high');
+    return { triageFile: true, serious: serious.length, untriaged: serious.filter((row) => row.status !== 'triaged').map((row) => row.key) };
+  } catch (error) {
+    return { triageFile: true, invalid: oneLine(error?.message) };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Inputs: the offline Persona soak
 
@@ -318,22 +335,12 @@ function judgeChecks(inputs) {
     alerts ? `Code scanning: ${alerts.atRelease.critical} critical and ${alerts.atRelease.high} high open at release`
       + `${deps ? `; dependencies: ${deps.atRelease.critical} critical and ${deps.atRelease.high} high` : '; dependency alerts not readable'}.` : 'Alert counts were not readable.',
     `release evidence page v${evidence.version}.md, "Security alerts"`);
-  let triageStatus = errorOf(facts.openCodeScanningAlerts) ? 'not-checked' : 'not-met';
-  let triageText = errorOf(facts.openCodeScanningAlerts) ?? 'There is no alert-triage.json at the assessed commit, so open alerts have no written reasons.';
-  if (!errorOf(facts.openCodeScanningAlerts) && files.triage) {
-    try {
-      const result = evaluateSecurityResponse({ now: Date.parse(inputs.assessedAt), privateReporting: true, codeScanning: facts.openCodeScanningAlerts, triage: files.triage });
-      const serious = result.rows.filter((row) => row.severity === 'critical' || row.severity === 'high');
-      const open = serious.filter((row) => row.status !== 'triaged');
-      triageStatus = open.length ? 'not-met' : 'met';
-      triageText = open.length
-        ? `${open.length} of ${serious.length} open critical or high code-scanning alerts have no current fix or written reason: ${open.map((row) => row.key).join(', ')}.`
-        : `All ${serious.length} open critical or high code-scanning alerts have a fix or a written, dated reason in alert-triage.json.`;
-    } catch (error) {
-      triageStatus = 'not-met';
-      triageText = `alert-triage.json is not valid: ${oneLine(error?.message)}`;
-    }
-  }
+  const triage = facts.alertTriage;
+  const [triageStatus, triageText] = errorOf(triage) ? ['not-checked', triage.error]
+    : !triage.triageFile ? ['not-met', 'There is no alert-triage.json at the assessed commit, so open alerts have no written reasons.']
+      : triage.invalid ? ['not-met', `alert-triage.json is not valid: ${triage.invalid}`]
+        : triage.untriaged.length ? ['not-met', `${triage.untriaged.length} of ${triage.serious} open critical or high code-scanning alerts have no current fix or written reason: ${triage.untriaged.join(', ')}.`]
+          : ['met', `All ${triage.serious} open critical or high code-scanning alerts have a fix or a written, dated reason in alert-triage.json.`];
   add('alerts-triaged', 'Does every open critical or high alert have a fix or a written reason?', 'security-review', triageStatus, triageText + sourceNote,
     'docs/security/alert-triage.json, npm run check:security-response');
 
@@ -632,6 +639,8 @@ export async function gatherInputs({ evidencePath, sourceRef = null, soakDirecto
   if (!sourceRef && !(await reader.clean())) throw new Error('The working tree has uncommitted changes; commit them or pass --source <ref>.');
   const command = ['npm run reassess:release --', '--evidence', evidencePath.split(path.sep).join('/'),
     ...(sourceRef ? ['--source', sourceRef] : []), ...(soakDirectory ? ['--soak', '<soak-artifacts>'] : [])].join(' ');
+  const { triage, ...files } = await readSourceFacts(reader, { now });
+  const { openCodeScanningAlerts, ...live } = await readLiveFacts(facts, { now });
   return {
     schemaVersion: SCHEMA_VERSION,
     assessedAt: now.toISOString(),
@@ -645,8 +654,8 @@ export async function gatherInputs({ evidencePath, sourceRef = null, soakDirecto
       runs: evidence.ci.runs.map((run) => ({ path: run.path, conclusion: run.conclusion, failedJobs: run.jobs?.failed ?? [] })),
       alerts: evidence.alerts,
     },
-    files: await readSourceFacts(reader, { now }),
-    facts: await readLiveFacts(facts, { now }),
+    files,
+    facts: { ...live, alertTriage: summarizeAlertTriage(openCodeScanningAlerts, triage, now) },
     soak: await readSoak(soakDirectory, commit),
   };
 }

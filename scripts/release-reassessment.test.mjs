@@ -6,6 +6,7 @@ import { parse } from 'yaml';
 import { EVIDENCE_DIRECTORY } from './collect-release-evidence.mjs';
 import {
   ACCEPTANCE, ROWS, judge, liveFacts, readLiveFacts, readSoak, readSourceFacts, renderReassessmentPage, securityResponders, summarize,
+  summarizeAlertTriage,
 } from './release-reassessment.mjs';
 import { waitForChecks, workflowState } from './wait-for-release-checks.mjs';
 
@@ -84,6 +85,23 @@ test('a row reaches A− only when every check behind it is met', () => {
   assert.equal(one.rows.filter((row) => row.aMinusShown).length, 8);
   all.set('docs-limits-visible', { id: 'docs-limits-visible', status: 'not-met' });
   assert.match(summarize(all).rows.find((row) => row.id === 'docs').verdict, /^A not confirmed/);
+});
+
+test('open alerts are matched against the triage file and kept only as a result, never as a list of weaknesses', () => {
+  const now = new Date('2026-11-28T00:00:00Z');
+  const alert = (number, level) => ({ number, created_at: '2026-11-20T00:00:00Z', rule: { id: 'js/x', security_severity_level: level },
+    most_recent_instance: { location: { path: 'src/a.ts' } } });
+  const triage = { schemaVersion: 1, alerts: [{ source: 'code-scanning', number: 1, rule: 'js/x', location: 'src/a.ts', decision: 'false-positive',
+    reason: 'A written reason that is long enough for a reviewer to check.', reviewed: '2026-11-27', revisitBy: '2027-01-01' }] };
+  assert.deepEqual(summarizeAlertTriage([alert(1, 'high'), alert(2, 'critical'), alert(3, 'medium')], triage, now),
+    { triageFile: true, serious: 2, untriaged: ['code-scanning#2'] });
+  assert.deepEqual(summarizeAlertTriage([alert(1, 'high')], null, now), { triageFile: false });
+  assert.deepEqual(summarizeAlertTriage({ error: 'HTTP 403' }, triage, now), { error: 'HTTP 403' });
+  assert.match(summarizeAlertTriage([alert(1, 'high')], { schemaVersion: 2 }, now).invalid, /schemaVersion 1/);
+  const missing = judge(withInputs((inputs) => { inputs.facts.alertTriage = { triageFile: true, serious: 2, untriaged: ['code-scanning#2'] }; }));
+  assert.equal(status(missing, 'alerts-triaged'), 'not-met');
+  assert.match(detail(missing, 'alerts-triaged'), /1 of 2 .*code-scanning#2/);
+  assert.doesNotMatch(JSON.stringify(saved.inputs), /most_recent_instance|"rule":\{/);
 });
 
 test('security responders are GitHub handles on one line; project accounts do not count', () => {
