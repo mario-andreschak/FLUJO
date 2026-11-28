@@ -3,9 +3,13 @@
 // A bullet the grammar does not cover is listed as manual, never guessed at.
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { validateSteps } from '../flujo-drive.mjs';
 
 export const DRIVING_SECTION = 'Driving it with flujo-drive';
 export const DEFAULT_FILL = 'Release sweep check';
+/** Step files kept in the repository live next to the entries, in this folder of the feature map. */
+export const STEP_FILE_DIR = 'docs/feature-map/steps';
+const STEP_FILE = /--file\s+(docs\/feature-map\/steps\/[\w.-]+\.json)(?=[\s`]|$)/;
 
 const DRIVE_COMMAND = /`node scripts\/flujo-drive\.mjs ([^`]+)`/;
 const STEPS_MENTION = /`steps(?:\s+([^`\s]+))?(?:\s+--file\s+[^`]+)?`(?:\s+on\s+`([^`]+)`)?/;
@@ -167,9 +171,11 @@ function leadingParenthesis(text) {
   return undefined;
 }
 
+/** A `<placeholder>` where a step acts (a route, a field, a value); text a step expects to see may show one. */
 function placeholder(steps) {
   for (const step of steps) {
-    for (const value of Object.values(step)) {
+    for (const [field, value] of Object.entries(step)) {
+      if (field === 'text') continue;
       const match = typeof value === 'string' ? /<[^>]+>/.exec(value) : null;
       if (match) return match[0];
     }
@@ -177,19 +183,43 @@ function placeholder(steps) {
   return undefined;
 }
 
+/** The steps a repository step file holds (docs/feature-map/steps/<name>.json), checked the way flujo-drive checks them. */
+export function readStepFile(mapDir, file) {
+  let steps;
+  try {
+    steps = JSON.parse(readFileSync(path.join(mapDir, 'steps', path.basename(file)), 'utf8'));
+  } catch (error) {
+    throw new Error(`${file}: ${error.code === 'ENOENT' ? 'the step file does not exist' : `not valid JSON (${error.message})`}`);
+  }
+  try {
+    return validateSteps(steps);
+  } catch (error) {
+    throw new Error(`${file}: ${error.message}`);
+  }
+}
+
 /**
  * Turns one driving bullet into a check.
  * status: auto (the sweep runs it), needs (a precondition a fresh instance lacks), manual (prose only), unsafe.
+ * A `steps --file docs/feature-map/steps/<name>.json` command runs the steps of that file (`readSteps`
+ * reads them). Such a check names the file as `stepFile` whatever its status, so a runner that can set
+ * up a missing precondition finds it.
  */
-export function parseBullet(entry, bullet, defaultRoute = '/') {
+export function parseBullet(entry, bullet, defaultRoute = '/', { readSteps } = {}) {
   const match = /^- \*\*(.+?)\*\*\s*(.*)$/s.exec(bullet.trim());
   if (!match) return undefined;
   const label = match[1].replace(/:$/, '').trim();
   let rest = match[2];
-  const base = { id: `${entry}/${slug(label)}`, entry, label };
+  const named = STEP_FILE.exec(rest);
+  const base = { id: `${entry}/${slug(label)}`, entry, label, ...(named ? { stepFile: named[1] } : {}) };
   const aside = leadingParenthesis(rest);
   if (aside) rest = rest.slice(aside.length + 2);
-  if (aside && /^needs\b/i.test(aside.trim())) return { ...base, status: 'needs', reason: aside.trim() };
+  if (aside && /^needs\b/i.test(aside.trim())) {
+    const needs = { ...base, status: 'needs', reason: aside.trim() };
+    const command = base.stepFile && readSteps ? DRIVE_COMMAND.exec(rest) : null;
+    const parsed = command ? commandSteps(tokenize(command[1])) : undefined;
+    return parsed?.listed ? { ...needs, steps: [{ do: 'goto', route: parsed.route }, ...readSteps(base.stepFile)] } : needs;
+  }
   rest = rest.replace(/^\s*:\s*/, '');
   const arrow = rest.indexOf('→');
   const action = arrow < 0 ? rest : rest.slice(0, arrow);
@@ -204,7 +234,8 @@ export function parseBullet(entry, bullet, defaultRoute = '/') {
     const parsed = commandSteps(tokenize(command[1]));
     if (parsed.reason) return { ...base, status: 'manual', reason: parsed.reason };
     ({ route, viewport } = parsed);
-    if (parsed.listed) {
+    if (parsed.listed && base.stepFile && readSteps) steps = readSteps(base.stepFile);
+    else if (parsed.listed) {
       const listed = /The steps:\s*(.*)$/s.exec(action.slice(command.index + command[0].length));
       if (!listed) return { ...base, status: 'manual', reason: 'the steps command has no "The steps:" list' };
       const list = parseStepList(listed[1]);
@@ -225,7 +256,9 @@ export function parseBullet(entry, bullet, defaultRoute = '/') {
     return { ...base, status: 'manual', reason: 'no flujo-drive command or `steps` list' };
   }
 
-  const all = [{ do: 'goto', route }, ...steps, ...(outcome ? [outcome] : [])];
+  // A step file checks its own results; the words after → then only describe them.
+  const fromFile = Boolean(command && base.stepFile && readSteps);
+  const all = [{ do: 'goto', route }, ...steps, ...(outcome && !fromFile ? [outcome] : [])];
   const missing = placeholder(all);
   if (missing) return { ...base, status: 'needs', reason: `needs a real value for ${missing}`, steps: all };
   const unsafe = all.find((step) => (step.do === 'click' || step.do === 'check') && UNSAFE_CONTROLS.some((pattern) => pattern.test(step.name)));
@@ -252,8 +285,11 @@ export function drivingBullets(content) {
   return { preconditions, bullets };
 }
 
-/** Every check in one feature map entry. The "Proof" bullet describes evidence and is not a check. */
-export function parseEntryChecks(name, content) {
+/**
+ * Every check in one feature map entry. The "Proof" bullet describes evidence and is not a check.
+ * `readSteps(file)` returns the steps of a step file the entry names (see `readStepFile`).
+ */
+export function parseEntryChecks(name, content, { readSteps } = {}) {
   const entry = name.replace(/\.md$/, '');
   const lines = content.split(/\r?\n/);
   const title = /^# \S/.test(lines[0] ?? '') ? lines[0].slice(2).trim() : entry;
@@ -261,7 +297,7 @@ export function parseEntryChecks(name, content) {
   const routes = [...routesLine.matchAll(/`([^`]+)`/g)].map((found) => found[1]);
   const { preconditions, bullets } = drivingBullets(content);
   const checks = bullets
-    .map((bullet) => parseBullet(entry, bullet, routes[0]))
+    .map((bullet) => parseBullet(entry, bullet, routes[0], { readSteps }))
     .filter((check) => check && check.label.toLowerCase() !== 'proof');
   return { entry, file: name, title, routes, preconditions, checks };
 }
@@ -284,5 +320,5 @@ export function loadPlan(mapDir, { only } = {}) {
   }
   return order
     .filter((name) => !wanted || wanted.has(name.replace(/\.md$/, '')))
-    .map((name) => parseEntryChecks(name, readFileSync(path.join(mapDir, name), 'utf8')));
+    .map((name) => parseEntryChecks(name, readFileSync(path.join(mapDir, name), 'utf8'), { readSteps: (file) => readStepFile(mapDir, file) }));
 }

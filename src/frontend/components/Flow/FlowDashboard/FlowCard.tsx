@@ -332,6 +332,8 @@ const FlowCard = ({
     <StyledCard
       selected={selected}
       data-tutorial-flow-id={flow.id}
+      role={pickerMode ? undefined : 'article'}
+      aria-label={pickerMode ? undefined : flow.name}
       aria-disabled={disabled || undefined}
       sx={{ opacity: disabled ? 0.58 : 1 }}
     >

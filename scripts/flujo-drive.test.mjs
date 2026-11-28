@@ -53,6 +53,20 @@ test('steps files are validated with a message that names the step', () => {
   assert.throws(() => validateSteps([{ do: 'expect-no-text' }]), /step 1 \(expect-no-text\) needs "text"/);
 });
 
+test('steps can pick a dropdown option, set a checkbox, check a state and act inside one named part of the page', () => {
+  assert.doesNotThrow(() => validateSteps([
+    { do: 'select', label: 'Switch to', option: 'filesystem', within: { role: 'group', name: 'FLUJO: Agent with 1 step that uses this app' } },
+    { do: 'check', role: 'switch', name: 'Exclude system prompt' },
+    { do: 'uncheck', role: 'checkbox', name: 'FLUJO tools' },
+    { do: 'expect-state', role: 'button', name: 'Delete app', state: 'disabled' },
+    { do: 'expect-state', role: 'textbox', name: 'Notes folder', state: 'filled' },
+    { do: 'fill', label: 'Description', value: '' },
+  ]));
+  assert.throws(() => validateSteps([{ do: 'select', label: 'Switch to' }]), /step 1 \(select\) needs "option"/);
+  assert.throws(() => validateSteps([{ do: 'expect-state', role: 'button', name: 'Go', state: 'pressed' }]), /"state" must be one of checked, unchecked, disabled, enabled, filled, empty/);
+  assert.throws(() => validateSteps([{ do: 'click', role: 'button', name: 'Go', within: { role: 'dialog' } }]), /"within" needs a "role" and a "name"/);
+});
+
 test('commands with missing options fail before launching a browser', async () => {
   await assert.rejects(main(['shot', '/flows'], () => {}), /--out/);
   await assert.rejects(main(['click', '/flows', '--role', 'button'], () => {}), /--role and --name/);

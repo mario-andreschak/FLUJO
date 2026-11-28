@@ -128,6 +128,26 @@ test('the sweep order follows the README feature list, then the rest alphabetica
   assert.deepEqual(sweepOrder(['b.md', 'a.md', 'home.md', 'z.md'], '- [Home](home.md)\n- [Z](./z.md)'), ['home.md', 'z.md', 'a.md', 'b.md']);
 });
 
+test('a steps command naming a repository step file runs that file, and the check names it', () => {
+  const file = [{ do: 'drop-file', role: 'heading', name: 'MCP servers', file: 'a.mcpb' }, { do: 'expect-text', text: 'What <bundle folder> runs' }];
+  const read = (name) => { assert.equal(name, 'docs/feature-map/steps/apps-drop.json'); return file; };
+  const check = parseBullet('apps', '- **Drop a bundle**: `node scripts/flujo-drive.mjs steps /mcp --file docs/feature-map/steps/apps-drop.json` drops it → "Install".', '/mcp', { readSteps: read });
+  assert.equal(check.status, 'auto');
+  assert.equal(check.stepFile, 'docs/feature-map/steps/apps-drop.json');
+  assert.deepEqual(check.steps, [{ do: 'goto', route: '/mcp' }, ...file], 'the file checks its own results; the words after → only describe them');
+  const needs = parseBullet('apps', '- **Signed** (needs a launch setting): `node scripts/flujo-drive.mjs steps /mcp --file docs/feature-map/steps/apps-drop.json` → "Signed".', '/mcp', { readSteps: read });
+  assert.equal(needs.status, 'needs');
+  assert.deepEqual(needs.steps, [{ do: 'goto', route: '/mcp' }, ...file]);
+});
+
+test('the release sweep picks up the step files the real feature map names', () => {
+  const checks = loadPlan(MAP_DIR).flatMap((entry) => entry.checks).filter((check) => check.stepFile);
+  const auto = checks.filter((check) => check.status === 'auto');
+  assert.ok(auto.some((check) => check.id === 'connected-apps/refuse-a-changed-bundle' && check.steps.some((step) => step.do === 'drop-file')));
+  assert.ok(auto.some((check) => check.id === 'agents/system-prompt-parts' && check.steps.length > 10));
+  assert.ok(checks.some((check) => check.id === 'connected-apps/check-a-signed-bundle' && check.status === 'needs'));
+});
+
 test('every real feature map entry keeps a step the sweep can run', () => {
   const names = readdirSync(MAP_DIR).filter((name) => name.endsWith('.md') && name !== 'README.md');
   assert.deepEqual(checkSweepCoverage(names.map((name) => ({ name, content: readFileSync(path.join(MAP_DIR, name), 'utf8') }))), []);

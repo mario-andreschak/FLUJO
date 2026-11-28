@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Keeps docs/feature-map/ in step with the pages in src/app (see .claude/skills/verify-flujo).
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseEntryChecks } from './release-sweep/steps.mjs';
+import { STEP_FILE_DIR, parseEntryChecks, readStepFile } from './release-sweep/steps.mjs';
 
 export const MAP_DIR = 'docs/feature-map';
 export const SECTIONS = ['Sub-features', 'How to get to it (user POV)', 'Driving it with flujo-drive', 'Gotchas'];
@@ -55,10 +55,45 @@ export function checkFeatureMap(routes, entries, index) {
   return problems;
 }
 
+/**
+ * Step files in docs/feature-map/steps/ run only through the bullet that names them: the release sweep
+ * and `npm run journey:feature-steps` find them there. So every file is named by exactly one bullet,
+ * every named file exists, and its steps are valid flujo-drive steps.
+ * @param {{ name: string, content: string }[]} entries
+ * @param {string[]} stepFiles file names in the steps folder
+ * @param {(file: string) => unknown} readSteps reads and validates one named file, throwing what is wrong
+ */
+export function checkStepFiles(entries, stepFiles, readSteps) {
+  const problems = [];
+  const namedBy = new Map();
+  for (const { name, content } of entries) {
+    for (const check of parseEntryChecks(name, content).checks) {
+      if (!check.stepFile) continue;
+      const file = path.posix.basename(check.stepFile);
+      namedBy.set(file, [...(namedBy.get(file) ?? []), `${MAP_DIR}/${name} ("${check.label}")`]);
+    }
+  }
+  for (const [file, bullets] of namedBy) {
+    if (bullets.length > 1) problems.push(`${STEP_FILE_DIR}/${file} is named by ${bullets.join(' and ')}. Give each bullet its own step file.`);
+    try {
+      readSteps(`${STEP_FILE_DIR}/${file}`);
+    } catch (error) {
+      problems.push(`${bullets[0]}: ${error.message}`);
+    }
+  }
+  for (const file of stepFiles) {
+    if (!namedBy.has(file)) {
+      problems.push(`${STEP_FILE_DIR}/${file} is not named by any "Driving it with flujo-drive" bullet, so nothing runs it. `
+        + `Name it in a bullet as \`node scripts/flujo-drive.mjs steps /<route> --file ${STEP_FILE_DIR}/${file}\`, or delete it.`);
+    }
+  }
+  return problems;
+}
+
 /** Every entry keeps at least one step the release sweep can run, so the sweep never skips a page without anyone noticing. */
-export function checkSweepCoverage(entries) {
+export function checkSweepCoverage(entries, readSteps) {
   return entries
-    .filter(({ name, content }) => !parseEntryChecks(name, content).checks.some((check) => check.status === 'auto'))
+    .filter(({ name, content }) => !parseEntryChecks(name, content, { readSteps }).checks.some((check) => check.status === 'auto'))
     .map(({ name }) => `${MAP_DIR}/${name}: the release sweep cannot run any of its driving steps. Write at least one as `
       + `\`node scripts/flujo-drive.mjs open <route>\` (see "Steps the release sweep can run" in ${MAP_DIR}/README.md).`);
 }
@@ -78,7 +113,14 @@ export function run({ cwd = process.cwd(), log = console.log, error = console.er
   const mapDir = path.join(cwd, MAP_DIR);
   const names = readdirSync(mapDir).filter((name) => name.endsWith('.md') && name !== 'README.md').sort();
   const entries = names.map((name) => ({ name, content: readFileSync(path.join(mapDir, name), 'utf8') }));
-  const problems = [...checkFeatureMap(routes, entries, readFileSync(path.join(mapDir, 'README.md'), 'utf8')), ...checkSweepCoverage(entries)];
+  const stepFiles = existsSync(path.join(mapDir, 'steps')) ? readdirSync(path.join(mapDir, 'steps')).filter((name) => name.endsWith('.json')) : [];
+  const readSteps = (file) => readStepFile(mapDir, file);
+  const stepProblems = checkStepFiles(entries, stepFiles, readSteps);
+  const problems = [
+    ...checkFeatureMap(routes, entries, readFileSync(path.join(mapDir, 'README.md'), 'utf8')),
+    ...stepProblems,
+    ...(stepProblems.length ? [] : checkSweepCoverage(entries, readSteps)),
+  ];
   if (problems.length) {
     error(['The feature map is out of step with the app:', ...problems.map((problem) => `  ${problem}`)].join('\n'));
     return 1;

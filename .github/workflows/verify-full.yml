@@ -806,7 +806,7 @@ jobs:
   first-use-journey:
     name: First-use journey
     runs-on: ubuntu-24.04
-    timeout-minutes: 75
+    timeout-minutes: 105
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -837,6 +837,22 @@ jobs:
         env:
           FLUJO_DRIVE_HOME: ${{ runner.temp }}/flujo-drive
         run: npm run journey:front-door
+      # Every step file the feature map names (docs/feature-map/steps/), on the
+      # same build: MCP bundles with signatures and the folder picker (#1230),
+      # FLUJO's system prompt parts (#1231), deleting an agent, an app or a
+      # package that is still in use (#1389). Preconditions such as a Persona,
+      # a signing authority or a package come from scripts/feature-steps/setups.mjs.
+      - name: Run every feature map step file on the same build
+        env:
+          FLUJO_DRIVE_HOME: ${{ runner.temp }}/flujo-drive
+        run: npm run journey:feature-steps
+      # Several people on one FLUJO (#574, #575): private workspaces checked
+      # over HTTP and in a browser, then a team in two browsers at once
+      # (edit note, "Someone else saved first", history, copy, removal).
+      - name: Check several people on one FLUJO, in two browsers
+        env:
+          FLUJO_DRIVE_HOME: ${{ runner.temp }}/flujo-drive
+        run: npm run journey:multi-user
       # Connect a 128-tool app over Streamable HTTP and SSE through the screens,
       # reach its last tool by keyboard and test it with a filled-in form.
       - name: Reach every tool of a 128-tool app on the same build
@@ -858,6 +874,8 @@ jobs:
           path: |
             ${{ runner.temp }}/flujo-drive/evidence/first-journey/
             ${{ runner.temp }}/flujo-drive/evidence/front-door/
+            ${{ runner.temp }}/flujo-drive/evidence/feature-steps/
+            ${{ runner.temp }}/flujo-drive/evidence/multi-user/
             test-results/features-first-use/
             feature-first-use-artifacts/
             test-results/features/

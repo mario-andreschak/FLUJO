@@ -19,11 +19,13 @@
  * person, a copy from a personal workspace arrives without its key, a viewer
  * can look but not change or run, and removing a member cuts them off.
  *
- * With --browser-steps it writes two flujo-drive step files (sign in as the
- * first person; open the second person's workspace link as the first person)
- * for `node scripts/flujo-drive.mjs steps owner/login --file <file>`. They
- * contain only the throwaway test passwords made here; delete the folder
- * after the run. Prints one JSON summary; the exit code is 1 when a check fails.
+ * With --browser-steps <folder> it also writes two flujo-drive step files
+ * (Ben signs in and lands in his own workspace; Ben opens Anna's workspace
+ * link and is told it does not exist), runs them in a headless browser while
+ * multi-user mode is still on, and deletes them again: they hold the
+ * throwaway passwords made here. `npm run journey:multi-user` runs all of this
+ * on a fresh production build. Prints one JSON summary; the exit code is 1
+ * when a check fails.
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -45,7 +47,9 @@ function parse(argv) {
   return { ...options, url: url.origin };
 }
 
-export async function checkMultiUser({ url, browserSteps, keepOn = false }) {
+export async function checkMultiUser({ url: given, browserSteps, keepOn = false }) {
+  const url = new URL(given).origin;
+  if (new URL(url).port === '4200') throw new Error('Never run this against the everyday FLUJO on port 4200. Use a throwaway instance.');
   const results = [];
   const check = (name, ok, detail) => { results.push({ name, ok: Boolean(ok), ...(ok ? {} : { detail }) }); };
   const password = () => `check ${randomBytes(12).toString('base64url')} passphrase`;
@@ -144,19 +148,29 @@ export async function checkMultiUser({ url, browserSteps, keepOn = false }) {
   if (browserSteps) {
     await fs.mkdir(browserSteps, { recursive: true });
     const signInSteps = [
+      { do: 'goto', route: '/owner/login' },
+      { do: 'expect-text', text: 'Sign in to FLUJO' },
       { do: 'fill', label: 'Name', value: people.ben.name },
       { do: 'fill', label: 'Password', value: people.ben.password },
-      { do: 'click', role: 'button', name: 'Sign in' },
+      { do: 'click', role: 'button', name: 'Sign in', exact: true },
+      { do: 'wait-for', role: 'button', name: `Current workspace: ${benWs}`, timeout: 120000 },
     ];
     const ownFile = path.join(browserSteps, 'multi-user-own-workspace.json');
     await fs.writeFile(ownFile, JSON.stringify([...signInSteps,
       { do: 'shot', out: 'multi-user/ben-signed-in.png' }, { do: 'aria', out: 'multi-user/ben-signed-in.yml' }], null, 2));
     const otherFile = path.join(browserSteps, 'multi-user-other-workspace.json');
     await fs.writeFile(otherFile, JSON.stringify([...signInSteps,
-      { do: 'goto', route: `/?workspace=${annaWs}` },
+      { do: 'goto', route: `/?workspace=${annaWs}`, deadEnd: true },
       { do: 'expect-text', text: `Unknown workspace: ${annaWs}` },
-      { do: 'shot', out: 'multi-user/ben-opens-anna-link.png' }], null, 2));
+      { do: 'shot', out: 'multi-user/ben-opens-anna-link.png' }, { do: 'aria', out: 'multi-user/ben-opens-anna-link.yml' }], null, 2));
     stepFiles = [ownFile, otherFile];
+    // The files hold throwaway passwords that work only while the mode is on, so they run now.
+    for (const file of stepFiles) {
+      const outcome = await runBrowserSteps(url, file);
+      check(`browser: ${path.basename(file, '.json')}`, outcome.ok, outcome.error);
+    }
+    for (const file of stepFiles) await fs.rm(file, { force: true });
+    await fs.rmdir(browserSteps).catch(() => undefined);
   }
 
   if (!keepOn) {
@@ -171,6 +185,26 @@ export async function checkMultiUser({ url, browserSteps, keepOn = false }) {
     ok: failed.length === 0, checks: results.length, failed, workspaces: { anna: annaWs, ben: benWs, team: team.workspace },
     stepFiles, modeLeftOn: keepOn,
   };
+}
+
+/** Runs one flujo-drive step file in a fresh headless browser, the way `flujo-drive steps` does. */
+async function runBrowserSteps(url, file) {
+  const { loadChromium, runStep, validateSteps } = await import('./flujo-drive.mjs');
+  const steps = validateSteps(JSON.parse(await fs.readFile(file, 'utf8')));
+  const browser = await loadChromium();
+  const pageErrors = [];
+  let index = 0;
+  try {
+    const context = await browser.newContext({ viewport: { width: 1600, height: 900 }, locale: 'en-US' });
+    const page = await context.newPage();
+    page.on('pageerror', error => pageErrors.push(error.message.split('\n')[0]));
+    for (; index < steps.length; index++) await runStep(page, steps[index], `${url}/`, () => {});
+    return pageErrors.length ? { ok: false, error: `errors on the page: ${pageErrors.join('; ')}` } : { ok: true };
+  } catch (error) {
+    return { ok: false, error: `step ${index + 1} (${steps[index]?.do}): ${String(error.message).split('\n')[0]}` };
+  } finally {
+    await browser.close();
+  }
 }
 
 /** A flow with one start step, the smallest flow FLUJO saves. */

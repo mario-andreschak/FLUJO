@@ -1,0 +1,11 @@
+[
+  { "do": "drop-file", "role": "heading", "name": "MCP servers", "file": "__tests__/mcp/fixtures/mcpb-signed/hello-signed-by-mcpb-2.1.2.mcpb" },
+  { "do": "wait-for", "role": "dialog", "name": "Install an MCP bundle" },
+  { "do": "expect-text", "text": "Signed and checked", "within": { "role": "dialog", "name": "Install an MCP bundle" } },
+  { "do": "expect-text", "text": "Signed by Ada Example (Example Tools).", "within": { "role": "dialog", "name": "Install an MCP bundle" } },
+  { "do": "expect-text", "text": "FLUJO Test Signing CA vouches for the signer", "within": { "role": "dialog", "name": "Install an MCP bundle" } },
+  { "do": "expect-no-text", "text": "Not signed", "within": { "role": "dialog", "name": "Install an MCP bundle" }, "timeout": 1000 },
+  { "do": "shot", "out": "connected-apps/bundle-signed.png" },
+  { "do": "aria", "out": "connected-apps/bundle-signed.yml" },
+  { "do": "click", "role": "button", "name": "Close", "exact": true, "within": { "role": "dialog", "name": "Install an MCP bundle" } }
+]

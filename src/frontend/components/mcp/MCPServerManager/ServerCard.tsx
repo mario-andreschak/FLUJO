@@ -771,7 +771,8 @@ const ServerCard: React.FC<ServerCardProps> = ({
   return (
     <Card
       data-tutorial-server-name={name}
-      role={pickerMode && !selectionManaged ? "button" : undefined}
+      role={pickerMode && !selectionManaged ? "button" : "article"}
+      aria-label={pickerMode && !selectionManaged ? undefined : name}
       aria-pressed={pickerMode && !selectionManaged ? selected : undefined}
       aria-disabled={disabled || undefined}
       tabIndex={pickerMode && !selectionManaged && !disabled ? 0 : undefined}
