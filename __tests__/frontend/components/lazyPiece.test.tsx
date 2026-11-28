@@ -254,6 +254,43 @@ describe('lazyEssential', () => {
   });
 });
 
+describe('nested essential pieces', () => {
+  const Provider = lazyEssential(
+    async () => ({ default: ({ children }: { children?: React.ReactNode }) => <section aria-label="provider">{children}</section> }),
+    { name: 'TourProvider', loading: () => null },
+  );
+
+  it('retry only their own chunk, so a failing child reaches the error page after its own retries and never blanks the screen', async () => {
+    const retries = ESSENTIAL_RETRY_DELAYS_MS.length;
+    const load = flakyLoader(() => <nav>Navigation</nav>, retries + 1);
+    const Navigation = lazyEssential(load, { name: 'Navigation', loading: () => <p>Loading navigation</p> });
+
+    await renderScreen(<ScreenBoundary><Provider><Navigation /><main>Page</main></Provider></ScreenBoundary>);
+    await settle();
+    for (const delayMs of ESSENTIAL_RETRY_DELAYS_MS.slice(0, -1)) {
+      await advance(delayMs);
+      expect(screen.getByText('Loading navigation')).toBeInTheDocument();
+      expect(screen.getByText('Page')).toBeInTheDocument();
+    }
+    await advance(ESSENTIAL_RETRY_DELAYS_MS[retries - 1]);
+
+    expect(screen.getByText('The workspace hit a snag')).toBeInTheDocument();
+    await advance(ESSENTIAL_RETRY_DELAYS_MS[retries - 1] * 4);
+    expect(load).toHaveBeenCalledTimes(retries + 1);
+  });
+
+  it('pass a page that crashes straight to the error page', async () => {
+    function BrokenPage(): React.ReactElement {
+      throw new TypeError("Cannot read properties of undefined (reading 'map')");
+    }
+
+    await renderScreen(<ScreenBoundary><Provider><BrokenPage /></Provider></ScreenBoundary>);
+    await settle();
+
+    expect(screen.getByText('The workspace hit a snag')).toBeInTheDocument();
+  });
+});
+
 describe('HealAfterChunkFailure for a chunk no lazy piece owns', () => {
   const savedFetch = global.fetch;
   afterEach(() => { global.fetch = savedFetch; });

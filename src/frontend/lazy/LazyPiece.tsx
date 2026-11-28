@@ -50,11 +50,21 @@ function RetryAfter({ delayMs, onRetry }: { delayMs: number; onRetry: () => void
   return null;
 }
 
+interface PieceFailure {
+  error: unknown;
+  /** How often the boundary has loaded the piece again since it mounted. */
+  retries: number;
+  /** True when the piece's own chunk failed to load, false when the error came from rendering. */
+  ownChunkFailed: boolean;
+}
+
+/** How long to wait before loading the piece again, or null to pass the error up. */
+type RetryPolicy = (failure: PieceFailure) => number | null;
+
 interface PieceBoundaryProps {
   name: string;
-  chunk: Pick<PieceChunk<unknown>, 'forgetFailure'>;
-  /** How long to wait before loading again after `retries` earlier retries, or null to pass the error up. */
-  retryDelayMs: (error: unknown, retries: number) => number | null;
+  chunk: Pick<PieceChunk<unknown>, 'forgetFailure' | 'failed'>;
+  retryDelayMs: RetryPolicy;
   /** Shown while waiting to load again. */
   fallback: ReactNode;
   children: ReactNode;
@@ -72,8 +82,12 @@ class PieceBoundary extends Component<PieceBoundaryProps, PieceBoundaryState> {
     return { failure: { error } };
   }
 
+  private delayMs(error: unknown): number | null {
+    return this.props.retryDelayMs({ error, retries: this.state.retries, ownChunkFailed: this.props.chunk.failed });
+  }
+
   componentDidCatch(error: unknown) {
-    const delayMs = this.props.retryDelayMs(error, this.state.retries);
+    const delayMs = this.delayMs(error);
     if (delayMs === null) return;
     log.warn(`${this.props.name} failed; loading it again in ${Math.round(delayMs / 1000)} s`, error);
   }
@@ -84,9 +98,9 @@ class PieceBoundary extends Component<PieceBoundaryProps, PieceBoundaryState> {
   };
 
   render() {
-    const { failure, retries } = this.state;
+    const { failure } = this.state;
     if (!failure) return this.props.children;
-    const delayMs = this.props.retryDelayMs(failure.error, retries);
+    const delayMs = this.delayMs(failure.error);
     if (delayMs === null) throw failure.error;
     return (
       <>
@@ -105,7 +119,7 @@ interface PiecePolicy {
   name: string;
   /** Shown while the piece loads and while it waits to load again. */
   fallback: () => ReactNode;
-  retryDelayMs: (error: unknown, retries: number) => number | null;
+  retryDelayMs: RetryPolicy;
 }
 
 function createLazyPiece<P extends object>(load: PieceLoader<P>, policy: PiecePolicy): ComponentType<P> {
@@ -141,12 +155,13 @@ export interface OptionalPieceOptions {
  * Loads a piece the rest of the screen works without (a decoration, an overlay, a dock) in the browser only.
  * Its own boundary catches a failed chunk or a crash: it shows the fallback and loads again later by itself,
  * so the rest of the screen keeps working and the piece comes back without a page reload.
+ * It takes no children: a piece that wraps the screen is essential.
  */
-export function lazyOptional<P extends object>(load: PieceLoader<P>, options: OptionalPieceOptions): ComponentType<P> {
+export function lazyOptional<P extends { children?: never }>(load: PieceLoader<P>, options: OptionalPieceOptions): ComponentType<P> {
   return createLazyPiece(load, {
     name: options.name,
     fallback: options.fallback ?? (() => null),
-    retryDelayMs: (_error, retries) => optionalRetryDelayMs(retries),
+    retryDelayMs: ({ retries }) => optionalRetryDelayMs(retries),
   });
 }
 
@@ -158,16 +173,19 @@ export interface EssentialPieceOptions {
 }
 
 /**
- * Loads a piece the screen cannot work without in the browser only. A chunk that fails to load is
- * fetched again with backoff before the error reaches the error page; the error page then keeps
- * trying by itself (`HealAfterChunkFailure`). Other errors go straight to the error page.
+ * Loads a piece the screen cannot work without in the browser only. When its own chunk fails to load,
+ * it is fetched again with backoff before the error reaches the error page; the error page then keeps
+ * trying by itself (`HealAfterChunkFailure`). Other errors, and errors from the children it wraps,
+ * go straight up, so nested essential pieces never multiply each other's retries.
  */
 export function lazyEssential<P extends object>(load: PieceLoader<P>, options: EssentialPieceOptions): ComponentType<P> {
   return createLazyPiece(load, {
     name: options.name,
     fallback: options.loading,
-    retryDelayMs: (error, retries) => (
-      isChunkLoadError(error) && retries < ESSENTIAL_RETRY_DELAYS_MS.length ? ESSENTIAL_RETRY_DELAYS_MS[retries] : null
+    retryDelayMs: ({ error, retries, ownChunkFailed }) => (
+      ownChunkFailed && isChunkLoadError(error) && retries < ESSENTIAL_RETRY_DELAYS_MS.length
+        ? ESSENTIAL_RETRY_DELAYS_MS[retries]
+        : null
     ),
   });
 }
