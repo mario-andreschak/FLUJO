@@ -321,16 +321,19 @@ describe('normal stdio delivery', () => {
       PLAYWRIGHT_BROWSERS_PATH: '/ms-playwright',
     };
 
-    expect(shippedServerEnv(browser, environment)).toMatchObject({
+    const browserEnv = shippedServerEnv(browser, environment);
+    expect(browserEnv).toMatchObject({
       FLUJO_BROWSER_PROFILE_DIR: path.join(path.resolve('/data'), 'workspaces', 'default-workspace', 'browser-profile', 'trusted'),
       FLUJO_BROWSER_SCREENSHOT_DIR: path.join(path.resolve('/data'), 'workspaces', 'default-workspace', 'screenshots', 'browser'),
       FLUJO_BROWSER_RECORD_DIR: path.join(path.resolve('/data'), 'workspaces', 'default-workspace', 'recordings', 'browser'),
       FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS: '1',
-      FLUJO_BROWSER_MODE: 'trusted',
-      FLUJO_BROWSER_WINDOW_VISIBILITY: 'offscreen',
-      FLUJO_BROWSER_EXTENSION_DIRS: '/extensions/one:/extensions/two',
       PLAYWRIGHT_BROWSERS_PATH: '/ms-playwright',
     });
+    // Since #1449 the browser mode, window and extensions are the server's own
+    // settings; the host's values never reach a FLUJO-managed browser.
+    for (const name of ['FLUJO_BROWSER_MODE', 'FLUJO_BROWSER_WINDOW_VISIBILITY', 'FLUJO_BROWSER_EXTENSION_DIRS']) {
+      expect(browserEnv).not.toHaveProperty(name);
+    }
     expect(shippedServerEnv(browser, {
       ...environment,
       FLUJO_BROWSER_ALLOW_PRIVATE_HOSTS: '0',
