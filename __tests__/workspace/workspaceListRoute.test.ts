@@ -29,6 +29,10 @@ jest.mock('@/backend/services/mcp', () => ({
   mcpService: { notifyAllRootsChanged: jest.fn() },
 }));
 
+jest.mock('@/backend/services/workspace/workspaceDeletion', () => ({
+  deleteWorkspace: (name: string) => mockDeleteWorkspace(name),
+}));
+
 jest.mock('@/utils/workspace', () => ({
   ...jest.requireActual('@/utils/workspace'),
   DEFAULT_WORKSPACE: 'default-workspace',
@@ -36,7 +40,6 @@ jest.mock('@/utils/workspace', () => ({
   createWorkspace: (name: string) => mockCreateWorkspace(name),
   renameWorkspace: (name: string, newName: string) => mockRenameWorkspace(name, newName),
   updateWorkspaceRoots: (name: string, roots: unknown) => mockUpdateWorkspaceRoots(name, roots),
-  deleteWorkspace: (name: string) => mockDeleteWorkspace(name),
 }));
 
 import { DELETE, GET, PATCH, POST } from '@/app/api/workspaces/route';

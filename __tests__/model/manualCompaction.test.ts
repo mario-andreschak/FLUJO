@@ -76,7 +76,7 @@ let generate: jest.SpiedFunction<typeof runtime.generateCompletion>;
 
 beforeEach(() => {
   conversationStates.clear();
-  loadItemMock.mockReset().mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20 } });
+  loadItemMock.mockReset().mockResolvedValue({ experimental: { compactionKeepTokens: 20 } });
   writeRunResourceMock.mockReset().mockImplementation(async (input: { conversationId: string; name: string }) => ({
     uri: `flujo://run/${input.conversationId}/${input.name}`, size: 1, kind: 'text', mimeType: 'application/json',
   }));
@@ -120,7 +120,7 @@ describe('manual compaction request', () => {
   });
 
   it('never retries a request that found nothing to summarize', async () => {
-    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 1_000_000 } });
+    loadItemMock.mockResolvedValue({ experimental: { compactionKeepTokens: 1_000_000 } });
     const state = seed('small', { requestedAt: 1 });
     expect(await compact('small', source)).toBeNull();
     expect(state.compactionRequest?.attemptedAt).toEqual(expect.any(Number));
@@ -128,10 +128,9 @@ describe('manual compaction request', () => {
     expect(generate).not.toHaveBeenCalled();
   });
 
-  it('respects summaries that are switched off, and still uses the request up', async () => {
-    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: false } });
+  it('respects a Process node that switched summaries off, and still uses the request up', async () => {
     const state = seed('off', { requestedAt: 1 });
-    expect(await compact('off', source)).toBeNull();
+    expect(await runtime.maybeCompactWire(source, 'off', 'node-1', 'full-history', model, 100, { compactionMode: 'off' })).toBeNull();
     expect(generate).not.toHaveBeenCalled();
     expect(state.compactionRequest?.attemptedAt).toEqual(expect.any(Number));
   });

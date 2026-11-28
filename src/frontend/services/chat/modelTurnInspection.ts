@@ -128,7 +128,7 @@ export class ArchivedModelTurnValue {
   }
 }
 
-export interface ModelTurnInspection extends Pick<ModelTurnSnapshot, 'version' | 'entry' | 'media' | 'counts' | 'provenance' | 'visualCompaction' | 'contextCompaction'> {
+export interface ModelTurnInspection extends Pick<ModelTurnSnapshot, 'version' | 'entry' | 'media' | 'counts' | 'provenance' | 'contextCompaction'> {
   kind: 'chunked-model-turn';
   sdkRequest: ArchivedModelTurnValue | undefined;
   canonical: ArchivedModelTurnValue | undefined;
@@ -175,7 +175,7 @@ export async function readModelTurnInspection(response: Response, signal?: Abort
     pending += decoder.decode();
     if (pending || !terminal || terminal.bytes !== archive.length || terminal.sha256 !== hash.finalize().toString()) throw new Error('Model-turn inspection integrity failed.');
     const range = { start: archive.skip(0), end: archive.length };
-    const fields = archive.fields(range, new Set(['version', 'entry', 'media', 'counts', 'provenance', 'visualCompaction', 'contextCompaction', 'canonicalMessages', 'genericWire', 'sdkRequest']));
+    const fields = archive.fields(range, new Set(['version', 'entry', 'media', 'counts', 'provenance', 'contextCompaction', 'canonicalMessages', 'genericWire', 'sdkRequest']));
     const parse = (name: string) => { const value = fields.get(name); return value ? JSON.parse(archive.text(value.start, value.end)) : undefined; };
     let additionalMetadata = false;
     const metadata = (name: string) => {
@@ -186,7 +186,7 @@ export async function readModelTurnInspection(response: Response, signal?: Abort
     const ref = (name: string) => { const value = fields.get(name); return value ? new ArchivedModelTurnValue(archive, value) : undefined; };
     signal?.throwIfAborted();
     const summary = { media: metadata('media') ?? [], counts: metadata('counts'), provenance: metadata('provenance'),
-      visualCompaction: metadata('visualCompaction'), contextCompaction: metadata('contextCompaction') };
+      contextCompaction: metadata('contextCompaction') };
     return { kind: 'chunked-model-turn', version: parse('version'), entry: parse('entry'), ...summary, additionalMetadata,
       integrity: { bytes: archive.length, sha256: terminal.sha256 },
       canonical: ref('canonicalMessages'), wire: ref('genericWire'), sdkRequest: ref('sdkRequest'), source: new ArchivedModelTurnValue(archive, range) };

@@ -19,6 +19,7 @@ import { latestSubflowAssistantText, SubflowOutputBudget } from './subflowOutput
 import { publishConversation } from './conversationPublication';
 import { FlowExecutionAuthorityError } from './executionAuthority';
 import { requireApprovalOf } from '@/backend/execution/flow/toolApprovalGate';
+import type { FlowRunInput } from './runFlowContract';
 
 const log = createLogger('backend/execution/flow/subflowRecovery');
 
@@ -32,6 +33,9 @@ function resumeLeases(): Set<string> {
   }
   return global.__flujo_subflow_parent_resume_leases;
 }
+
+/** Starts a run. runFlow passes itself in, so this module never imports runFlow.ts. */
+export type SubflowRunner = (input: FlowRunInput) => Promise<SubflowRunOutcome>;
 
 export interface SubflowRunOutcome {
   status: string;
@@ -228,7 +232,7 @@ function findInvocation(
   return parent.subflowInvocations?.[invocationId];
 }
 
-async function resumeReadyParent(parent: SharedState, invocation: SubflowInvocation): Promise<void> {
+async function resumeReadyParent(parent: SharedState, invocation: SubflowInvocation, runFlow: SubflowRunner): Promise<void> {
   const parentId = parent.conversationId;
   if (!parentId || parent.ephemeral || parent.isCancelled) return;
   if (parent.status !== 'error' || parent.currentNodeId !== invocation.parentNodeId) return;
@@ -263,7 +267,6 @@ async function resumeReadyParent(parent: SharedState, invocation: SubflowInvocat
     await persistSubflowParent(parent);
 
     try {
-      const { runFlow } = await import('./runFlow');
       log.info('Resuming parent after recovered subflow join became ready', {
         parentConversationId: parentId,
         invocationId: invocation.id,
@@ -283,7 +286,7 @@ async function resumeReadyParent(parent: SharedState, invocation: SubflowInvocat
       });
       // Awaiting this propagation makes nested recovery deterministic. runFlow's
       // background notification is intentionally redundant and idempotent.
-      await reportSubflowRunOutcome(result);
+      await reportSubflowRunOutcome(result, runFlow);
     } catch (error) {
       log.error('Automatic parent continuation after subflow recovery failed', {
         parentConversationId: parentId,
@@ -298,8 +301,8 @@ async function resumeReadyParent(parent: SharedState, invocation: SubflowInvocat
 
 /** Update the exact parent lane owned by a child terminal run and, when every
  * required lane is now complete, continue the parked parent from its Subflow
- * node. Safe to call more than once for the same result. */
-export async function reportSubflowRunOutcome(result: SubflowRunOutcome): Promise<void> {
+ * node with `runFlow`. Safe to call more than once for the same result. */
+export async function reportSubflowRunOutcome(result: SubflowRunOutcome, runFlow: SubflowRunner): Promise<void> {
   const child = result.sharedState;
   const laneRef = child.subflowLane ?? child.recovery?.lane;
   const parentId = child.parentRunId ?? child.parentConversationId;
@@ -328,17 +331,17 @@ export async function reportSubflowRunOutcome(result: SubflowRunOutcome): Promis
   } finally { outputBudget.release(); }
 
   if (invocation.status === 'ready') {
-    await resumeReadyParent(parent, invocation);
+    await resumeReadyParent(parent, invocation, runFlow);
   }
 }
 
 /** Do not lengthen the child HTTP request just to run its ancestors. The
  * durable lane update/resume starts on the next microtask and is also healed by
  * syncLaneFromPersistedChild if the process stops in between. */
-export function queueSubflowRunOutcome(result: SubflowRunOutcome): void {
+export function queueSubflowRunOutcome(result: SubflowRunOutcome, runFlow: SubflowRunner): void {
   if (result.status !== 'completed' && result.status !== 'capped' && result.status !== 'error') return;
   queueMicrotask(bindToCurrentWorkspace(() => {
-    void reportSubflowRunOutcome(result).catch((error) => {
+    void reportSubflowRunOutcome(result, runFlow).catch((error) => {
       log.error('Could not propagate subflow terminal outcome to its parent', {
         conversationId: result.conversationId,
         error,
@@ -552,7 +555,7 @@ export async function getSubflowRecoveryOptions(conversationId: string, signal?:
   };
 }
 
-async function runRecoveryConversation(state: RecoveryConversation): Promise<SubflowRunOutcome> {
+async function runRecoveryConversation(state: RecoveryConversation, runFlow: SubflowRunner): Promise<SubflowRunOutcome> {
   if (!state.conversationId) throw new Error('Conversation has no id.');
   const leaseKey = `conversation:${state.conversationId}`;
   const leases = resumeLeases();
@@ -573,7 +576,6 @@ async function runRecoveryConversation(state: RecoveryConversation): Promise<Sub
     if (current.recovery?.manualActionRequired) {
       throw new Error(current.recovery.sideEffectWarning || 'Manual review is required before this conversation can be retried.');
     }
-    const { runFlow } = await import('./runFlow');
     const source: FlowInvocationSource = current.source ?? (current.parentRunId ? 'subflow' : 'chat');
     return await runFlow({
       conversationId: current.conversationId!,
@@ -595,6 +597,7 @@ async function runRecoveryConversation(state: RecoveryConversation): Promise<Sub
 export async function retrySubflowRecoveryScope(
   conversationId: string,
   scope: SubflowRecoveryScope,
+  runFlow: SubflowRunner,
 ): Promise<SubflowRecoveryResult> {
   const states = await familyConversationStates(conversationId);
   const current = states.find((state) => state.conversationId === conversationId);
@@ -639,8 +642,8 @@ export async function retrySubflowRecoveryScope(
     if (!id) continue;
     result.startedConversationIds.push(id);
     try {
-      const outcome = await runRecoveryConversation(target);
-      await reportSubflowRunOutcome(outcome);
+      const outcome = await runRecoveryConversation(target, runFlow);
+      await reportSubflowRunOutcome(outcome, runFlow);
       if (outcome.status === 'completed' || outcome.status === 'capped') {
         result.completedConversationIds.push(id);
       } else {

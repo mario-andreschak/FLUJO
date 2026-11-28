@@ -1,4 +1,5 @@
 // When MCP servers are (re)connected: the startup sweep and backoff retries after an unexpected close.
+import os from 'node:os';
 import { BundledFlujoWorkloadError } from '../security/bundledFlujoWorkload';
 import { executionApprovalFailure } from './executionApproval';
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -11,6 +12,18 @@ import { McpRuntimeAuthorityRetirementError } from "./connection";
 import { resolveLazyStart } from "./lazyStart";
 
 const log = createLogger('backend/services/mcp/connectionScheduling');
+
+/**
+ * Servers the startup sweep connects at once: one per two processors and one
+ * per 2 GiB of memory, whichever is smaller, at least two and at most eight.
+ * The others wait for a free place, so none is refused.
+ */
+export function bootConcurrency(
+  processors = os.availableParallelism?.() ?? os.cpus().length,
+  totalMemory = os.totalmem(),
+): number {
+  return Math.max(2, Math.min(8, Math.floor(processors / 2), Math.floor(totalMemory / (2 * 1024 ** 3))));
+}
 
 /**
  * What connection scheduling uses from the MCP service. Registries are read
@@ -269,20 +282,17 @@ export async function startEnabledServers(host: ConnectionSchedulingHost): Promi
     // server delayed all the others, and the page sat in "connecting"/error far too
     // long). But the opposite extreme — an unbounded Promise.all — forks EVERY enabled
     // stdio server at once, a thundering-herd fork storm that spikes CPU/RAM and OOMs
-    // small (e.g. 1-vCPU suspend/resume) hosts on every wake. A small pool keeps
-    // startup off the sequential worst case while capping the simultaneous fork load.
-    // Tunable via FLUJO_MCP_BOOT_CONCURRENCY (default 2). Each connectServer() already
-    // catches its own failures and never rejects.
-    const bootConcurrency = Math.max(
-      1,
-      Number(process.env.FLUJO_MCP_BOOT_CONCURRENCY) || 2,
-    );
+    // small (e.g. 1-vCPU suspend/resume) hosts on every wake. A pool sized to the
+    // machine keeps startup off the sequential worst case while capping the
+    // simultaneous fork load. Each connectServer() already catches its own
+    // failures and never rejects.
+    const concurrency = bootConcurrency();
     log.info(
-      `Connecting ${enabledServers.length} enabled servers with boot concurrency ${bootConcurrency}`,
+      `Connecting ${enabledServers.length} enabled servers with boot concurrency ${concurrency}`,
     );
     await runWithConcurrency(
       enabledServers,
-      bootConcurrency,
+      concurrency,
       async (config) => {
         log.info(`Starting server: ${config.name}`);
         await host.connectServer(config).catch((error) => {

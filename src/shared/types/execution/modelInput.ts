@@ -1,7 +1,6 @@
 /** Shared debugger wire snapshot and current-preview DTOs. Types only. */
 import type OpenAI from 'openai';
 import type { FlujoChatMessage } from '@/shared/types/chat';
-import type { VisualCompactionDiagnostic } from '@/shared/types/visualArchive';
 import type { ContextCompactionDiagnostic } from '@/shared/types/contextCompaction';
 
 /**
@@ -71,8 +70,6 @@ export interface ModelInputSnapshot {
     contentTruncated?: number;
   };
   inputMode?: 'full-history' | 'latest-message' | 'isolated';
-  /** Final wire-time visual routing metrics, captured by ModelHandler. */
-  visualCompaction?: VisualCompactionDiagnostic;
   /** Ordered late-wire transformations, including emergency provider refits. */
   contextCompaction?: ContextCompactionDiagnostic;
 }

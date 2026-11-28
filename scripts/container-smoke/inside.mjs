@@ -142,7 +142,6 @@ async function setSpeedSettings(on) {
   await api('/api/storage', { key: 'speech_settings', value: { ...current, experimental } });
   // The flow engine and the MCP client re-read these settings at most once a second.
   await delay(1_200);
-  return { claudeSessionResume: experimental.claudeSessionResume === true };
 }
 
 /** Bundled Claude Code processes alive in this container. */
@@ -254,8 +253,8 @@ async function voiceTurn(scenario, standIns, conversation) {
 
 /** One series of turns per scenario with the speed settings off or on. */
 async function voiceSeries(on, standIns) {
-  const settings = await setSpeedSettings(on);
-  const series = { on, ...settings, scenarios: {} };
+  await setSpeedSettings(on);
+  const series = { on, scenarios: {} };
   const continued = { id: undefined, turns: [] };
   for (const scenario of ['direct', 'tool', 'continue']) {
     const runs = [];
@@ -289,8 +288,9 @@ export function assertSpeedSettingsWork(off, on) {
   const offClaims = Object.values(off.scenarios).flatMap((scenario) => scenario.runs).filter((run) => run.claimed).length;
   if (offClaims) problems.push(`with the settings off, ${offClaims} requests took a prepared Claude Code process`);
   if (on.scenarios.direct.parkedAfter < 1) problems.push('with the settings on, no Claude Code process waited for the next request');
-  // A turn that resumes a stored Claude session starts its own process (#1408, part 1).
-  for (const scenario of on.claudeSessionResume ? ['direct', 'tool'] : ['direct', 'tool', 'continue']) {
+  // A turn that resumes a stored Claude session starts its own process (#1408, part 1), and a
+  // continued conversation always resumes its session (#1449).
+  for (const scenario of ['direct', 'tool']) {
     const later = on.scenarios[scenario].runs.slice(1);
     const claimed = later.filter((run) => run.claimed).length;
     if (claimed < later.length - 1) {

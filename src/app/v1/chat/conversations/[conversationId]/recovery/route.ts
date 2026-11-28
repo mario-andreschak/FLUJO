@@ -8,6 +8,7 @@ import {
   retrySubflowRecoveryScope,
   type SubflowRecoveryScope,
 } from '@/backend/execution/flow/subflowRecovery';
+import { runFlow } from '@/backend/execution/flow/runFlow';
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 
@@ -74,7 +75,7 @@ async function POST_handler(
   }
 
   try {
-    const result = await retrySubflowRecoveryScope(conversationId, scope);
+    const result = await retrySubflowRecoveryScope(conversationId, scope, runFlow);
     return NextResponse.json(result);
   } catch (error) {
     if (error instanceof ConversationLogReadPressureError) throw error;

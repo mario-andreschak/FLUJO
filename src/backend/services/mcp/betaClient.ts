@@ -2,6 +2,7 @@ import { registerTaskInputHandler, dispatchTaskInputRequest } from './taskInputH
 import { mcpAppsEnabled, mcpSkillsEnabled, mcpAppRuntimeBrokerEnabled } from '@/shared/utils/mcpClientFeatures';
 import { getCurrentWorkspace, bindToCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
 import { registerTasksExtensionClient } from './tasksExtensionSession';
+import { liveClient } from './serviceRegistries';
 import { MCP_SKILLS_EXTENSION_ID } from '@/shared/types/mcp';
 import { InputResponseV2Schema } from '@modelcontextprotocol/ext-tasks/core/v2';
 import { getElicitationContext } from './elicitationContext';
@@ -85,12 +86,13 @@ import {
 const log = createLogger("backend/services/mcp/betaClient");
 
 /**
- * Connections always negotiate the 2026-07-28 protocol; negotiation falls back
- * to the classic handshake for older servers by itself (#1449). Still called
- * by services/mcp/index.ts until the second #1449 pass removes the calls.
+ * Whether a connection is built by the negotiating SDK. Every server is,
+ * except protected execution servers and websocket ones (the newer SDK has no
+ * websocket transport). Negotiation falls back to the classic handshake for
+ * older servers by itself (#1449).
  */
-export async function isMcpBetaProtocolEnabled(): Promise<boolean> {
-  return true;
+export function usesNegotiatingClient(config: Pick<MCPServerConfig, 'transport'>, protectedServer: boolean): boolean {
+  return !protectedServer && config.transport !== "websocket";
 }
 
 /** Whether a client (as stored in the connection map) was built by the beta path. */
@@ -185,10 +187,7 @@ export function createNewBetaClient(
 
   // Register the declared host identity before discovery. Only connections
   // that negotiated 2026-07-28 can later create the raw extension channel.
-  const isAuthorityCurrent = bindToCurrentWorkspace(async () => {
-    const { mcpService } = await import('@/backend/services/mcp');
-    return mcpService.getClient(config.name) === (client as unknown as Client);
-  });
+  const isAuthorityCurrent = bindToCurrentWorkspace(async () => liveClient(config.name) === (client as unknown as Client));
   registerTasksExtensionClient(client, {
     endpointId: workspaceCacheKey(config.name), clientInfo, clientCapabilities,
     authorizeLateTaskCancellation: isAuthorityCurrent,

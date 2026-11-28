@@ -1,6 +1,5 @@
 import type OpenAI from 'openai';
 import type { FlujoChatMessage } from './chat';
-import type { VisualCompactionDiagnostic } from './visualArchive';
 import type { ContextCompactionDiagnostic } from './contextCompaction';
 
 export type ModelDispatchOutcome = 'running' | 'completed' | 'error' | 'cancelled';
@@ -96,7 +95,6 @@ export interface ModelTurnSnapshot {
     emergencyStripped?: number;
     contentTruncated?: number;
   };
-  visualCompaction?: VisualCompactionDiagnostic;
   contextCompaction?: ContextCompactionDiagnostic;
 }
 

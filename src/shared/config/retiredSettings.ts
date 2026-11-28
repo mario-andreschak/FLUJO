@@ -22,16 +22,9 @@ export const RETIRED_EXPERIMENTAL_SETTINGS = [
   'visualCompactionEnabled',
   'visualCompactionToolResultsOnly',
   'visualCompactionEvaluationMode',
+  'claudeSessionResume',
+  'autoUnloadOllamaModels',
 ] as const;
-
-/**
- * Switches that are still read inside files the #571 split owns. They hold
- * their only value until the second #1449 pass removes those reads.
- */
-export const PINNED_EXPERIMENTAL_SETTINGS = {
-  claudeSessionResume: true,
-  autoUnloadOllamaModels: true,
-} as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -42,6 +35,5 @@ export function withoutRetiredSettings<T>(settings: T): T {
   if (!isRecord(settings)) return settings;
   const experimental = isRecord(settings.experimental) ? { ...settings.experimental } : {};
   for (const name of RETIRED_EXPERIMENTAL_SETTINGS) delete experimental[name];
-  Object.assign(experimental, PINNED_EXPERIMENTAL_SETTINGS);
   return { ...settings, experimental } as T;
 }

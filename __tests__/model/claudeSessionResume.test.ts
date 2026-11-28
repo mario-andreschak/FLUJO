@@ -1,7 +1,7 @@
 /**
  * Issue #154 — the Claude Subscription adapter's session-RESUME + delta-send
- * path, gated by the experimental `claudeSessionResume` setting (threaded as
- * CompletionInput.sessionResume).
+ * path, used whenever ModelHandler passes CompletionInput.sessionResume (every
+ * full-history node since #1449).
  *
  * The contract this test pins:
  *  - Turn 1 (no session yet): a FULL flatten is sent and NO `resume` option is
@@ -9,7 +9,7 @@
  *  - Turn 2 (session exists, prefix unchanged, history grew): the adapter passes
  *    `resume: <sessionId>` and sends ONLY the delta (the new user message), not
  *    the whole history — the whole point of #154.
- *  - With the flag OFF, the adapter never resumes and always re-flattens.
+ *  - With sessionResume false, the adapter never resumes and always re-flattens.
  *  - A shrunk history (client pruning/divergence) refuses reuse and re-flattens.
  *
  * The Agent SDK is mocked (its ESM load is the reason the adapter imports it

@@ -8,9 +8,6 @@ jest.mock('@/backend/execution/flow/conversationSummaryStore', () => ({
   listConversationSummaries: (...args: unknown[]) => listConversationSummariesMock(...args),
 }));
 
-jest.mock('@/backend/execution/flow/runFlow', () => ({
-  runFlow: (...args: unknown[]) => runFlowMock(...args),
-}));
 jest.mock('@/backend/execution/flow/persistConversationState', () => ({
   persistConversationState: (...args: unknown[]) => persistConversationStateMock(...args),
 }));
@@ -28,7 +25,10 @@ import {
   syncLaneFromPersistedChild,
 } from '@/backend/execution/flow/subflowRecovery';
 import type { SharedState, SubflowInvocation } from '@/backend/execution/flow/types';
+import type { SubflowRunner } from '@/backend/execution/flow/subflowRecovery';
 import { SubflowOutputBudget, getSubflowOutputDiagnostics } from '@/backend/execution/flow/subflowOutputBudget';
+
+const runFlow: SubflowRunner = (input) => runFlowMock(input);
 
 function parentState(invocation: SubflowInvocation): SharedState {
   return {
@@ -152,7 +152,7 @@ describe('subflow recovery coordinator', () => {
       conversationId: 'child',
       outputText: 'recovered output',
       sharedState: child,
-    });
+    }, runFlow);
 
     expect(invocation.lanes[0]).toMatchObject({
       status: 'completed',
@@ -300,7 +300,7 @@ describe('subflow recovery coordinator', () => {
       conversationId: 'child',
       outputText: 'child output',
       sharedState: child,
-    });
+    }, runFlow);
 
     expect(runFlowMock).not.toHaveBeenCalled();
     await expect(getSubflowRecoveryOptions('parent')).resolves.toMatchObject({

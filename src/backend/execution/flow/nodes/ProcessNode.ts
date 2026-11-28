@@ -1010,22 +1010,12 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
       sharedState.handoffInput && sharedState.handoffInput.targetNodeId === node_params?.id
         ? sharedState.handoffInput
         : undefined;
-    // Claude's experimental session resume tracks a message-count watermark. An
+    // Claude's session resume tracks a message-count watermark. An
     // output-folded history from another node no longer aligns with it, so keep
     // the full history for this eligible call. Explicit input scoping remains
     // unsafe and continues through the normal wire-view path below.
-    let preserveFullHistoryForClaudeResume = false;
-    if (inputMode === 'full-history') {
-      try {
-        const model = admission.model;
-        preserveFullHistoryForClaudeResume =
-          model?.adapter === 'claude-cli' &&
-          await ModelHandler.isClaudeSessionResumeEnabled();
-      } catch (err) {
-        // If the model cannot be resolved, retain the established folding behavior.
-        log.warn('Could not determine Claude session-resume compatibility', { err });
-      }
-    }
+    const preserveFullHistoryForClaudeResume =
+      inputMode === 'full-history' && admission.model.adapter === 'claude-cli';
 
     let collapsedNodeIds = new Set<string>();
     if (!preserveFullHistoryForClaudeResume) {
@@ -1453,7 +1443,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
             compactionMode: node_params?.properties?.compactionMode,
             compactionKeepTokens: node_params?.properties?.compactionKeepTokens,
             onFinalWire: prepResult.modelInput
-              ? (finalWire, visualCompaction, finalModelInput) => {
+              ? (finalWire, finalModelInput) => {
                   if (finalModelInput) {
                     prepResult.modelInput = finalModelInput;
                     prepResult.modelInputForArchive = finalModelInput;
@@ -1473,10 +1463,6 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
                       : message.content,
                   })) as FlujoChatMessage[];
                   prepResult.modelInput!.wireMessages = captured;
-                  if (visualCompaction) {
-                    visualCompaction.finalWireCaptured = true;
-                    prepResult.modelInput!.visualCompaction = visualCompaction;
-                  }
                   prepResult.modelInputs = [prepResult.modelInput!];
                 }
               : undefined,

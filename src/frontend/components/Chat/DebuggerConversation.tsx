@@ -89,22 +89,6 @@ const DebuggerConversation: React.FC<DebuggerConversationProps> = ({
 
       <ContextCompactionPanel diagnostic={modelInput.contextCompaction} />
 
-      {modelInput.visualCompaction && (
-        <Alert
-          severity={modelInput.visualCompaction.route === 'image' ? 'warning' : 'info'}
-          variant="outlined"
-          sx={{ mb: 1 }}
-        >
-          Visual context route: {modelInput.visualCompaction.route}
-          {modelInput.visualCompaction.candidate
-            ? ` · ${modelInput.visualCompaction.candidate.messageCount} old messages evaluated`
-            : ''}
-          {modelInput.visualCompaction.fallbackReason
-            ? ` · ${modelInput.visualCompaction.fallbackReason}`
-            : ''}
-        </Alert>
-      )}
-
       {/* Resolved system message — prominent, collapsible. */}
       <Accordion sx={{ boxShadow: 'none', '&:before': { display: 'none' } }}>
         <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ minHeight: '36px', '& .MuiAccordionSummary-content': { margin: '8px 0' } }}>

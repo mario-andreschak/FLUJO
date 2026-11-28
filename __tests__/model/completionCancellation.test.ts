@@ -98,7 +98,7 @@ const updateModelDispatchOutcomeMock = jest.fn(async (..._args: unknown[]) => un
 jest.mock('@/backend/execution/flow/modelTurnArchive', () => ({
   archiveModelDispatch: (input: ArchiveModelDispatchInput, prepare?: () => ArchiveModelDispatchInput) => {
     const payload = { canonicalMessages: input.canonicalMessages, genericWire: input.genericWire,
-      sdkRequest: input.sdkRequest, modelInput: input.modelInput, visualCompaction: input.visualCompaction };
+      sdkRequest: input.sdkRequest, modelInput: input.modelInput };
     // Production evaluates this deferred snapshot factory inside admission.
     // Dropping it recorded a live history array that later steering mutated.
     return withArchiveWriteMemory(payload, async () => {

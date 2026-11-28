@@ -323,7 +323,7 @@ describe('Settings > Advanced (#184, #1449)', () => {
     mockStorageValue = {
       settings: {
         speech: { enabled: true },
-        experimental: { claudeSessionResume: true },
+        experimental: { historyKeepRecentMessages: 8 },
       },
       settingsHydrated: true,
       updateSettings: mockUpdateSettings,
@@ -336,7 +336,7 @@ describe('Settings > Advanced (#184, #1449)', () => {
     expect(mockUpdateSettings).toHaveBeenLastCalledWith({
       speech: { enabled: true },
       experimental: {
-        claudeSessionResume: true,
+        historyKeepRecentMessages: 8,
         requireMcpAppLaunchClick: true,
       },
     });
@@ -347,7 +347,7 @@ describe('Settings > Advanced (#184, #1449)', () => {
     expect(mockUpdateSettings).toHaveBeenLastCalledWith({
       speech: { enabled: true },
       experimental: {
-        claudeSessionResume: true,
+        historyKeepRecentMessages: 8,
         restrictMcpFilesystemToRoots: true,
       },
     });

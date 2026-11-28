@@ -2,8 +2,8 @@
  * Tests for the experimental MCP v2-beta protocol support (spec revision 2026-07-28).
  *
  * Covers the three seams the feature adds:
- *  1. isMcpBetaProtocolEnabled — always true since #1449; negotiation falls back
- *     to the classic handshake per server.
+ *  1. usesNegotiatingClient — every server except protected and websocket ones
+ *     since #1449; negotiation falls back to the classic handshake per server.
  *  2. shouldRecreateClient — a toggle flip must rebuild the connection (a v1 client
  *     can never be reused as a beta client or vice versa), while a stable beta
  *     connection with an unchanged config must NOT be rebuilt (the restart-death-
@@ -31,7 +31,7 @@ import {
 } from "@/backend/services/mcp/connection";
 import {
   activateStdioOAuthMrtrController,
-  isMcpBetaProtocolEnabled,
+  usesNegotiatingClient,
   isBetaClient,
   createNewBetaClient,
   createBetaTransport,
@@ -71,17 +71,13 @@ beforeEach(() => {
 });
 afterEach(() => approvedHost.restore());
 
-describe("isMcpBetaProtocolEnabled", () => {
-  const savedNegotiation = process.env.FLUJO_MCP_PROTOCOL_NEGOTIATION;
-  afterEach(() => {
-    if (savedNegotiation === undefined) delete process.env.FLUJO_MCP_PROTOCOL_NEGOTIATION;
-    else process.env.FLUJO_MCP_PROTOCOL_NEGOTIATION = savedNegotiation;
-  });
-
-  it("always negotiates the modern protocol; old settings and the retired variable change nothing (#1449)", async () => {
-    process.env.FLUJO_MCP_PROTOCOL_NEGOTIATION = "legacy";
+describe("usesNegotiatingClient", () => {
+  it("negotiates for every server except protected and websocket ones; old settings change nothing (#1449)", () => {
     loadItemMock.mockResolvedValue({ experimental: { mcpBetaProtocol: false } });
-    expect(await isMcpBetaProtocolEnabled()).toBe(true);
+    expect(usesNegotiatingClient(stdio(), false)).toBe(true);
+    expect(usesNegotiatingClient(streamable(), false)).toBe(true);
+    expect(usesNegotiatingClient({ transport: "websocket" }, false)).toBe(false);
+    expect(usesNegotiatingClient(stdio(), true)).toBe(false);
     expect(loadItemMock).not.toHaveBeenCalled();
   });
 });

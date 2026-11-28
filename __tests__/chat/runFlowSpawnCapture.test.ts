@@ -178,7 +178,7 @@ describe('runFlow handoff capture — queued Subflow jobs', () => {
           expect(getSubflowOutputDiagnostics().active).toBe(1);
         }
       });
-      await reportSubflowRunOutcome(result);
+      await reportSubflowRunOutcome(result, runFlowWithContext);
       expect(parentWrites).toBe(1);
       expect(lane).toMatchObject({ id: 'lane', conversationId: 'callback-child', status: 'completed', attempt: 1,
         outputText: 'completed child output' });

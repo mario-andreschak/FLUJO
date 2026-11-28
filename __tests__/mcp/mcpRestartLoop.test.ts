@@ -36,13 +36,9 @@ jest.mock('@/backend/services/mcp/connection', () => ({
   safelyCloseClient: jest.fn(async () => {}),
 }));
 
-// The experimental beta-protocol gate reads the Settings blob from on-disk
-// storage on every connect (betaClient.ts). Mock it to pure, no-I/O behavior
-// so the gate resolves
-// within advanceTimersByTimeAsync — and so this suite is hermetic against the
-// developer's local settings.
+// These tests fake the classic SDK client factories, so they pin the classic handshake.
 jest.mock('@/backend/services/mcp/betaClient', () => ({
-  isMcpBetaProtocolEnabled: jest.fn(async () => false),
+  usesNegotiatingClient: jest.fn(() => false),
   createNewBetaClient: jest.fn(),
   createBetaTransport: jest.fn(),
   isBetaClient: jest.fn(() => false),

@@ -2,7 +2,6 @@ import {
   resolveEffectiveCompaction,
   DEFAULT_COMPACTION_BUFFER_TOKENS,
   DEFAULT_COMPACTION_KEEP_TOKENS,
-  resolveEffectiveVisualCompaction,
 } from '@/backend/execution/flow/handlers/resolveEffectiveCompaction';
 
 describe('resolveEffectiveCompaction (issue #248)', () => {
@@ -64,17 +63,5 @@ describe('resolveEffectiveCompaction (issue #248)', () => {
       { compactionThresholdPercent: 75 }).thresholdPercent).toBe(40);
     expect(resolveEffectiveCompaction(undefined, { compactionThresholdPercent: 101 },
       { compactionThresholdPercent: 60 }).thresholdPercent).toBe(60);
-  });
-});
-
-describe('resolveEffectiveVisualCompaction (issue #356)', () => {
-  it('stays off for everyone, whatever old settings say (#1449)', () => {
-    const off = { enabled: false, toolResultsOnly: true, evaluationOnly: false };
-    expect(resolveEffectiveVisualCompaction()).toEqual(off);
-    expect(resolveEffectiveVisualCompaction({
-      visualCompactionEnabled: true,
-      visualCompactionToolResultsOnly: false,
-      visualCompactionEvaluationMode: true,
-    })).toEqual(off);
   });
 });

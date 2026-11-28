@@ -22,10 +22,6 @@ jest.mock('@/backend/services/mcp/config', () => {
     saveConfig: jest.fn(async () => ({ success: true })),
   };
 });
-jest.mock('@/backend/services/mcp/betaClient', () => ({
-  ...jest.requireActual('@/backend/services/mcp/betaClient'),
-  isMcpBetaProtocolEnabled: jest.fn(async () => true),
-}));
 jest.mock('@/backend/services/mcp/runtimeHomeIsolation', () => ({
   resolveRuntimeHomeIsolation: jest.fn(async () => false),
 }));

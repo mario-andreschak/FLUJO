@@ -15,8 +15,6 @@ import { RUNTIME_ENVIRONMENT_DEFINITIONS } from './runtimeEnvironment';
  *   program FLUJO talks to.
  * - `test`: only tests, benchmarks and acceptance runs set it; most are read
  *   through `testSetting()`, which ignores them outside tests.
- * - `pending`: read only inside files the running #571 split owns; the second
- *   #1449 pass removes it.
  *
  * `__tests__/architecture/noFeatureSwitches.test.ts` fails when `src/` reads a
  * name that is not listed here, or when a listed name is no longer read.
@@ -27,8 +25,7 @@ export type EnvironmentKind =
   | 'install'
   | 'process'
   | 'platform'
-  | 'test'
-  | 'pending';
+  | 'test';
 
 export interface EnvironmentEntry {
   kind: EnvironmentKind;
@@ -163,8 +160,5 @@ export const ENVIRONMENT_ALLOWLIST: Readonly<Record<string, EnvironmentEntry>> =
     FLUJO_SNAPSHOT_CAPTURE_TIMEOUT_MS: 'Tests shorten workspace snapshot capture.',
     FLUJO_SNAPSHOT_SESSION_TTL_MS: 'Tests shorten workspace snapshot sessions.',
     FLUJO_MIGRATION_VERBOSE: 'Migration tests show the real migration transcript.',
-  }),
-  ...entries('pending', {
-    FLUJO_MCP_BOOT_CONCURRENCY: 'Read in services/mcp/index.ts; replaced by a machine-scaled value in the second #1449 pass.',
   }),
 });

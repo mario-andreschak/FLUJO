@@ -23,8 +23,6 @@ import {
 } from '@/backend/services/model/mediaHandoff';
 import { adaptMediaInputsForModel } from '@/backend/services/chatAttachments/modelInput';
 import { prepareImageInput } from './prepareImageInput';
-import { resolveEffectiveVisualCompaction } from './resolveEffectiveCompaction';
-import { compactMessagesVisually, type EffectiveVisualCompaction } from './visualCompaction';
 import { type Model } from '@/shared/types/model';
 import { resolveModelAdapter } from '@/shared/types/model/provider';
 import {
@@ -39,7 +37,7 @@ import {
 } from '@/backend/services/runResources';
 import { parseDataUrl } from '@/backend/services/model/adapters/messageUtils';
 import { commitFlowDurableMutation } from '@/backend/execution/flow/executionAuthority';
-import { getCompactionGlobalSettings, historyKeepRecentMessages, toolDescriptionCap } from './modelHandlerSettings';
+import { historyKeepRecentMessages, toolDescriptionCap } from './modelHandlerSettings';
 import {
   captureOversizedToolResultsForRefit,
   ensureReadResourceArmed,
@@ -77,7 +75,6 @@ export type PreparedProviderWire = {
   apiSourceIds: Array<string | undefined>;
   sanitizedTools: OpenAI.ChatCompletionFunctionTool[] | undefined;
   modelInputForArchive: ReturnType<typeof cloneModelInputSnapshot>;
-  visualDiagnostic: Awaited<ReturnType<typeof compactMessagesVisually>>['diagnostic'];
   keepRecentMessages: number;
   inputBudget: number | undefined;
   /** Hydrates and budgets wire images; the overflow retry calls it with a smaller cap. */
@@ -86,8 +83,8 @@ export type PreparedProviderWire = {
 
 /**
  * Builds the provider wire for one completion from the canonical messages:
- * materialized media, provider message rules, visual and text compaction of
- * old content, Codex's input limit, sanitized and trimmed tool schemas, image
+ * materialized media, provider message rules, text compaction of old
+ * content, Codex's input limit, sanitized and trimmed tool schemas, image
  * budgets and the context-window preflight. Only the wire changes; the
  * canonical conversation never does. Returns an error Result when the
  * request cannot fit.
@@ -147,50 +144,6 @@ export async function prepareProviderWire(
         adapter: model.adapter,
       });
     }
-  }
-
-  // Experimental visual context compaction (#356). This is a final-wire-only
-  // transformation: persisted/displayed messages remain untouched. Exact
-  // source is stashed in run resources before a complete old range is
-  // replaced, and unsupported/unknown capability, secrets, poor density,
-  // failed estimates, or non-positive savings remain on the text route.
-  const compactionGlobals = await getCompactionGlobalSettings();
-  const visualConfig: EffectiveVisualCompaction = resolveEffectiveVisualCompaction(compactionGlobals);
-  if (opts?.executionExtensionContext) visualConfig.enabled = false;
-  const visual = await compactMessagesVisually({
-    messages: apiMessages,
-    model,
-    conversationId: opts?.conversationId,
-    nodeId: opts?.nodeId,
-    config: visualConfig,
-    durableContext: opts?.durableContext,
-  });
-  apiMessages = visual.messages;
-  const visualDiagnostic = visual.diagnostic;
-  if (visualDiagnostic.route === 'image') {
-    const candidate = visualDiagnostic.candidate!;
-    const archivedIds = apiSourceIds.slice(candidate.startIndex, candidate.endIndex);
-    markModelInputMessages(
-      modelInputForArchive,
-      archivedIds,
-      'visually-archived',
-      'Replaced on the provider wire by a visual archive manifest and PNG page(s).',
-    );
-    recordContextCompaction(modelInputForArchive, {
-      kind: 'visual-archive',
-      reason: 'Old bulky context was replaced by a resource-backed visual archive.',
-      before: candidate.messageCount,
-      after: 1,
-      unit: 'messages',
-      omittedMessages: candidate.messageCount,
-      injectedMarker: '[Visual context archive]',
-    });
-    apiSourceIds = [
-      ...apiSourceIds.slice(0, candidate.startIndex),
-      undefined,
-      ...apiSourceIds.slice(candidate.endIndex),
-    ];
-    if (!opts?.executionExtensionContext) effectiveTools = ensureReadResourceArmed(apiMessages, effectiveTools);
   }
 
   // Wire-only history compaction for request/response adapters. Agentic loops
@@ -545,5 +498,5 @@ export async function prepareProviderWire(
     }
   }
 
-  return { apiMessages, apiSourceIds, sanitizedTools, modelInputForArchive, visualDiagnostic, keepRecentMessages, inputBudget, prepareImages };
+  return { apiMessages, apiSourceIds, sanitizedTools, modelInputForArchive, keepRecentMessages, inputBudget, prepareImages };
 }

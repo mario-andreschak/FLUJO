@@ -27,6 +27,4 @@ export const FEATURES = {
    * Only messages at or above this level are written.
    */
   LOG_LEVEL: 3,
-
-  ENABLE_EXECUTION_TRACKER: false,
 };

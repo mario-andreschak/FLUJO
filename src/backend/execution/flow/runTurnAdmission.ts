@@ -8,7 +8,6 @@ import { FlujoChatMessage } from '@/shared/types/chat';
 import { flowService } from '@/backend/services/flow/index';
 import { Flow } from '@/shared/types/flow';
 import { StorageKey } from '@/shared/types/storage';
-import { FEATURES } from '@/config/features';
 import { buildConversationTitle, isDefaultConversationTitle } from '@/utils/shared/conversationTitle';
 import type { FlowRunInput, FlowRunMessageInput, FlowRunResult } from './runFlowContract';
 import type { RunStateSource } from './runStateLoading';
@@ -196,11 +195,6 @@ export async function admitTurnMessages(admission: TurnAdmission): Promise<FlowR
       sharedState.debugBoundary = undefined;
       sharedState.debugBoundaryCounter = 0;
       sharedState.debugPauseRequested = false;
-    }
-    if (sharedState.debugMode) {
-      if (FEATURES.ENABLE_EXECUTION_TRACKER && !sharedState.executionTrace) {
-        sharedState.executionTrace = [];
-      }
     }
   }
 

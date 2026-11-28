@@ -3,6 +3,10 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { DEFAULT_WORKSPACE, getCurrentWorkspace } from "@/utils/workspace";
 import { MCPServiceResponse } from "@/shared/types/mcp";
+import { isClientConnectionClosed } from "@/utils/mcp/utils";
+import { createLogger } from "@/utils/logger";
+
+const log = createLogger("backend/services/mcp/serviceRegistries");
 
 // MCP connection state must be PROCESS-global, never per module instance: Next.js
 // evaluates this module once per module graph (route bundles, the instrumentation/
@@ -114,4 +118,28 @@ export function scopedRegistry<T extends Map<unknown, unknown> | Set<unknown>>(
     perWorkspace.set(name, registry);
   }
   return registry as T;
+}
+
+/**
+ * The live client of `serverName` in the current workspace, read when called.
+ *
+ * A client whose connection is already closed (transport detached, or its abort
+ * signal fired, e.g. torn down elsewhere between polls) can never serve another
+ * request: HTTP transports would reject every call at once with "This operation
+ * was aborted". It is removed and reported as missing, so every caller's
+ * missing-client path (callTool's pre-call reconnect, listWithReconnect, the
+ * connection retry) builds a fresh connection instead. The map is shared by
+ * every service instance, so a fresh client another instance registered is
+ * returned here and never removed.
+ */
+export function liveClient(serverName: string): Client | undefined {
+  const clients = scopedRegistry("clients", global.__mcp_clients!);
+  const client = clients.get(serverName);
+  if (client && isClientConnectionClosed(client)) {
+    log.warn(`liveClient: client for ${serverName} has a closed/aborted connection — evicting it`);
+    clients.delete(serverName);
+    return undefined;
+  }
+  log.debug(`liveClient: Looking for client: ${serverName}`, client ? "Found" : "Not found");
+  return client;
 }

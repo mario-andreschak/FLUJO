@@ -23,7 +23,7 @@ jest.mock('@/backend/services/mcp/config', () => {
 });
 jest.mock('@/backend/services/mcp/betaClient', () => ({
   ...jest.requireActual('@/backend/services/mcp/betaClient'),
-  isMcpBetaProtocolEnabled: jest.fn(async () => false),
+  usesNegotiatingClient: jest.fn(() => false),
 }));
 jest.mock('@/backend/services/mcp/runtimeHomeIsolation', () => ({
   resolveRuntimeHomeIsolation: jest.fn(async () => false),

@@ -5,7 +5,6 @@
  */
 import { FinishNode, ProcessNode } from '@/backend/execution/flow/nodes';
 import { modelService } from '@/backend/services/model';
-import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import type { ProcessNodeParams, ProcessNodeProperties, SharedState } from '@/backend/execution/flow/types';
 import type { Flow } from '@/shared/types/flow';
 import { saveItem } from '@/utils/storage/backend';
@@ -18,7 +17,6 @@ const AUTHOR_PROMPT = 'Summarise the ticket in one line.';
 beforeEach(async () => {
   await saveItem(StorageKey.MODELS, [model]);
   jest.spyOn(modelService, 'getModel').mockResolvedValue(model as Awaited<ReturnType<typeof modelService.getModel>>);
-  jest.spyOn(ModelHandler, 'isClaudeSessionResumeEnabled').mockResolvedValue(false);
 });
 
 afterEach(() => jest.restoreAllMocks());

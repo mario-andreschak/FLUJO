@@ -2,7 +2,6 @@
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import type { SharedState } from '@/backend/execution/flow/types';
 import { type Flow, normalizeBehaviorRulesInput } from '@/shared/types/flow';
-import { FEATURES } from '@/config/features';
 import { FlowSnapshotSchema } from '@/shared/types/enduringAgent';
 
 /**
@@ -106,7 +105,7 @@ export function installPersonaActivitySnapshot(
   sharedState.breakpoints = [];
   sharedState.lastBreakNodeId = undefined;
   sharedState.debugMode = debug;
-  sharedState.executionTrace = debug && FEATURES.ENABLE_EXECUTION_TRACKER ? [] : undefined;
+  sharedState.executionTrace = undefined;
 
   // Activity/run-scoped scratchpads and lifecycle projections.
   sharedState.variables = {};

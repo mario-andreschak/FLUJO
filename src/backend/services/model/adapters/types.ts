@@ -157,10 +157,9 @@ export interface CompletionInput {
    * present and a reusable session exists for this node), the adapter resumes
    * the persisted SDK session and sends only the per-turn delta instead of
    * re-flattening the whole history. When false/omitted the adapter always
-   * re-flattens (the always-correct fallback). Claude reuse is gated by the
-   * experimental `claudeSessionResume` setting; Codex reuse is enabled by
-   * default. Both are only set for full-history nodes (a wire-scoped view can't
-   * be reconciled against the session's watermark).
+   * re-flattens (the always-correct fallback). ModelHandler sets it for Claude
+   * subscription, Codex and Antigravity, only on full-history nodes (a
+   * wire-scoped view can't be reconciled against the session's watermark).
    * Request/response adapters ignore it.
    */
   sessionResume?: boolean;

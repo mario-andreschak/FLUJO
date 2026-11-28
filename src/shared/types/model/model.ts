@@ -110,7 +110,7 @@ export interface Model {
      * Optional per-model override of the prompt-token figure at/above which
      * SUMMARIZING COMPACTION triggers pre-flight (issue #248). When unset the
      * trigger is derived from `contextWindow` minus the configured buffer.
-     * Only consulted when the experimental `compactionEnabled` setting is on.
+     * Ignored for a Process node whose compaction is off.
      */
     compactionThreshold?: number;
     /** Optional 1–100 percent threshold; an absolute threshold takes precedence. */

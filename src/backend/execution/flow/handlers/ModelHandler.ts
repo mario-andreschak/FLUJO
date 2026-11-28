@@ -87,7 +87,6 @@ import { v4 as uuidv4 } from 'uuid'; // Import uuid
 import { classifyStatisticsError, credentialFingerprint } from '@/backend/services/statistics';
 import { newStatisticsInvocationId } from '@/backend/services/statistics/metadata';
 import { processToolCallsAdmitted, resolveToolUiLink } from './toolCallProcessing';
-import { isAutoUnloadOllamaEnabled, isExperimentalFlagEnabled } from './modelHandlerSettings';
 import { isStreamedAssistantProse, removeFailedStreamedAssistantProse } from './streamedAssistantMessages';
 import { buildRunResourceMarkers, isContextOverflowError, resolveOutgoingInputBudget } from './contextWindowFit';
 import { extractProviderErrorDetails, shapeCompletionError } from './providerErrorShape';
@@ -155,17 +154,6 @@ export class ModelHandler {
       log.warn(`Cancellation check failed for conversation ${conversationId}`, { err });
       return false;
     }
-  }
-
-  /**
-   * Read the experimental `claudeSessionResume` flag (issue #154) from the
-   * persisted Settings blob. Reading the backend storage directly is fine here
-   * — the HTTP-route lock gate does not apply to in-process reads, and Settings
-   * are not encrypted. Best-effort: any failure (or a missing value) reads as
-   * disabled, so the adapter keeps its always-correct full-flatten behaviour.
-   */
-  static async isClaudeSessionResumeEnabled(): Promise<boolean> {
-    return isExperimentalFlagEnabled('claudeSessionResume');
   }
 
   /**
@@ -329,15 +317,13 @@ export class ModelHandler {
 
     // Native session reuse is safe only for FULL-HISTORY nodes (a scoped
     // `wireMessages` view can't be reconciled against a persisted message-count
-    // watermark). Codex and Antigravity enable it by default; Claude
-    // subscription keeps its existing experimental setting. Ineligible adapters
-    // always re-flatten.
+    // watermark). Codex, Antigravity and Claude subscription reuse their
+    // sessions; ineligible adapters always re-flatten.
     const sessionResume =
       !input.nativeBrokerAuthority &&
       (modelAdapter !== 'claude-cli' || !input.executionExtensionContext) &&
       !wireMessages &&
-      (modelAdapter === 'codex-cli' || modelAdapter === 'antigravity-cli' ||
-        (modelAdapter === 'claude-cli' && await ModelHandler.isClaudeSessionResumeEnabled()));
+      (modelAdapter === 'codex-cli' || modelAdapter === 'antigravity-cli' || modelAdapter === 'claude-cli');
 
     // Resolve the effective agentic-turn cap. Precedence: per-node override →
     // bound-model setting → system default (50). This replaces the former
@@ -730,7 +716,7 @@ export class ModelHandler {
       const prepared = await prepareProviderWire(modelId, model, messages, tools, opts);
       if ('success' in prepared) return prepared;
       let { apiMessages, apiSourceIds } = prepared;
-      const { sanitizedTools, modelInputForArchive, visualDiagnostic, keepRecentMessages, inputBudget, prepareImages } = prepared;
+      const { sanitizedTools, modelInputForArchive, keepRecentMessages, inputBudget, prepareImages } = prepared;
 
       // Official OpenAI Chat Completions cache strategy. Process-node calls move
       // their node-specific system instruction behind the wired conversation;
@@ -762,12 +748,12 @@ export class ModelHandler {
         });
       }
 
-      // Capture the actual final generic provider wire after visual routing,
-      // lossless compaction, tool trimming, proactive budget refit, and prompt-
-      // cache ordering. Image data URLs are bounded by the ProcessNode observer
+      // Capture the actual final generic provider wire after lossless
+      // compaction, tool trimming, proactive budget refit, and prompt-cache
+      // ordering. Image data URLs are bounded by the ProcessNode observer
       // before debugger storage.
       try {
-        opts?.onFinalWire?.(apiMessages, visualDiagnostic, modelInputForArchive);
+        opts?.onFinalWire?.(apiMessages, modelInputForArchive);
       } catch (error) {
         log.warn('Final-wire observer failed; continuing request', { error });
       }
@@ -787,12 +773,10 @@ export class ModelHandler {
       // --- Prepare the exact request being sent ---
       log.debug('[ModelHandler.generateCompletion] Sending request via adapter', { adapter: model.adapter || 'openai', model: model.name });
 
-      // --- Auto-unload Ollama: resolve setting and root URL once, before the
-      // attempt closure captures them.  The lock is per root URL so parallel
-      // fan-out lanes that target DIFFERENT servers are not serialised. ---
-      const autoUnloadOllama = (!ownerBound && model.provider === 'ollama' && Boolean(model.baseUrl))
-        ? await isAutoUnloadOllamaEnabled()
-        : false;
+      // --- Auto-unload Ollama: resolve the root URL once, before the attempt
+      // closure captures it.  The lock is per root URL so parallel fan-out
+      // lanes that target DIFFERENT servers are not serialised. ---
+      const autoUnloadOllama = !ownerBound && model.provider === 'ollama' && Boolean(model.baseUrl);
       const ollamaRootForUnload = autoUnloadOllama && model.baseUrl
         ? normaliseOllamaRoot(model.baseUrl)
         : null;
@@ -1097,7 +1081,6 @@ export class ModelHandler {
                         canonicalArchive: pagedCanonical,
                         genericWire: snapshot.wireMessages ?? hydratedMessages,
                         sdkRequest: snapshot.request, modelInput: modelInputForArchive,
-                        visualCompaction: visualDiagnostic,
                       };
                       const entry = await archiveModelDispatch(archiveInput, () => ({
                         ...archiveInput,
@@ -1640,7 +1623,7 @@ export class ModelHandler {
             modelId,
           });
           try {
-            opts?.onFinalWire?.(syntheticRetryMessages, visualDiagnostic, modelInputForArchive);
+            opts?.onFinalWire?.(syntheticRetryMessages, modelInputForArchive);
           } catch (error) {
             log.warn('Final-wire observer failed during empty-completion retry; continuing retry', { error });
           }
@@ -1670,7 +1653,7 @@ export class ModelHandler {
       ) {
         const refit = await refitWireAfterContextOverflow({
           modelId, model, opts, apiMessages, apiSourceIds, sanitizedTools, modelInputForArchive,
-          visualDiagnostic, keepRecentMessages, inputBudget, prepareImages,
+          keepRecentMessages, inputBudget, prepareImages,
         });
         if (refit) result = await attemptWithLimitRetry(refit.apiMessages, refit.sanitizedTools);
       }

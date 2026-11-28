@@ -171,7 +171,7 @@ describe('runtime compaction policy settings', () => {
   };
 
   it('retries a timed-out router summary with a fresh deadline and the same source', async () => {
-    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20 } });
+    loadItemMock.mockResolvedValue({ experimental: { compactionKeepTokens: 20 } });
     const state = seedState('summary-deadline');
     let now = 100_000;
     jest.spyOn(Date, 'now').mockImplementation(() => now);
@@ -200,7 +200,7 @@ describe('runtime compaction policy settings', () => {
   });
 
   it('aborts internal compaction with its parent and neither retries nor publishes the result', async () => {
-    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20 } });
+    loadItemMock.mockResolvedValue({ experimental: { compactionKeepTokens: 20 } });
     const state = seedState('summary-cancel');
     let cancelled = false;
     const source: SharedState['messages'] = [
@@ -225,7 +225,7 @@ describe('runtime compaction policy settings', () => {
 
   it.each(['openai', 'openai-responses', 'openrouter-agent'] as const)(
     'keeps a verified summary through %s tool follow-ups to the same user request', async adapter => {
-    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20 } });
+    loadItemMock.mockResolvedValue({ experimental: { compactionKeepTokens: 20 } });
     const state = seedState('tool-followup');
     const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n');
     const generate = jest.spyOn(runtime, 'generateCompletion').mockResolvedValue({ success: true, value: { content: summary } });
@@ -277,7 +277,7 @@ describe('runtime compaction policy settings', () => {
 
   it.each(['openai-responses', 'openrouter-agent'] as const)(
     'keeps canonical %s input after a rejected summary until the next request', async adapter => {
-    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20 } });
+    loadItemMock.mockResolvedValue({ experimental: { compactionKeepTokens: 20 } });
     const state = seedState('native-fallback');
     const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n');
     const generate = jest.spyOn(runtime, 'generateCompletion').mockResolvedValue({ success: true, value: { content: summary } });
@@ -321,7 +321,7 @@ describe('runtime compaction policy settings', () => {
 
   it.each(['openai-responses', 'openrouter-agent'] as const)(
     'keeps canonical %s input when a tool result first crosses the summary threshold', async adapter => {
-    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20 } });
+    loadItemMock.mockResolvedValue({ experimental: { compactionKeepTokens: 20 } });
     const state = seedState('native-threshold');
     const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n');
     const generate = jest.spyOn(runtime, 'generateCompletion').mockResolvedValue({ success: true, value: { content: summary } });
@@ -351,7 +351,7 @@ describe('runtime compaction policy settings', () => {
   });
 
   it.each(['edited-request', 'edited-prefix', 'missing-boundary'])('invalidates a pinned summary after %s', async change => {
-    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20 } });
+    loadItemMock.mockResolvedValue({ experimental: { compactionKeepTokens: 20 } });
     const state = seedState('pin-invalidation');
     const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n');
     const generate = jest.spyOn(runtime, 'generateCompletion').mockResolvedValue({ success: true, value: { content: summary } });
@@ -381,15 +381,15 @@ describe('runtime compaction policy settings', () => {
     expect(result.wireMessages.slice(-2)).toEqual(followup.slice(-2));
   });
 
-  it('loads a saved percentage and keeps the documented disabled policy after a settings error', async () => {
+  it('loads a saved percentage and falls back to the defaults after a settings error', async () => {
     loadItemMock.mockResolvedValueOnce({ experimental: { compactionThresholdPercent: 60 } });
     expect(await getCompactionGlobalSettings()).toMatchObject({ compactionThresholdPercent: 60 });
     loadItemMock.mockRejectedValueOnce(new Error('settings unavailable'));
-    expect(await getCompactionGlobalSettings()).toMatchObject({ compactionEnabled: false });
+    expect(await getCompactionGlobalSettings()).toEqual({});
   });
 
   it('uses the model percentage and current tools/new history despite an old tiny prompt count', async () => {
-    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20,
+    loadItemMock.mockResolvedValue({ experimental: { compactionKeepTokens: 20,
       compactionThresholdPercent: 90 } });
     const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n');
     const generate = jest.spyOn(runtime, 'generateCompletion').mockResolvedValue({
@@ -416,7 +416,7 @@ describe('runtime compaction policy settings', () => {
   });
 
   it('reuses an unchanged old prefix as the recent tail grows and invalidates an edited prefix', async () => {
-    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 100 } });
+    loadItemMock.mockResolvedValue({ experimental: { compactionKeepTokens: 100 } });
     const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n');
     const generate = jest.spyOn(runtime, 'generateCompletion').mockResolvedValue({
       success: true, value: { content: summary },
@@ -442,7 +442,7 @@ describe('runtime compaction policy settings', () => {
   });
 
   it.each([false, true])('keeps compaction controls outside the source user transcript (prior summary: %s)', async priorSummary => {
-    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20 } });
+    loadItemMock.mockResolvedValue({ experimental: { compactionKeepTokens: 20 } });
     const state = seedState('source-control-boundary');
     const source: SharedState['messages'] = [
       { id: 'u-old', role: 'user', content: 'Do not publish. Wait for my next instruction.', timestamp: 1 },
@@ -476,7 +476,7 @@ describe('runtime compaction policy settings', () => {
     { adapter: 'codex-cli', provider: 'codex', name: 'gpt-6-luna' },
     { adapter: 'openai', provider: 'openrouter', name: 'openrouter/free' },
   ])('constrains $name leaf and parent summaries and rejects an answer to the archived task', async route => {
-    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20 } });
+    loadItemMock.mockResolvedValue({ experimental: { compactionKeepTokens: 20 } });
     const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n');
     const generate = jest.spyOn(runtime, 'generateCompletion')
       .mockResolvedValueOnce({ success: true, value: { content: '{"destination":"Quito"}' } })
@@ -501,7 +501,7 @@ describe('runtime compaction policy settings', () => {
   it.each(['tools-added', 'tools-removed', 'tool-schema', 'model-identity', 'model-name', 'provider', 'output-budget',
     'effective-policy', 'projection-view', 'node', 'artifact-policy', 'previous-prompt-policy', 'artifact-schema'])(
     'invalidates the same archived prefix after %s changes', async change => {
-      loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 100 } });
+      loadItemMock.mockResolvedValue({ experimental: { compactionKeepTokens: 100 } });
       const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n');
       const generate = jest.spyOn(runtime, 'generateCompletion').mockResolvedValue({ success: true, value: { content: summary } });
       const state = seedState('configuration-test');
@@ -546,7 +546,7 @@ describe('runtime compaction policy settings', () => {
   );
 
   it('refuses provider-truncated summaries even when all five section headings are present', async () => {
-    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20 } });
+    loadItemMock.mockResolvedValue({ experimental: { compactionKeepTokens: 20 } });
     const summary = COMPACTION_SUMMARY_SECTIONS.map(section => section + '\n- None.').join('\n\n');
     jest.spyOn(runtime, 'generateCompletion').mockResolvedValue({ success: true, value: {
       content: summary, fullResponse: { choices: [{ finish_reason: 'length' }] },
@@ -563,7 +563,7 @@ describe('runtime compaction policy settings', () => {
   });
 
   it('discards a summary generated across a source edit and retries from the changed history', async () => {
-    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20 } });
+    loadItemMock.mockResolvedValue({ experimental: { compactionKeepTokens: 20 } });
     const state = seedState('edited-during-summary');
     const source: SharedState['messages'] = [
       { id: 'u1', role: 'user', content: 'Never publish.', timestamp: 1 },
@@ -589,7 +589,7 @@ describe('runtime compaction policy settings', () => {
   });
 
   it.each(['anchor', 'metadata'])('keeps the last durable artifact after %s persistence fails and can recover', async failure => {
-    loadItemMock.mockResolvedValue({ experimental: { compactionEnabled: true, compactionKeepTokens: 20 } });
+    loadItemMock.mockResolvedValue({ experimental: { compactionKeepTokens: 20 } });
     const state = seedState('persistence-' + failure);
     const source: SharedState['messages'] = [
       { id: 'u1', role: 'user', content: 'Never publish.', timestamp: 1 },
