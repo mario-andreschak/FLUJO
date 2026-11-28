@@ -38,16 +38,10 @@ import {
 } from '@/backend/execution/flow/conversationLog';
 import { isConversationSequenceSafetyError, type ConversationSequenceSafetyError } from './conversationLogSequence';
 import { isConversationPublicationError, type ConversationPublicationError } from './conversationPublication';
-import {
-  steeringCount,
-  takeSteeringMessages,
-  requeueSteeringMessages,
-  markSteeringDelivered,
-} from '@/backend/execution/flow/steeringInbox';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { HUMAN_STEP_TOOL_NAME } from '@/utils/shared/humanStep';
 import { putHumanTaskEntry, syncHumanTaskEntry, updateHumanTaskEntry } from '@/backend/services/humanTasks/humanTaskIndex';
-import { EmitFn, UsageTotals } from '@/shared/types/execution/events';
+import { EmitFn } from '@/shared/types/execution/events';
 import OpenAI from 'openai';
 import {
   SharedState,
@@ -59,11 +53,11 @@ import {
   STAY_ON_NODE_ACTION,
 } from '@/backend/execution/flow/types';
 import { FlujoChatMessage } from '@/shared/types/chat';
-import { requireApprovalOf, waitForLiveToolDecision } from './toolApprovalGate';
+import { requireApprovalOf } from './toolApprovalGate';
 import { addLoadedDeferredTools } from './toolLoading/planStepTools';
 import { requireFunctionToolCalls } from '@/shared/types/openai';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
-import { waitForActiveSubflows, resumeSubflowOrchestrator } from './subflowCommunication';
+import { waitForActiveSubflows } from './subflowCommunication';
 import { isInternalToolName } from '@/backend/execution/flow/handlers/toolNamespace';
 import { emitErrorOnce, emitNormalizedErrorOnce, deriveLastErrorFromLastResponse } from '@/backend/execution/flow/normalizeError';
 import { flowService } from '@/backend/services/flow/index';
@@ -75,7 +69,6 @@ import { MAX_SUBFLOW_DEPTH } from '@/backend/execution/flow/constants';
 import { isCancelledByAncestry, isConversationDeleted } from '@/backend/execution/flow/cancellation';
 import { buildConversationTitle, isDefaultConversationTitle, DEFAULT_CONVERSATION_TITLE } from '@/utils/shared/conversationTitle';
 import { setElicitationContext, clearElicitationContext } from '@/backend/services/mcp/elicitationContext';
-import { decodeToolName, isToolOfferedInStep } from '@/backend/execution/flow/handlers/toolNamespace';
 import { GRACEFUL_CAP_SUMMARY_INSTRUCTION, GRACEFUL_CAP_TOOL_RESULT } from '@/backend/execution/flow/handlers/gracefulCap';
 import { isMeetingTurnSilent } from '@/backend/execution/flow/handlers/meetingTools';
 import { DEFAULT_AGENTIC_MAX_TURNS } from '@/shared/types/model/model';
@@ -111,6 +104,9 @@ import {
   consumeAttachRequest, hasAttachRequest, latestModelInput, matchedToolBreakpointName, pauseForAttachAtSafePoint,
   pauseForDebug, previewNextModelInput, toolNodeIdsFor, type BoundaryDetails,
 } from './runDebugPause';
+import { accumulateUsage } from './runUsage';
+import { drainSteering } from './runSteeringDrain';
+import { decideHeldCallsLive, stepRequiresApproval } from './runToolApproval';
 import { nodeBreakpoints } from '@/utils/shared/debugBreakpoints';
 import {
   applyToolRepeatGuard,
@@ -907,59 +903,6 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     sharedState.messages.map(m => m.id).filter((id): id is string => !!id)
   );
 
-  const accumulateUsage = (msg: FlujoChatMessage) => {
-    if (!msg.usage && !msg.usageNotReported) return;
-    const totals: UsageTotals = sharedState.usage ?? {
-      promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, byNode: {},
-    };
-    sharedState.usage = totals;
-    if (!msg.usage) {
-      // Count the call, so a total of 0 reads as "not reported" rather than "nothing used".
-      const nodeKey = msg.processNodeId || 'unknown';
-      const node = totals.byNode[nodeKey] ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0 };
-      totals.unreportedCalls = (totals.unreportedCalls ?? 0) + 1;
-      node.unreportedCalls = (node.unreportedCalls ?? 0) + 1;
-      totals.byNode[nodeKey] = node;
-      emit({
-        type: 'usage',
-        node: msg.processNodeId ? { nodeId: msg.processNodeId } : undefined,
-        promptTokens: 0,
-        completionTokens: 0,
-        totalTokens: 0,
-        notReported: true,
-      });
-      return;
-    }
-    totals.promptTokens += msg.usage.promptTokens;
-    totals.completionTokens += msg.usage.completionTokens;
-    totals.totalTokens += msg.usage.totalTokens;
-    // Cache RE-READ tokens are a subset of promptTokens; track them separately so
-    // the UI can show the honest "fresh (+cached)" split (#87). Guard with ?? 0
-    // so state persisted before #87 (no cacheReadTokens) doesn't produce NaN.
-    const msgCacheRead = msg.usage.cacheReadTokens ?? 0;
-    if (msgCacheRead) totals.cacheReadTokens = (totals.cacheReadTokens ?? 0) + msgCacheRead;
-    const msgCacheWrite = msg.usage.cacheWriteTokens ?? 0;
-    if (msgCacheWrite) totals.cacheWriteTokens = (totals.cacheWriteTokens ?? 0) + msgCacheWrite;
-    const nodeKey = msg.processNodeId || 'unknown';
-    const node = totals.byNode[nodeKey] ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0 };
-    node.promptTokens += msg.usage.promptTokens;
-    node.completionTokens += msg.usage.completionTokens;
-    node.totalTokens += msg.usage.totalTokens;
-    if (msgCacheRead) node.cacheReadTokens = (node.cacheReadTokens ?? 0) + msgCacheRead;
-    if (msgCacheWrite) node.cacheWriteTokens = (node.cacheWriteTokens ?? 0) + msgCacheWrite;
-    totals.byNode[nodeKey] = node;
-    emit({
-      type: 'usage',
-      node: msg.processNodeId ? { nodeId: msg.processNodeId } : undefined,
-      promptTokens: msg.usage.promptTokens,
-      completionTokens: msg.usage.completionTokens,
-      totalTokens: msg.usage.totalTokens,
-      costUsd: 0,
-      ...(msgCacheRead ? { cacheReadTokens: msgCacheRead } : {}),
-      ...(msgCacheWrite ? { cacheWriteTokens: msgCacheWrite } : {}),
-    });
-  };
-
   const emitNewMessages = (inputMessageIds?: ReadonlySet<string>) => {
     for (const msg of sharedState.messages) {
       // Strengthen the id invariant at the emission boundary: a message
@@ -978,7 +921,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
         messageOrigin: inputMessageIds?.has(msg.id) ? 'input' : 'internal',
         node: msg.processNodeId ? { nodeId: msg.processNodeId } : undefined,
       });
-      if (lastEmissionAdmitted) { emittedMessageIds.add(msg.id); accumulateUsage(msg); }
+      if (lastEmissionAdmitted) { emittedMessageIds.add(msg.id); accumulateUsage(sharedState, emit, msg); }
     }
   };
 
@@ -1127,127 +1070,12 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     return result;
   });
 
-  // --- Mid-run steering (user intervention while the run is in flight) --------
-  // A correction is only useful if it reaches the model that is going the wrong
-  // way, so messages posted to /inject are folded into THIS run at the next safe
-  // boundary rather than queued for a run of their own.
-  //
-  // "Safe" means the transcript is well-formed: an assistant `tool_calls` turn
-  // whose results have not been appended yet must never be split by a user
-  // message (every provider 400s on that shape — the same invariant issue #256
-  // repairs after a crash). When the tail is mid-exchange we simply leave the
-  // messages in the inbox and try again on the next iteration, which is at most
-  // one tool batch away. This is also what defers a drain past the debug
-  // pending-tool-calls step below.
-  const hasUnansweredToolCalls = (): boolean => {
-    const answered = new Set<string>();
-    for (const m of sharedState.messages) {
-      if (m.role === 'tool') {
-        const id = (m as { tool_call_id?: string }).tool_call_id;
-        if (id) answered.add(id);
-      }
-    }
-    return sharedState.messages.some(
-      (m) =>
-        m.role === 'assistant' &&
-        Array.isArray(m.tool_calls) &&
-        m.tool_calls.some((tc) => tc.id && !answered.has(tc.id)),
-    );
-  };
-
-  /**
-   * Fold any waiting steering messages into the live transcript. Returns true
-   * when at least one was folded in (the caller keeps executing so the model
-   * sees it on its very next call). Every child has its own addressable inbox,
-   * including ephemeral children. Agent messages use this same safe boundary.
-  */
-  const drainSteering = async (): Promise<boolean> => {
-    if (hasUnansweredToolCalls()) {
-      log.debug(`Steering message(s) waiting for ${effectiveConvId} but a tool exchange is in flight; deferring.`);
-      return false;
-    }
-    // Persona deliveries remain pending in the durable mailbox until this
-    // transcript-safe boundary consumes and acknowledges their stable ids.
-    // Generic fence assertions intentionally have no delivery side effects.
-    await sharedState.executionAuthority?.pollRelatedInputs?.();
-    if (steeringCount(effectiveConvId) === 0) return false;
-    await resumeSubflowOrchestrator(sharedState);
-    const injected = takeSteeringMessages(effectiveConvId);
-    if (injected.length === 0) return false;
-    const existingIds = new Set(sharedState.messages
-      .map((message) => message.id)
-      .filter((id): id is string => typeof id === 'string' && id.length > 0));
-    const newlyFolded = injected.filter((message) =>
-      !message.id || !existingIds.has(message.id));
-    let foldedDurably = newlyFolded.length === 0;
-    try {
-      // Stamp the current node so the message is attributed to the step it is
-      // steering (live-view lane placement + subflow projection tagging).
-      for (const m of newlyFolded) {
-        if (!m.id) m.id = crypto.randomUUID();
-        delete m.executionOrigin;
-        if (!m.processNodeId && sharedState.currentNodeId) m.processNodeId = sharedState.currentNodeId;
-      }
-      if (newlyFolded.length > 0) {
-        sharedState.messages.push(...newlyFolded);
-        sharedState.lastUserMessageAt = newlyFolded[newlyFolded.length - 1].timestamp ?? Date.now();
-        FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
-        emitNewMessages(new Set(newlyFolded.map(message => message.id)));
-        // Per-step durability is the append-only log, exactly as for tool
-        // results (the log refuses ephemeral runs, which have no transcript).
-        if (!sharedState.ephemeral) {
-          await appendRawForState(
-            sharedState,
-            newlyFolded.map(message => ({ type: 'message', message, messageOrigin: 'input' })),
-          );
-        }
-        foldedDurably = true;
-      }
-      const stableIds = injected
-        .map((message) => message.id)
-        .filter((id): id is string => typeof id === 'string' && id.length > 0);
-      // Every id is now in the transcript (newly or from an earlier fold), so
-      // a sender waiting for delivery (an MCP event) may acknowledge it.
-      markSteeringDelivered(effectiveConvId, stableIds);
-      if (stableIds.length > 0) {
-        await sharedState.executionAuthority?.acknowledgeRelatedInputs?.(stableIds);
-      }
-      log.info(`Folded ${newlyFolded.length} steering message(s) into the live run for ${effectiveConvId}.`);
-      // An SDK may have persisted the transcript before rejecting delivery.
-      // Its requeued message must still trigger another model turn even though
-      // the stable transcript ID is already present.
-      return true;
-    } catch (error) {
-      // If transcript persistence failed, undo the in-memory fold before
-      // retrying. If only the durable mailbox ACK failed, keep the already
-      // persisted fold; the next poll is deduplicated by stable message id and
-      // retries acknowledgement without appending a second copy.
-      if (!foldedDurably && newlyFolded.length > 0) {
-        sharedState.messages.splice(
-          Math.max(0, sharedState.messages.length - newlyFolded.length),
-          newlyFolded.length,
-        );
-        FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
-      }
-      requeueSteeringMessages(effectiveConvId, injected);
-      log.warn(`Failed to fold steering message(s) for ${effectiveConvId}; re-queued`, error);
-      return false;
-    }
-  };
-
   const singleStep = !!sharedState.debugMode && !continueDebug;
   if (!userTurn && sharedState.status === 'paused_debug') {
     // A Step request resumes one safe boundary. Mark the transient in-flight
     // state accurately; pauseForDebug below parks it again before returning.
     sharedState.status = 'running';
   }
-  /** The current step requires a person for this call, whatever the run's setting.
-   *  A call the step did not offer is left out: dispatch refuses it, so asking a
-   *  person first would only offer a choice with no effect. */
-  const stepRequiresApproval = (call: OpenAI.ChatCompletionMessageFunctionToolCall): boolean =>
-    !getHarnessExecution()
-    && isToolOfferedInStep(call.function.name, sharedState.offeredToolNames, sharedState.toolNameMap)
-    && decodeToolName(call.function.name, sharedState.toolNameMap)?.requiresApproval === true;
   // Stops the run for a person's decision on `heldCalls`. Other calls in the
   // batch run first: a batch has no order guarantee (#252), and this is what
   // lets a read-only call go ahead without a click while a change waits.
@@ -1345,40 +1173,6 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     emit({ type: 'run:awaiting_approval', pendingToolCalls: heldCalls });
   };
 
-  /**
-   * A sub-flow cannot pause on its own, so it asks the person live, in the
-   * conversation they are viewing (#1284), on the same approval card as any
-   * other call. Returns the ids of rejected calls, which get the fixed
-   * `tool denied` result; the other calls may run. Undefined when this run
-   * pauses or fails instead (it is not a sub-flow, or policy `fail`).
-   */
-  const decideHeldCallsLive = async (
-    heldCalls: OpenAI.ChatCompletionMessageFunctionToolCall[],
-  ): Promise<Set<string> | undefined> => {
-    const approvalConversationId = sharedState.approvalConversationId;
-    if (!approvalConversationId || sharedState.onApprovalRequired === 'fail') return undefined;
-    const decisions = await Promise.allSettled(heldCalls.map((call) =>
-      waitForLiveToolDecision(approvalConversationId, call, { signal: runtimeAbortSignal })));
-    const failed = decisions.find((decision): decision is PromiseRejectedResult => decision.status === 'rejected');
-    if (failed) throw failed.reason;
-    const rejected = new Set(heldCalls
-      .filter((_call, index) => (decisions[index] as PromiseFulfilledResult<boolean>).value !== true)
-      .map((call) => call.id));
-    for (const call of heldCalls) {
-      if (!rejected.has(call.id)) continue;
-      sharedState.messages.push({
-        id: crypto.randomUUID(),
-        role: 'tool',
-        tool_call_id: call.id,
-        content: 'tool denied',
-        timestamp: Date.now(),
-        processNodeId: sharedState.currentNodeId,
-      } as FlujoChatMessage);
-    }
-    emitNewMessages();
-    return rejected;
-  };
-
   try {
     // Initial owned-state emissions can exhaust too; they must reach the same
     // terminal cleanup as execution failures before any provider dispatch.
@@ -1431,7 +1225,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
         // automatically while a tool exchange is unresolved (see drainSteering).
         // The first iteration also picks up anything left over from a previous
         // run that ended before its inbox was drained.
-        await drainSteering();
+        await drainSteering(sharedState, effectiveConvId, emitNewMessages);
 
         // A completed model turn can be parked before its action is applied.
         // Consume that action exactly once on resume instead of calling the
@@ -1727,7 +1521,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
           // the action instead so resuming still passes through the approval
           // approval gate rather than accidentally bypassing it.
           if (!transparentControlHandoff) {
-            if (pendingCalls?.length && !requireApproval && !pendingCalls.some(stepRequiresApproval)) {
+            if (pendingCalls?.length && !requireApproval && !pendingCalls.some((call) => stepRequiresApproval(sharedState, call))) {
               sharedState.debugPendingToolCalls = pendingCalls;
             } else {
               sharedState.debugPendingAction = {
@@ -1869,14 +1663,14 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
           // inbox with the run already over. Fold it in and keep going — the
           // user asked the running agent something, so the running agent
           // answers it rather than making them re-send into a fresh turn.
-          if (await drainSteering()) {
+          if (await drainSteering(sharedState, effectiveConvId, emitNewMessages)) {
             log.info(`Steering message arrived as ${effectiveConvId} was completing; continuing the run to answer it.`);
             FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
             continue;
           }
 
           if (await waitForActiveSubflows(sharedState, runtimeAbortSignal)) {
-            if (await drainSteering()) continue;
+            if (await drainSteering(sharedState, effectiveConvId, emitNewMessages)) continue;
           }
           if (runCancelled()) break;
           sharedState.status = 'completed';
@@ -1953,8 +1747,8 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
                 }
               }
               // --- Flujo=true: Handle optional approval ---
-              const heldCalls = requireApproval ? ordinaryToolCalls : ordinaryToolCalls.filter(stepRequiresApproval);
-              const rejectedLive = heldCalls.length > 0 ? await decideHeldCallsLive(heldCalls) : undefined;
+              const heldCalls = requireApproval ? ordinaryToolCalls : ordinaryToolCalls.filter((call) => stepRequiresApproval(sharedState, call));
+              const rejectedLive = heldCalls.length > 0 ? await decideHeldCallsLive(sharedState, runtimeAbortSignal, emitNewMessages, heldCalls) : undefined;
               if ((requireApproval || heldCalls.length > 0) && !rejectedLive) {
                 await holdForApproval(heldCalls, ordinaryToolCalls);
                 break;
@@ -2022,7 +1816,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
                 }
               });
 
-              const heldInternalCalls = internalTools.filter(stepRequiresApproval);
+              const heldInternalCalls = internalTools.filter((call) => stepRequiresApproval(sharedState, call));
               if (heldInternalCalls.length > 0) {
                 await holdForApproval(heldInternalCalls, internalTools);
                 break;
@@ -2591,7 +2385,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
       await publishTerminalEvent({ type: 'message', message: msg, messageOrigin: 'internal',
         node: msg.processNodeId ? { nodeId: msg.processNodeId } : undefined });
       emittedMessageIds.add(msg.id);
-      accumulateUsage(msg);
+      accumulateUsage(sharedState, emit, msg);
     }
   }
   catch (error) { recordTerminalSequenceFailure(error); }
