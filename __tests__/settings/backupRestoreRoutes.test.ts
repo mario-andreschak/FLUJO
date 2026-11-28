@@ -556,6 +556,45 @@ describe('backup → restore round-trip', () => {
     );
   });
 
+  it('keeps every stored variable value when restoring an export, which carries names only', async () => {
+    const stored = {
+      LABEL: { value: 'kept label', metadata: { isSecret: false } },
+      API_KEY: { value: 'encrypted:kept', metadata: { isSecret: true } },
+      ADDED_LATER: { value: 'not in the backup', metadata: { isSecret: false } },
+    };
+    loadItemMock.mockImplementation(async (key: StorageKey, fallback: unknown) =>
+      key === StorageKey.GLOBAL_ENV_VARS ? { LABEL: stored.LABEL, API_KEY: stored.API_KEY, REMOVED_SINCE: { value: 'x', metadata: { isSecret: false } } } : fallback);
+    const backupResponse = await callBackup(['globalEnvVars']);
+    const archive = await JSZip.loadAsync(await backupResponse.arrayBuffer());
+    expect(JSON.parse(await archive.file('storage/global_env_vars.json')!.async('string'))).toEqual({
+      LABEL: { value: '', metadata: { isSecret: true } },
+      API_KEY: { value: '', metadata: { isSecret: true } },
+      REMOVED_SINCE: { value: '', metadata: { isSecret: true } },
+    });
+
+    loadItemMock.mockImplementation(async (key: StorageKey, fallback: unknown) => key === StorageKey.GLOBAL_ENV_VARS ? stored : fallback);
+    const restoreResponse = await callRestore(await archive.generateAsync({ type: 'arraybuffer' }), ['globalEnvVars']);
+    expect(await restoreResponse.json()).toMatchObject({ success: true, status: 'complete' });
+    expect(saveItemMock).toHaveBeenCalledWith(StorageKey.GLOBAL_ENV_VARS, {
+      ...stored,
+      REMOVED_SINCE: { value: '', metadata: { isSecret: true } },
+    });
+  });
+
+  it('restores variable values from older archives that still carried them, without touching the prototype', async () => {
+    loadItemMock.mockImplementation(async (key: StorageKey, fallback: unknown) =>
+      key === StorageKey.GLOBAL_ENV_VARS ? { LABEL: { value: 'current', metadata: { isSecret: false } } } : fallback);
+    const zip = new JSZip();
+    zip.file('backup-info.json', JSON.stringify({ version: '1.0', selections: ['globalEnvVars'] }));
+    zip.file('storage/global_env_vars.json', '{"LABEL":{"value":"from the old archive","metadata":{"isSecret":false}},"__proto__":{"value":"x"}}');
+    const response = await callRestore(await zip.generateAsync({ type: 'arraybuffer' }), ['globalEnvVars']);
+    expect(response.status).toBe(200);
+    const [, saved] = saveItemMock.mock.calls.find(([key]) => key === StorageKey.GLOBAL_ENV_VARS)!;
+    expect(saved.LABEL).toEqual({ value: 'from the old archive', metadata: { isSecret: false } });
+    expect(Object.getPrototypeOf(saved)).toBe(Object.prototype);
+    expect(Object.getOwnPropertyDescriptor(saved, '__proto__')?.value).toEqual({ value: 'x' });
+  });
+
   it('reports a partial 409 when an active model call prevents restoring models', async () => {
     const zip = new JSZip();
     const theme = { mode: 'dark' };

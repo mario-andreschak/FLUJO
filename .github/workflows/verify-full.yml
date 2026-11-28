@@ -134,13 +134,21 @@ jobs:
         run: |
           set -euo pipefail
           npm run smoke:mcp-artifacts
-      # Same checks as the release image and installer jobs (#570).
-      - name: Back up, restart, upgrade and restore the installed npm package
+      # Same checks as the release image and installer jobs (#570). The data
+      # folder sits on a small tmpfs (Linux) or virtual disk (Windows) that the
+      # disk-full check fills; both need the runner's sudo or administrator rights.
+      - name: Back up, restart, upgrade, fill the disk and restore the installed npm package
         if: steps.application-change.outputs.changed == 'true'
         shell: bash
         run: |
           set -euo pipefail
           node scripts/packaged-acceptance.mjs --form npm --pack --from npm:latest --report "$RUNNER_TEMP/packaged-acceptance/npm.json"
+      - name: Follow the operator runbook with the packed release
+        if: steps.application-change.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/operator-runbook.mjs --pack --report "$RUNNER_TEMP/packaged-acceptance/operator-runbook.json"
       - name: Retain the packaged acceptance report
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -205,6 +213,115 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  # The installed Windows build, exactly as people get it: the compiled
+  # flujo-setup.exe installs this revision, then the packaged checks run on it (#570).
+  installed-windows-acceptance:
+    name: Installed Windows build acceptance (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 150
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '22.23.4'
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
+      - name: Install pinned Inno Setup
+        shell: powershell
+        run: |
+          choco install innosetup --version=6.7.1 --yes --no-progress
+          if ($LASTEXITCODE -ne 0) {
+            throw "Chocolatey could not install Inno Setup 6.7.1 (exit $LASTEXITCODE)."
+          }
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path -LiteralPath $iscc)) {
+            throw "Pinned Inno Setup compiler was not found: $iscc"
+          }
+      - name: Compile the installer for this revision
+        shell: powershell
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $iscc "/DMyAppVersion=0.0.0" "/DMyBranch=$env:GITHUB_REF_NAME" "/DMyRevision=$env:GITHUB_SHA" installer\flujo-setup.iss
+          if ($LASTEXITCODE -ne 0) {
+            throw "Inno Setup compilation failed (exit $LASTEXITCODE)."
+          }
+      - name: Prepare real App Installer
+        shell: pwsh
+        run: ./scripts/prepare-windows-installer-runner.ps1
+      - name: Install, rerun and launch the compiled installer
+        shell: pwsh
+        run: ./scripts/verify-windows-install.ps1
+      - name: Back up, restart, upgrade, fill the disk and restore the installed application
+        shell: pwsh
+        run: |
+          $runtime = Join-Path $env:LOCALAPPDATA 'FLUJO-cli\runtime\node-v24.22.1-win-x64\node.exe'
+          $runtimeArguments = if (Test-Path -LiteralPath $runtime) { @('--node', $runtime) } else { @() }
+          $appRoot = Join-Path $env:RUNNER_TEMP 'FLUJO fresh install'
+          $report = Join-Path $env:RUNNER_TEMP 'flujo-install-evidence\packaged-acceptance.json'
+          node scripts/packaged-acceptance.mjs --form checkout --app-root $appRoot --from npm:latest --report $report @runtimeArguments
+          if ($LASTEXITCODE -ne 0) { throw "Installed acceptance failed (exit $LASTEXITCODE)." }
+      - name: Retain installation evidence and the acceptance report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: packaged-acceptance-installed-windows-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/flujo-install-evidence/**
+          if-no-files-found: error
+          retention-days: 30
+
+  # The Docker image built from this revision, on a tmpfs volume that a holder
+  # container keeps mounted; the previous published image writes the data (#570).
+  image-acceptance:
+    name: Docker image acceptance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '22.23.4'
+          cache: npm
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
+      - run: npm ci --include=dev
+      - name: Read the application version
+        id: version
+        run: node -e 'require("node:fs").appendFileSync(process.env.GITHUB_OUTPUT, `version=${require("./package.json").version}\n`)'
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build the image from this revision
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          provenance: false
+          tags: flujo-acceptance:${{ github.sha }}
+          build-args: |
+            FLUJO_APPLICATION_VERSION=${{ steps.version.outputs.version }}
+            FLUJO_BUILD_REVISION=${{ github.sha }}
+          cache-from: type=gha
+      - name: Back up, restart, upgrade, fill the disk and restore the image
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_id="$(docker image inspect --format '{{.Id}}' "flujo-acceptance:${GITHUB_SHA}")"
+          node scripts/packaged-acceptance.mjs --form docker --image "$image_id" --from image:ghcr.io/mario-andreschak/flujo:latest --report "$RUNNER_TEMP/packaged-acceptance/docker.json"
+      - name: Retain the acceptance report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: packaged-acceptance-docker-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/packaged-acceptance/
+          if-no-files-found: error
+          retention-days: 30
+
   release-safety:
     name: Release safety (${{ matrix.os }})
     # Keep required check labels stable while holding Linux on the qualified OS.
@@ -249,9 +366,9 @@ jobs:
       - run: node --test scripts/release-evidence.test.mjs
       - name: Verify maintainer evidence boundaries
         run: node --test scripts/read-bounded-file.test.mjs scripts/maintainer-drill.test.mjs scripts/maintainer-installed-baseline.test.mjs scripts/maintainer-installed-recovery.test.mjs scripts/maintainer-installed-upgrade.test.mjs scripts/maintainer-npm-provenance.test.mjs scripts/maintainer-synthetic-state.test.mjs
-      - name: Verify the packaged-artifact backup, restart and restore checks
-        timeout-minutes: 10
-        run: node --test scripts/packaged-acceptance.test.mjs
+      - name: Verify the packaged-artifact checks and the automated operator run
+        timeout-minutes: 15
+        run: node --test scripts/packaged-acceptance.test.mjs scripts/packaged-acceptance/low-disk.test.mjs scripts/packaged-acceptance/stand-ins.test.mjs scripts/operator-runbook.test.mjs
       - name: Verify the shipped Codex with the local model stand-in
         timeout-minutes: 10
         run: node --test scripts/packaged-codex-acceptance.test.mjs
@@ -534,7 +651,7 @@ jobs:
   verification:
     name: verification
     if: always()
-    needs: [production-build, release-safety, typecheck, lint, test, test-isolated, workflow-contract, dependency-security, codeql, antigravity-cli]
+    needs: [production-build, release-safety, typecheck, lint, test, test-isolated, workflow-contract, dependency-security, codeql, antigravity-cli, installed-windows-acceptance, image-acceptance]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

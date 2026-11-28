@@ -232,31 +232,52 @@ Do not describe them as a signed or tamper-proof audit trail.
 
 ## Checks on the shipped forms
 
-`scripts/packaged-acceptance.mjs` runs one set of backup, restart, upgrade and
-restore checks against FLUJO as people install it, not against a source build:
+`scripts/packaged-acceptance.mjs` runs one set of backup, restart, upgrade, MCP,
+disk-full, schedule and restore checks against FLUJO as people install it, not
+against a source build:
 
 | Shipped form | Where CI runs it | Command |
 | --- | --- | --- |
 | npm package, Linux and Windows | `verify-full.yml` production build (both systems), and the npm release before publishing | `--form npm --pack` or `--form npm --tarballs DIR` |
-| Windows installer | `installer.yml`, right after the real install on Windows Server 2022 and 2025 | `--form checkout --app-root DIR` |
-| Docker image | `publish-image.yml`, before the image is pushed | `--form docker --image ID` |
+| Windows installer | `verify-full.yml` "Installed Windows build acceptance" (compiles `flujo-setup.exe` from the revision and installs it), and `installer.yml` on Windows Server 2022 and 2025 | `--form checkout --app-root DIR` |
+| Docker image | `verify-full.yml` "Docker image acceptance" (builds the image from the revision), and `publish-image.yml` before the image is pushed | `--form docker --image ID` |
 
-Every run uses a new, empty data folder (or Docker volume) and its own port:
+Every run uses a new, empty data folder on its own small volume (a 256 MiB
+tmpfs on Linux, a virtual disk on Windows, a disk image on macOS, a tmpfs volume
+for Docker) and its own port:
 
 1. Start the app and wait until it has finished starting.
-2. Add test data and take a backup; the backup must hold exactly that data.
+2. Add test data and take a backup; the backup must hold exactly that data, and
+   setting names only, never their values.
 3. Stop normally and start again; the data must be unchanged.
 4. Change the data, force-stop the app right away and start again; the changes
    must still be there.
 5. Try to restore two damaged backups; both must be refused and change nothing.
-6. Restore the backup; the original data must be back. Back up again.
-7. npm package and Windows installer only: add a local program (stdio) MCP
-   server and call its tool. Add an MCP server behind a local OAuth
-   authorization server (`scripts/mcp-oauth-reference-server.mjs`, built from
-   the official MCP SDK's handlers), sign in through FLUJO's own routes and
-   redirect, and use it after its access token expired. Restart; it must still
-   work with no new consent, and resetting the sign-in must revoke the grant.
-8. Stop normally; the app must end and free its port.
+6. Restore the backup; flows, conversations and theme must be back, settings
+   keep their values. Back up again.
+7. Force-stop the app in the middle of an ordinary backup and, on host
+   installations, while a snapshot backup is being downloaded. After the
+   restart the data is unchanged, new backups of both kinds are complete and
+   changes save at once.
+8. Fill the volume to its last byte and change the data. The app must keep
+   running and answering; a change it confirmed must be kept, any other part
+   must show its old or its new value and nothing else may change. Once the
+   space is freed, changes must save again within a minute, without a restart,
+   and survive a forced stop.
+9. Set up a schedule that runs every five seconds, a switched-off schedule and
+   two runs waiting for approval (a local stand-in model and stand-in MCP tool,
+   no real provider). Force-stop the app and start it again without opening
+   it: the schedule must run again on its own. Both approvals must still wait,
+   approving runs the tool exactly once, approving again is refused, denying
+   runs nothing, the switched-off schedule never runs and every schedule run
+   matches exactly one model call.
+10. npm package and Windows installer only: add a local program (stdio) MCP
+    server and call its tool. Add an MCP server behind a local OAuth
+    authorization server (`scripts/mcp-oauth-reference-server.mjs`, built from
+    the official MCP SDK's handlers), sign in through FLUJO's own routes and
+    redirect, and use it after its access token expired. Restart; it must still
+    work with no new consent, and resetting the sign-in must revoke the grant.
+11. Stop normally; the app must end and free its port.
 
 With `--from npm:latest` (or `--from image:...` for Docker) the previous release
 starts first, writes the test data and takes the backup. The release under test
@@ -265,20 +286,31 @@ backup. CI uses the latest published release, so every release is checked as an
 upgrade from the one before it.
 
 What these checks do not cover: the test data is one flow, one finished
-conversation, the theme and one non-secret setting, with no model call,
-schedule or approval. The Docker image runs no MCP checks, because a container
-starts local program servers only after the owner approves them. A forced stop
-is not a power cut. On Windows
-a console program has no gentle stop signal, so a normal stop there also ends
-the process tree. The backups are the ordinary selective backups, not complete
-data-folder or snapshot backups.
+conversation, the theme and one non-secret setting, plus the stand-in schedule
+and approvals; no real provider, account or secret is used. The Docker image
+runs no MCP checks, because a container starts local program servers only
+after the owner approves them. A forced stop is not a power cut. On Windows a
+console program has no gentle stop signal, so a normal stop there also ends
+the process tree. A container accepts snapshot backups only from inside
+itself, so there the forced stop hits an ordinary backup only. A
+whole-workspace snapshot also carries every configured MCP server; a fresh
+installation's bundled servers do not allow that, so the check snapshots the
+test flow.
 
-Run the same checks on your own machine, for example against a Linux
-installation made by `scripts/install.sh`:
+The small volume needs root or passwordless `sudo` on Linux (as on CI runners)
+or an administrator shell on Windows; on macOS nothing extra. Run the same
+checks on your own machine, for example against a Linux installation made by
+`scripts/install.sh`:
 
 ```sh
 node scripts/packaged-acceptance.mjs --form checkout --app-root "$HOME/FLUJO" --from npm:latest --report "$HOME/flujo-acceptance.json"
 ```
+
+The [operator runbook](operator-runbook.md) is followed word for word by
+`scripts/operator-runbook.mjs` in `verify-full.yml` (Linux with bash, Windows
+with PowerShell 7) and before every npm release. It fails when a documented
+step is missing, out of order, uses a setting no step sets, or does not do what
+the page says.
 
 New installations from `scripts/install.sh` and `scripts/install.ps1` download
 only the chosen version (a partial clone) and leave out the website folder
@@ -319,13 +351,16 @@ separate explicit action: restoring files does not reverse external effects or
 retain changes made after the selected backup. Published packages, installers,
 Linux/container profiles and the remaining integrated criteria remain separate.
 
-A technically independent non-author operator must install the pinned candidate
-on its intended profile, diagnose a seeded failed schedule, authenticate, back
-up, upgrade, restore and roll back while retaining actual artifacts and
-observations. This can be an independent automated operator with reviewable
-technical evidence; it does not require a human-only workflow. Disposable
-fixtures must remain labeled as fixtures. The Community installed-baseline harness is baseline-only until it
-observes both the agreed older release and the integrated candidate.
+The independent operator is automated: `scripts/operator-runbook.mjs` follows
+the published [operator runbook](operator-runbook.md) word for word on a fresh
+account (empty home, npm cache and data folder). It installs the previous
+release, finds a seeded failed job, backs up, upgrades to the release under
+test and restores, on Linux and Windows in `verify-full.yml` and before every
+npm release, and fails when a documented step is missing or wrong. Its report
+is kept with the packaged acceptance report. Disposable fixtures (the failed
+job's stand-in model, the test data) stay labeled as fixtures. The Community
+installed-baseline harness is baseline-only until it observes both the agreed
+older release and the integrated candidate.
 
 For each run retain source/CLI pins, artifact digest/SRI, OS/runtime, mount and
 authority profile, fixture vs original-work labels, exit codes, report/log hashes

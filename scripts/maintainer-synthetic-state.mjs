@@ -152,7 +152,9 @@ export function validateFlowInventoryReceipt(receipt, originalBytes, initialByte
 
 async function expect(request, route, status, options) {
   const response = await request(route, options);
-  if (response.status !== status) throw new Error(`Synthetic state ${route} returned ${response.status}, expected ${status}.`);
+  if (response.status !== status) {
+    throw Object.assign(new Error(`Synthetic state ${route} returned ${response.status}, expected ${status}.`), { status: response.status });
+  }
   return response;
 }
 

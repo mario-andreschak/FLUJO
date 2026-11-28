@@ -31,11 +31,40 @@ export function redactBackupCredentials(value: unknown): unknown {
   return result;
 }
 
+/** What an ordinary export writes for every variable: its name only, never its value. */
+export const WITHHELD_VARIABLE = Object.freeze({ value: '', metadata: Object.freeze({ isSecret: true }) });
+
+const asRecord = (value: unknown): Record<string, unknown> =>
+  value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+
+function isWithheldVariable(entry: unknown): boolean {
+  const record = asRecord(entry);
+  return record.value === '' && asRecord(record.metadata).isSecret === true;
+}
+
+/**
+ * Restoring variables never loses a value. Exports carry names only, so a
+ * withheld entry keeps the value stored under that name, and stored variables
+ * the archive does not list stay as they are. A withheld name that is not
+ * stored yet is added empty, so the user sees it still needs a value. Values
+ * from older archives that still carried them are restored.
+ */
+export function mergeRestoredVariables(current: unknown, archived: unknown): Record<string, unknown> {
+  const stored = asRecord(current);
+  const merged: Record<string, unknown> = {};
+  const put = (name: string, entry: unknown) => Object.defineProperty(merged, name, { value: entry, enumerable: true, writable: true, configurable: true });
+  for (const [name, entry] of Object.entries(stored)) put(name, entry);
+  for (const [name, entry] of Object.entries(asRecord(archived))) {
+    if (!(isWithheldVariable(entry) && Object.hasOwn(stored, name))) put(name, entry);
+  }
+  return merged;
+}
+
 export function ordinaryBackupData(selection: string, value: unknown): unknown {
   if (selection === 'globalEnvVars') {
     // Unmarked legacy variables can contain credentials: no values are exported.
     if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-    return Object.fromEntries(Object.keys(value).map(name => [name, { value: '', metadata: { isSecret: true } }]));
+    return Object.fromEntries(Object.keys(value).map(name => [name, { value: WITHHELD_VARIABLE.value, metadata: { ...WITHHELD_VARIABLE.metadata } }]));
   }
   if (selection === 'mcpServers') {
     // Launch strings, URLs, headers, source URLs and arbitrary nested transport
