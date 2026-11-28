@@ -11,7 +11,7 @@ import {
   type BrowserSession,
 } from './runtime.js';
 import { renderBrowserViewHtml } from './viewHtml.js';
-import { audioTapSource } from './audioTap.js';
+import { audioSinkMutedExpression, audioTapSource, evaluateInMainWorlds, trackMainWorlds } from './audioTap.js';
 
 /**
  * Loopback media gateway for the browser MCP App.
@@ -326,42 +326,18 @@ function audioEnabled(): boolean {
   return /^(1|true|yes|on)$/i.test(raw);
 }
 
-async function evaluateInAudioContexts(channel: SessionChannel, expression: string): Promise<void> {
-  const cdp = channel.cdp;
-  if (!cdp) return;
-  const contextIds = [...channel.audioExecutionContexts];
-  if (contextIds.length === 0) {
-    await cdp.send('Runtime.evaluate', { expression }).catch(() => undefined);
-    return;
-  }
-  await Promise.all(contextIds.map(async (contextId) => {
-    const result = await cdp.send('Runtime.evaluate', { expression, contextId }).catch(() => undefined);
-    if (result && 'exceptionDetails' in result && result.exceptionDetails) {
-      channel.audioExecutionContexts.delete(contextId);
-    }
-  }));
-}
-
 async function prepareAudio(channel: SessionChannel): Promise<void> {
   if (channel.disposed || !audioEnabled() || channel.audioTapped) return;
   if (channel.audioPreparePromise) return channel.audioPreparePromise;
   channel.audioPreparePromise = (async () => {
     const cdp = await ensureCdp(channel);
-    cdp.on('Runtime.executionContextCreated', (event) => {
-      const isDefault = (event.context.auxData as Record<string, unknown> | undefined)?.isDefault;
-      if (isDefault !== true && isDefault !== 'true') return;
-      channel.audioExecutionContexts.add(event.context.id);
-      if (channel.audioClients.size > 0) {
-        void cdp.send('Runtime.evaluate', {
-          expression: 'window.__flujoAudioMuted = false;',
-          contextId: event.context.id,
-        }).catch(() => undefined);
-      }
+    trackMainWorlds(cdp, channel.audioExecutionContexts, (contextId) => {
+      if (channel.audioClients.size === 0) return;
+      void cdp.send('Runtime.evaluate', {
+        expression: audioSinkMutedExpression(AUDIO_BINDING, false),
+        contextId,
+      }).catch(() => undefined);
     });
-    cdp.on('Runtime.executionContextDestroyed', (event) => {
-      channel.audioExecutionContexts.delete(event.executionContextId);
-    });
-    cdp.on('Runtime.executionContextsCleared', () => channel.audioExecutionContexts.clear());
     cdp.on('Runtime.bindingCalled', (event) => {
       if (event.name !== AUDIO_BINDING) return;
       broadcastAudio(channel, event.payload);
@@ -373,7 +349,7 @@ async function prepareAudio(channel: SessionChannel): Promise<void> {
     await cdp.send('Runtime.addBinding', { name: AUDIO_BINDING });
     await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source });
     // Also recover the current document (for reused sessions and about:blank).
-    await evaluateInAudioContexts(channel, source);
+    await evaluateInMainWorlds(cdp, channel.audioExecutionContexts, source);
     channel.audioTapped = true;
   })();
   try {
@@ -384,11 +360,8 @@ async function prepareAudio(channel: SessionChannel): Promise<void> {
 }
 
 async function setAudioMuted(channel: SessionChannel, muted: boolean): Promise<void> {
-  if (!channel.audioTapped) return;
-  await evaluateInAudioContexts(
-    channel,
-    `window.__flujoAudioMuted = ${muted ? 'true' : 'false'};`,
-  );
+  if (!channel.audioTapped || !channel.cdp) return;
+  await evaluateInMainWorlds(channel.cdp, channel.audioExecutionContexts, audioSinkMutedExpression(AUDIO_BINDING, muted));
 }
 
 async function startAudio(channel: SessionChannel): Promise<void> {

@@ -7,7 +7,8 @@ import {
   startRecording,
   stopRecording,
 } from '../../mcp-servers/browser/src/recording';
-import { getSession, listSessions, shutdownBrowserRuntime } from '../../mcp-servers/browser/src/runtime';
+import { audioSinkMutedExpression, audioTapSource } from '../../mcp-servers/browser/src/audioTap';
+import { getSession, listSessions, openSession, shutdownBrowserRuntime } from '../../mcp-servers/browser/src/runtime';
 
 const mockLaunchBrowser = jest.fn();
 jest.mock('patchright', () => ({
@@ -25,20 +26,31 @@ const WEBM_1280X720 = Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0xb0, 0x82, 0x05, 0x0
 
 type Fixture = ReturnType<typeof recordingFixture>;
 
+type Size = { width: number; height: number };
+
 /** One browser context with its own page, screencast and CDP session. */
-function contextFixture(savedPaths: string[]) {
+function contextFixture(savedPaths: string[], initialViewport: Size) {
   let closed = false;
   let currentPath = '';
+  let viewport = initialViewport;
   const closeHandlers: Array<() => void> = [];
   const screencast = {
-    start: jest.fn(async (options: { path: string }) => { currentPath = options.path; }),
+    start: jest.fn(async (options: { path: string; size: Size }) => { currentPath = options.path; }),
     stop: jest.fn(async () => {
       await fs.writeFile(currentPath, WEBM_1280X720);
       savedPaths.push(currentPath);
     }),
   };
+  const initScripts: Array<{ content: string; dispose: jest.Mock }> = [];
   const page = {
-    evaluate: jest.fn(async () => ({ width: 1280, height: 720, dpr: 1 })),
+    evaluate: jest.fn(async () => ({ ...viewport, dpr: 1 })),
+    viewportSize: jest.fn(() => viewport),
+    setViewportSize: jest.fn(async (size: Size) => { viewport = size; }),
+    addInitScript: jest.fn(async (script: { content: string }) => {
+      const entry = { content: script.content, dispose: jest.fn(async () => undefined) };
+      initScripts.push(entry);
+      return entry;
+    }),
     isClosed: jest.fn(() => closed),
     mainFrame: jest.fn(() => ({})),
     on: jest.fn((event: string, handler: () => void) => {
@@ -52,7 +64,7 @@ function contextFixture(savedPaths: string[]) {
     on: jest.fn((event: string, handler: (event: { name: string; payload: string }) => void) => {
       cdpHandlers.set(event, handler);
     }),
-    send: jest.fn(async () => ({})),
+    send: jest.fn(async (method: string, _params?: unknown) => (method === 'Runtime.evaluate' ? { result: { type: 'boolean', value: false } } : {})),
     detach: jest.fn(async () => undefined),
   };
   const context = {
@@ -73,7 +85,10 @@ function contextFixture(savedPaths: string[]) {
     const binding = (call?.[1] as { name: string } | undefined)?.name ?? '';
     handler({ name: binding, payload: JSON.stringify({ rate: 48_000, pcm: pcm.toString('base64') }) });
   };
-  return { page, context, screencast, emitAudio };
+  const evaluated = () => (cdp.send.mock.calls as unknown[][])
+    .filter(([method]) => method === 'Runtime.evaluate')
+    .map(([, params]) => (params as { expression: string }).expression);
+  return { page, context, screencast, cdp, initScripts, evaluated, emitAudio };
 }
 
 function recordingFixture() {
@@ -82,8 +97,8 @@ function recordingFixture() {
   mockLaunchBrowser.mockResolvedValue({
     close: jest.fn(async () => undefined),
     isConnected: jest.fn(() => true),
-    newContext: jest.fn(async () => {
-      const created = contextFixture(savedPaths);
+    newContext: jest.fn(async (options: { viewport: Size }) => {
+      const created = contextFixture(savedPaths, options.viewport);
       contexts.push(created);
       return created.context;
     }),
@@ -99,6 +114,9 @@ function recordingFixture() {
     get page() { return first().page; },
     get context() { return first().context; },
     get screencast() { return first().screencast; },
+    get cdp() { return first().cdp; },
+    get initScripts() { return first().initScripts; },
+    evaluated: () => first().evaluated(),
     emitAudio: (pcm: Buffer) => first().emitAudio(pcm),
   };
 }
@@ -345,5 +363,127 @@ describe('browser recording duration, disk limit and kept sessions (#1390)', () 
     expect(wav.readUInt32LE(4)).toBe(36 + chunk.length * 2);
     expect(wav.readUInt32LE(40)).toBe(chunk.length * 2);
     expect(wav.readUInt32LE(24)).toBe(48_000);
+  });
+
+  describe('a page opened with browser_open', () => {
+    const signal = () => new AbortController().signal;
+
+    it('is recorded as it is, then given back open, resizable and at its own size', async () => {
+      mockDisk(() => 100 * GIB);
+      const session = await openSession('open-page', signal(), OWNER);
+      expect(session.viewportPolicy).toBe('resizable');
+
+      const started = await startRecording({ sessionId: 'open-page', audio: false, resolution: '640x360' }, signal(), OWNER);
+      expect(started).toMatchObject({
+        success: true,
+        status: 'recording',
+        sessionId: 'open-page',
+        segment: 1,
+        effectiveResolution: { width: 640, height: 360 },
+        actualViewport: { width: 640, height: 360 },
+        geometryMismatch: false,
+      });
+      expect(started.warnings).toEqual(expect.arrayContaining([expect.stringContaining('resized from 1280x720 to 640x360')]));
+      expect(fixture.contexts).toHaveLength(1);
+      expect(fixture.context.newPage).toHaveBeenCalledTimes(1);
+      expect(fixture.screencast.start).toHaveBeenCalledWith(expect.objectContaining({ size: { width: 640, height: 360 } }));
+      expect(getSession('open-page', OWNER)).toMatchObject({
+        viewportPolicy: 'fixed',
+        recordingId: started.recordingId,
+        configuredVideoResolution: { width: 640, height: 360 },
+      });
+      expect(listSessions(OWNER).sessions).toEqual([expect.objectContaining({ sessionId: 'open-page', purpose: 'interactive' })]);
+
+      const stopped = await stopRecording({ sessionId: 'open-page' }, OWNER);
+      expect(stopped).toMatchObject({ success: true, status: 'stopped', sessionClosed: false, segment: 1, sessionId: 'open-page' });
+      expect(fixture.page.setViewportSize).toHaveBeenLastCalledWith({ width: 1280, height: 720 });
+      const kept = getSession('open-page', OWNER);
+      expect(kept.page).toBe(fixture.page);
+      expect(kept).toMatchObject({
+        viewportPolicy: 'resizable',
+        configuredViewport: undefined,
+        configuredVideoResolution: undefined,
+        recordingId: undefined,
+      });
+      expect(fixture.context.close).not.toHaveBeenCalled();
+
+      const second = await startRecording({ sessionId: 'open-page', audio: false }, signal(), OWNER);
+      expect(second).toMatchObject({ segment: 2, effectiveResolution: { width: 1280, height: 720 } });
+      expect(JSON.stringify(second.warnings)).not.toMatch(/resized/);
+      expect(fixture.page.setViewportSize).toHaveBeenCalledTimes(2);
+
+      const last = await stopRecording({ sessionId: 'open-page', closeSession: true }, OWNER);
+      expect(last).toMatchObject({ success: true, sessionClosed: true, segment: 2 });
+      expect(fixture.context.close).toHaveBeenCalled();
+      expect(() => getSession('open-page', OWNER)).toThrow(/does not exist/);
+    });
+
+    it('is not closed for being idle while it records, and closes normally once idle again', async () => {
+      mockDisk(() => 100 * GIB);
+      process.env.FLUJO_BROWSER_IDLE_TIMEOUT_MS = '10000';
+      useFakeClock();
+      await openSession('idle-page', signal(), OWNER);
+      const started = await startRecording({ sessionId: 'idle-page', audio: false }, signal(), OWNER);
+
+      await jest.advanceTimersByTimeAsync(60_000);
+      expect(listSessions(OWNER).sessions).toEqual([expect.objectContaining({ sessionId: 'idle-page' })]);
+      expect(recordingStatus({ recordingId: started.recordingId }, OWNER)).toMatchObject({ running: true });
+
+      expect(await stopRecording({ recordingId: started.recordingId }, OWNER)).toMatchObject({ sessionClosed: false });
+      await jest.advanceTimersByTimeAsync(11_000);
+      expect(listSessions(OWNER).sessions).toEqual([]);
+      await flushIo();
+      expect(fixture.context.close).toHaveBeenCalled();
+    });
+
+    it('switches the recording audio listener on only while a part records', async () => {
+      mockDisk(() => 100 * GIB);
+      await openSession('audio-page', signal(), OWNER);
+      const binding = '__flujoRecordAudio_audiopage';
+
+      const started = await startRecording({ sessionId: 'audio-page', audio: true }, signal(), OWNER);
+      expect(started.warnings).toEqual(expect.arrayContaining([expect.stringContaining('the live view is turned off')]));
+      const [hook, firstOn] = fixture.initScripts;
+      expect(hook?.content).toBe(audioTapSource(binding, true));
+      expect(firstOn?.content).toBe(audioTapSource(binding, false));
+      expect(fixture.evaluated()).toContain(audioTapSource(binding, false));
+      expect(firstOn?.dispose).not.toHaveBeenCalled();
+
+      await stopRecording({ sessionId: 'audio-page' }, OWNER);
+      expect(firstOn?.dispose).toHaveBeenCalled();
+      expect(hook?.dispose).not.toHaveBeenCalled();
+      expect(fixture.evaluated().at(-1)).toBe(audioSinkMutedExpression(binding, true));
+
+      const second = await startRecording({ sessionId: 'audio-page', audio: true }, signal(), OWNER);
+      expect(fixture.initScripts).toHaveLength(3);
+      expect(JSON.stringify(second.warnings)).not.toMatch(/live view/);
+      expect(fixture.context.newCDPSession).toHaveBeenCalledTimes(1);
+      await stopRecording({ sessionId: 'audio-page', closeSession: true }, OWNER);
+      expect(fixture.initScripts[2]?.dispose).toHaveBeenCalled();
+    });
+
+    it('starts one recording when two calls ask for the same page at once', async () => {
+      mockDisk(() => 100 * GIB);
+      await openSession('busy-page', signal(), OWNER);
+      const [first, second] = await Promise.all([
+        startRecording({ sessionId: 'busy-page', audio: false }, signal(), OWNER),
+        startRecording({ sessionId: 'busy-page', audio: false }, signal(), OWNER),
+      ]);
+      expect(first).toMatchObject({ status: 'recording', segment: 1 });
+      expect(second).toMatchObject({ alreadyRecording: true, recordingId: first.recordingId });
+      expect(fixture.screencast.start).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses a session that is not open for this caller, and says which sessions can be recorded', async () => {
+      mockDisk(() => 100 * GIB);
+      await openSession('private-page', signal(), OWNER);
+      for (const [sessionId, owner] of [['missing', OWNER], ['private-page', 'run:someone-else']]) {
+        await expect(startRecording({ sessionId }, signal(), owner)).rejects.toMatchObject({
+          code: 'NOT_FOUND',
+          message: expect.stringContaining('browser_open'),
+        });
+      }
+      expect(fixture.screencast.start).not.toHaveBeenCalled();
+    });
   });
 });

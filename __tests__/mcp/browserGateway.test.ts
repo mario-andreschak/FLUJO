@@ -151,7 +151,7 @@ describe('browser live view gateway', () => {
   it('injects a parseable main-world audio tap bound to the gateway callback', () => {
     const source = audioTapSource('__flujoTest');
     expect(() => new Function(source)).not.toThrow();
-    expect(source).toContain('window.__flujoTest');
+    expect(source).toContain('sinks["__flujoTest"] = false;');
     // Both audio sources a page can use have to be covered.
     expect(source).toContain('window.AudioContext = patch(window.AudioContext)');
     expect(source).toContain('createMediaElementSource');
@@ -162,9 +162,9 @@ describe('browser live view gateway', () => {
     expect(source).toContain('MutationObserver');
   });
 
-  it('can preinstall the tap muted before the first navigation', () => {
+  it('can preinstall the tap muted before the first navigation without muting another listener', () => {
     const source = audioTapSource('__flujoTest', true);
-    expect(source).toContain('window.__flujoAudioMuted = true');
+    expect(source).toContain('if (!Object.prototype.hasOwnProperty.call(sinks, "__flujoTest")) sinks["__flujoTest"] = true;');
   });
 
   it('rejects an unknown session on the streaming endpoints', async () => {

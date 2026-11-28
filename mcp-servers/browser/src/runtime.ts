@@ -702,6 +702,12 @@ export function releaseSessionReservation(id: string, ownerScopeInput?: string):
   if (reservation && reservation.ownerScope === effectiveBrowserOwnerScope(ownerScopeInput)) reservations.delete(id);
 }
 
+/** Close this exact session object; a newer session that reuses its id is left alone. */
+export async function closeSessionObject(session: BrowserSession): Promise<void> {
+  removeSessionEntry(session);
+  await shutdownSession(session);
+}
+
 async function closeSessionInternal(id: string, ownerScopeInput?: string): Promise<boolean> {
   const session = sessions.get(id);
   if (!session) return false;
