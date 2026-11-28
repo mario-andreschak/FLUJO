@@ -22,7 +22,7 @@ ships, once for the installers and once for the container image:
 | | Node | Where |
 |---|---|---|
 | Installers | 24.22.1 | private Windows runtime in `scripts/install.ps1`; NodeSource, Homebrew, zypper and pacman in `scripts/install.sh` |
-| Container image | 22.23.4 | both stages of `Dockerfile` |
+| Container image | 24.22.1 | both stages of `Dockerfile` |
 
 `scripts/verify-ci-node.test.mjs` fails when one of these files names another
 version or Node line, when the Windows archives' checksums are not in the
@@ -30,11 +30,63 @@ signed checksum file of that version, or when the container ships another Node
 line than the installers without a reason in `containerBehind` (and when that
 reason stays after both match).
 
-The image stays on Node 22 for now. Moving it needs, in this order, on `main`:
-the Docker Hub metadata of `node:24.22.1-bookworm-slim` recorded as archived
-evidence (as for the 22.23.4 base), `containerBase` pointing at its digest,
-`shipped.container` set to 24.22.1 and `containerBehind` removed, then a
-container build and acceptance run. Node 22 is supported until April 2027.
+### Container base
+
+`containerBase.observed` records what Docker Hub's official `library/node`
+repository published for the base tag (`metadataUrl`): the tag, the
+multi-platform index digest the `Dockerfile` pins, its linux/amd64 image and
+when it was pushed. `containerBaseRecord` in `scripts/verify-ci-node.mjs`
+refuses a base that is not that observation of the shipped container Node.
+Each build pulls exactly that digest, and each stage checks its Node binary
+against the signed release before anything else runs.
+
+To move the base (a new Node release or a Debian security rebuild), read
+`https://hub.docker.com/v2/repositories/library/node/tags/<version>-bookworm-slim`,
+copy `name`, `digest`, `media_type`, `tag_last_pushed` and the linux/amd64
+entry of `images` into `observed`, set `observedAt`, then change both `FROM`
+lines. The container smoke re-reads the index from the registry and checks its
+bytes against the recorded digest and linux/amd64 image.
+
+## Container smoke
+
+`scripts/smoke-container-image.mjs` checks a built image the way it ships, on
+1 CPU and 2 GB (the size of the small cloud machine a voice app runs FLUJO on):
+
+1. The image runs the shipped container Node, from the recorded official base.
+2. The container starts, its own `HEALTHCHECK` passes and the published port
+   answers.
+3. `scripts/container-smoke/inside.mjs first-chat` runs inside the container: a
+   stand-in OpenAI-compatible model answers a first chat through a flow
+   (streamed and not) and a direct model call, and the chat is stored.
+4. `inside.mjs voice` is the voice-app check that used to need a real Claude
+   token on that machine. A Claude subscription model runs through the bundled
+   Claude Code, which sends its model requests to a stand-in of Anthropic's
+   Messages API (`ANTHROPIC_BASE_URL`) with a placeholder token, and one MCP tool
+   comes from a stand-in MCP server. Direct calls, tool turns and a continued
+   conversation run first with *Keep a Claude process ready*, *Reuse MCP tool
+   lists* and *Fewer saves per turn* off, then on (set in the stored Settings,
+   as a user does). The check judges what FLUJO and the stand-ins observed,
+   never timings (a busy machine scatters them): with the settings on, a Claude
+   Code process waits ready and at least two of three later requests of each
+   kind take one (FLUJO's step timer marks `claude.claimed`), MCP list requests
+   drop and a turn saves fewer times; with them off, none of that happens.
+   Every finished turn must be stored. The times are reported, not judged.
+5. The container is killed (`docker kill`) and started again; every finished
+   turn must still be there and both models must still answer.
+
+Nothing leaves the machine except the registry read in step 1. The report
+(`--report`) holds every check and the voice timings; CI shows them in the job
+summary and keeps the report as an artifact. The `test` job of `verify.yml`
+builds the image from every main-target change and runs the smoke, and
+`publish-image.yml` runs it on the exact image before pushing it.
+`assertContainerSmoke` in `scripts/workflow-contract.mjs` keeps both in place.
+
+To run it locally with Docker:
+
+```sh
+docker build -t flujo-container-smoke:local .
+node scripts/smoke-container-image.mjs --image flujo-container-smoke:local --report "$PWD/container-smoke.json"
+```
 
 ## Verify the executable before running build tools
 
