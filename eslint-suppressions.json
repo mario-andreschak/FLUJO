@@ -1342,21 +1342,6 @@
       "count": 1
     }
   },
-  "src/frontend/services/model/index.ts": {
-    "flujo/no-double-cast": {
-      "count": 1
-    }
-  },
-  "src/frontend/services/packages/index.ts": {
-    "flujo/no-double-cast": {
-      "count": 1
-    }
-  },
-  "src/frontend/services/registry/index.ts": {
-    "flujo/no-double-cast": {
-      "count": 1
-    }
-  },
   "src/shared/types/enduringAgent/schemas.ts": {
     "flujo/no-double-cast": {
       "count": 1
