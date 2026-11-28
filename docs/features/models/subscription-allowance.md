@@ -33,14 +33,18 @@ when their applicability to a specific model is not established.
   newer `limits[]` rows, FLUJO reads them by their `kind` (`session` is the
   five-hour window, `weekly_all` the weekly one); while the older fields are
   still sent, they are used.
-- Claude limit warnings during runs: every model turn carries Claude's
+- Claude limit reports during runs: every model turn carries Claude's
   rate-limit headers, and the Agent SDK repeats them as a `rate_limit_event`.
-  This also works for a setup-token that may not open the usage page. Claude
-  only sends a number near a limit: a warning carries the share used of one
-  window (a 0 to 1 fraction), a refusal means that window is used up (0% left)
-  until its reset, and "allowed" ends earlier warnings. FLUJO lays such a
-  window over the last full reading and says where the number came from. Far
-  from every limit, a setup-token therefore still shows "Usage not exposed".
+  This also works for a setup-token that may not open the usage page. Since
+  Claude Code 2.1.316 the event lists every plan window in `unifiedWindows`
+  (the share used as a 0 to 1 fraction, and the reset time), near a limit or
+  not, so a setup-token shows real numbers after its first run. Older Claude
+  Code versions send a number only near a limit: a warning carries the share
+  used of one window, and a refusal means that window is used up (0% left)
+  until its reset. "allowed" ends earlier warnings. FLUJO lays these windows
+  over the last full reading and says where the numbers came from. Before a
+  first run, a setup-token that cannot open the usage page shows "Usage not
+  exposed".
 - Codex subscriptions: explicit Refresh uses a short-lived owned app-server to
   read the file-backed login and ChatGPT rate-limit windows. It never starts a
   thread or turn, runs tools, redeems credits, or changes login. API-key-only
@@ -100,12 +104,21 @@ runs each one through the store and projection and checks the bar's text,
 value and colour; `__tests__/model/claudeAllowanceFixtures.test.ts` checks the
 live reader gives the same result for each recorded usage-page answer.
 
+No real account is needed to check the numbers end to end.
+`__tests__/model/claudeCodeStandIn.test.ts` runs the Claude Code bundled with
+the Agent SDK against `scripts/anthropic-stand-in.mjs`, a local stand-in of
+Anthropic's service that sends Claude's rate-limit headers and serves the usage
+page from the same numbers: far from a limit, near one, at one, and from the
+usage page. `__tests__/chat/claudeFlowStandIn.test.ts` does the same through a
+saved flow and the allowance route, and `__tests__/model/codexStandIn.test.ts`
+checks that the bar shows the plan numbers the bundled Codex received.
+
 ## How providers expose what is left (checked November 2026)
 
 | Provider | Official way to read it | Used by FLUJO |
 |---|---|---|
 | Claude subscription | Usage page `GET api.anthropic.com/api/oauth/usage` (what the official CLI's `/usage` reads; needs the login's profile scope, which `claude setup-token` tokens may lack). Agent SDK `usage_EXPERIMENTAL…()` returns the same windows. Since SDK 0.3.x the page also sends `limits[]` rows and per-model weekly rows (for example "Fable"). | Yes |
-| Claude subscription, during runs | Rate-limit response headers (`anthropic-ratelimit-unified-5h-utilization`, `-7d-…`, `-status`, `-reset`), repeated by the SDK as `rate_limit_event`. The CLI status line also gets `rate_limits.five_hour` / `seven_day` (`used_percentage` 0 to 100, `resets_at` in epoch seconds) since Claude Code 2.1.80, but only inside the terminal. | Yes (SDK event) |
+| Claude subscription, during runs | Rate-limit response headers (`anthropic-ratelimit-unified-5h-utilization`, `-7d-…`, `-status`, `-reset`), repeated by the SDK as `rate_limit_event` (with every window in `unifiedWindows` since Claude Code 2.1.316). The CLI status line also gets `rate_limits.five_hour` / `seven_day` (`used_percentage` 0 to 100, `resets_at` in epoch seconds) since Claude Code 2.1.80, but only inside the terminal. | Yes (SDK event) |
 | Codex / ChatGPT plan | Codex app-server `account/rateLimits/read`: `primary` and `secondary` windows with `usedPercent`, `windowDurationMins`, `resetsAt`; newer CLIs add `rateLimitsByLimitId` buckets. The app-server also sends `account/rateLimits/updated` during turns (one bucket, recorded from CLI 0.166.0 in `__tests__/model/fixtures/codexAppServerProtocol.json`). | Yes (read on check, and updated during runs) |
 | Antigravity CLI (Google login) | No public usage reading. | Says so plainly |
 | Gemini API key, Anthropic API key, OpenAI API key | Pay per use, no "allowance left". Only per-minute rate-limit headers, and spend reports through admin-only APIs. | API billing |

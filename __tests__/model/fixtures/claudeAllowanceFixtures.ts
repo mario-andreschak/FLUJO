@@ -3,10 +3,12 @@
  * must show for a Sonnet model afterwards. Shapes follow the official Agent
  * SDK type definitions (@anthropic-ai/claude-agent-sdk 0.3.312: the usage
  * control response, its `limits[]` rows and `rate_limit_event`), the usage
- * page the official CLI reads, and the refusals recorded on issue #756.
- * No real account data: every number here is made up.
+ * page the official CLI reads, and the refusals recorded on issue #756. The
+ * `unifiedWindows` events are what the bundled Claude Code 2.1.316 sent for
+ * the stand-in's rate-limit headers (`claudeCodeStandIn.test.ts` checks that
+ * it still does). No real account data: every number here is made up.
  */
-import { ClaudeAllowanceError, claudeAllowanceSnapshot, claudeOAuthUsageResult, claudeRateLimitSignal, normalizeClaudeAllowance } from '@/backend/services/model/allowance/claude';
+import { ClaudeAllowanceError, claudeAllowanceSnapshot, claudeOAuthUsageResult, claudeRateLimitSignals, normalizeClaudeAllowance } from '@/backend/services/model/allowance/claude';
 import { recordAllowanceFailure, recordAllowanceSignal, recordAllowanceSnapshot } from '@/backend/services/model/allowance/store';
 
 export type ClaudeAllowanceStep =
@@ -80,7 +82,7 @@ export function claudeAllowanceFixtures(now: number): ClaudeAllowanceFixture[] {
     ], shows: { text: 'Usage not exposed' } },
     { name: 'rate-limit event: weekly warning for a setup-token', steps: [refused,
       { kind: 'rate-limit-event', info: { status: 'allowed_warning', rateLimitType: 'seven_day', utilization: 0.82, resetsAt: epoch(40), isUsingOverage: false } }],
-    shows: { text: '18% left', bar: { percent: 18, colour: 'warning' }, detail: 'This number comes from a limit warning' } },
+    shows: { text: '18% left', bar: { percent: 18, colour: 'warning' }, detail: 'This number comes from the limit report Claude sent' } },
     { name: 'rate-limit event: five-hour limit reached', steps: [refused,
       { kind: 'rate-limit-event', info: { status: 'rejected', rateLimitType: 'five_hour', resetsAt: epoch(1), overageStatus: 'rejected', overageDisabledReason: 'org_level_disabled' } }],
     shows: { text: '0% left', bar: { percent: 0, colour: 'error' } } },
@@ -94,6 +96,24 @@ export function claudeAllowanceFixtures(now: number): ClaudeAllowanceFixture[] {
     { name: 'rate-limit event: an Opus limit says nothing about Sonnet', steps: [refused,
       { kind: 'rate-limit-event', info: { status: 'rejected', rateLimitType: 'seven_day_opus', resetsAt: epoch(50) } }],
     shows: { text: 'Usage not exposed' } },
+    { name: 'rate-limit event: every window, far from a limit (Claude Code 2.1.316)', steps: [refused,
+      { kind: 'rate-limit-event', info: { status: 'allowed', resetsAt: epoch(3), rateLimitType: 'five_hour', isUsingOverage: false, unifiedWindows: {
+        five_hour: { utilization: 0.12, resetsAt: epoch(3), status: 'allowed' }, seven_day: { utilization: 0.31, resetsAt: epoch(72), status: 'allowed' } } } }],
+    shows: { text: '69% left', bar: { percent: 69, colour: 'success' }, detail: 'This number comes from the limit report Claude sent' } },
+    { name: 'rate-limit event: weekly warning with every window (Claude Code 2.1.316)', steps: [refused,
+      { kind: 'rate-limit-event', info: { status: 'allowed_warning', resetsAt: epoch(24), rateLimitType: 'seven_day', utilization: 0.88, isUsingOverage: false,
+        surpassedThreshold: 0.75, unifiedWindows: { five_hour: { utilization: 0.4, resetsAt: epoch(3), status: 'allowed' },
+          seven_day: { utilization: 0.88, resetsAt: epoch(24), status: 'allowed_warning', surpassedThreshold: 0.75 } } } }],
+    shows: { text: '12% left', bar: { percent: 12, colour: 'warning' } } },
+    { name: 'rate-limit event: five-hour limit reached with every window (Claude Code 2.1.316)', steps: [refused,
+      { kind: 'rate-limit-event', info: { status: 'rejected', resetsAt: epoch(1), rateLimitType: 'five_hour', isUsingOverage: false, unifiedWindows: {
+        five_hour: { utilization: 1, resetsAt: epoch(1), status: 'rejected' }, seven_day: { utilization: 0.5, resetsAt: epoch(30), status: 'allowed' } } } }],
+    shows: { text: '0% left', bar: { percent: 0, colour: 'error' } } },
+    { name: 'rate-limit event: a lifted limit reports every window again (Claude Code 2.1.316)', steps: [refused,
+      { kind: 'rate-limit-event', info: { status: 'rejected', rateLimitType: 'seven_day_opus', resetsAt: epoch(50) } },
+      { kind: 'rate-limit-event', info: { status: 'allowed', isUsingOverage: false, unifiedWindows: {
+        five_hour: { utilization: 0.05, resetsAt: epoch(4), status: 'allowed' }, seven_day: { utilization: 0.2, resetsAt: epoch(60), status: 'allowed' } } } }],
+    shows: { text: '80% left', bar: { percent: 80, colour: 'success' } } },
     { name: 'rate-limit event: newer than a full usage read', steps: [{ kind: 'usage-page', status: 200, body: plenty, ageMs: 60_000 },
       { kind: 'rate-limit-event', info: { status: 'rejected', rateLimitType: 'five_hour', resetsAt: epoch(1) } }],
     shows: { text: '0% left', bar: { percent: 0, colour: 'error' } } },
@@ -122,7 +142,7 @@ export function recordClaudeFixture(fixture: ClaudeAllowanceFixture, accountKey:
     } else if (step.kind === 'sdk-usage') {
       recordAllowanceSnapshot(accountKey, claudeAllowanceSnapshot(normalizeClaudeAllowance(step.body, accountKey, new Date(at).toISOString())));
     } else {
-      recordAllowanceSignal(accountKey, claudeRateLimitSignal(step.info, new Date(at).toISOString()), now);
+      for (const signal of claudeRateLimitSignals(step.info, new Date(at).toISOString())) recordAllowanceSignal(accountKey, signal, now);
     }
   }
 }

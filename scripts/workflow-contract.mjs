@@ -9,7 +9,7 @@ const isApplicationSelection = (file, id, condition) => file === 'verify.yml' &&
 const VERIFICATION_MATRIX_RUNNER = "${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}";
 
 /** Jobs only the manual broad qualification runs; its verification gate needs them too. */
-const BROAD_ONLY_JOB_IDS = Object.freeze(['antigravity-cli', 'installed-windows-acceptance', 'image-acceptance', 'system-key-store', 'system-key-store-linux', 'contributor-guide', 'first-use-journey', 'scripted-pilot']);
+const BROAD_ONLY_JOB_IDS = Object.freeze(['antigravity-cli', 'installed-windows-acceptance', 'image-acceptance', 'system-key-store', 'system-key-store-linux', 'contributor-guide', 'first-use-journey', 'scripted-pilot', 'claude-code']);
 const JOURNEY_DESKTOP = 'npm run journey:first-use';
 const JOURNEY_PHONE = 'npm run journey:first-use -- --viewport 390x844';
 const BIG_APP = 'npx playwright test --config=playwright.features-first-use.config.mjs';
@@ -61,6 +61,28 @@ export function assertAntigravityPlatformJob(workflow) {
       || install < 0 || cli <= install || suite <= cli
       || steps.some(step => step.if !== undefined || step['continue-on-error'])) {
     throw new Error('The broad qualification must run the official Antigravity CLI suite on macOS and Windows after installing the CLI the way FLUJO does, with nothing optional.');
+  }
+}
+
+const CLAUDE_CODE_SUITES = 'node scripts/run-local-jest.cjs --ci --selectProjects node --runInBand --runTestsByPath __tests__/model/claudeCodeStandIn.test.ts __tests__/chat/claudeFlowStandIn.test.ts';
+
+/**
+ * The Claude Code bundled for macOS and Windows runs FLUJO's Claude suites
+ * against the local stand-in of Anthropic's service (Linux runs them in
+ * test-isolated), with every case and nothing optional (#1092, #1096, #756).
+ */
+export function assertClaudeCodePlatformJob(workflow) {
+  const job = workflow?.jobs?.['claude-code'];
+  const matrix = job?.strategy?.matrix;
+  const steps = job?.steps ?? [];
+  const install = steps.findIndex(step => step.run === 'npm ci --include=dev');
+  const suite = steps.findIndex(step => step.run === CLAUDE_CODE_SUITES);
+  if (!job || job.name !== 'Claude Code (${{ matrix.os }})' || job['runs-on'] !== '${{ matrix.os }}'
+      || job.if !== undefined || job['continue-on-error'] || job.strategy['fail-fast'] !== false
+      || Object.keys(matrix ?? {}).join() !== 'os' || JSON.stringify(matrix.os) !== JSON.stringify(['macos-latest', 'windows-latest'])
+      || install < 0 || suite <= install
+      || steps.some(step => step.if !== undefined || step['continue-on-error'])) {
+    throw new Error('The broad qualification must run the bundled Claude Code suites against the Anthropic stand-in on macOS and Windows after installing dependencies, with nothing optional.');
   }
 }
 
@@ -172,8 +194,8 @@ export function assertScriptedPilotJob(workflow) {
 function assertVerificationRunners(workflow) {
   for (const [id, job] of Object.entries(workflow?.jobs ?? {})) {
     // Their runners are checked by assertAntigravityPlatformJob, assertSystemKeyStoreJobs,
-    // assertContributorGuideJob and assertScriptedPilotJob.
-    if (['antigravity-cli', 'system-key-store', 'system-key-store-linux', 'contributor-guide', 'scripted-pilot'].includes(id)) continue;
+    // assertContributorGuideJob, assertScriptedPilotJob and assertClaudeCodePlatformJob.
+    if (['antigravity-cli', 'system-key-store', 'system-key-store-linux', 'contributor-guide', 'scripted-pilot', 'claude-code'].includes(id)) continue;
     if (Object.hasOwn(NON_LINUX_VERIFICATION_JOBS, id)) {
       if (job['runs-on'] !== NON_LINUX_VERIFICATION_JOBS[id][0]) throw new Error(`${id} must run on ${NON_LINUX_VERIFICATION_JOBS[id][0]}: ${NON_LINUX_VERIFICATION_JOBS[id][1]}`);
     } else if (['production-build', 'release-safety'].includes(id)) {
@@ -721,6 +743,7 @@ export function assertFullWorkflowContract(workflows, { mainIntegration = false 
     assertContributorGuideJob(workflow);
     assertFirstUseJourneyJob(workflow);
     assertScriptedPilotJob(workflow);
+    assertClaudeCodePlatformJob(workflow);
   }
   const gate = workflow.jobs.verification;
   if (gate?.name !== 'verification' || gate.if !== 'always()'

@@ -112,12 +112,29 @@ interface AdapterOptions {
 export interface ClaudeSdkRelayOptions {
   /** The stand-in model service's address. */
   baseUrl: () => string;
-  /** The Claude home directory of the current run. */
-  home: () => string;
+  /** The Claude home directory of the current run; without it, the home FLUJO prepared. */
+  home?: () => string;
   /** Why each Claude Code run ended, from its result message. */
   onResult?: (terminalReason: string | undefined) => void;
   /** The tool-use ids of each PostToolBatch call and what the adapter answered. */
   onToolBatch?: (batch: { toolUseIds: string[]; answer: unknown }) => void;
+  /**
+   * 'oauth' hands Claude Code the adapter's own subscription token
+   * (CLAUDE_CODE_OAUTH_TOKEN), as FLUJO does; the default replaces it with a
+   * placeholder API key.
+   */
+  auth?: 'api-key' | 'oauth';
+  /**
+   * Relay every prompt message the adapter streams (steering), and end the run
+   * when the adapter ends its input instead of at the first result.
+   */
+  streamInput?: boolean;
+  /** Each prompt message the adapter handed the SDK, as it was handed. */
+  onPrompt?: (message: unknown) => void;
+  /** The process id of each Claude Code process the SDK started. */
+  onSpawn?: (pid: number) => void;
+  /** Options laid over the adapter's own for the next query, then forgotten. */
+  takeOptionOverrides?: () => Record<string, unknown> | undefined;
 }
 
 /**
@@ -158,17 +175,22 @@ export function createClaudeSdkRelay(relay: ClaudeSdkRelayOptions) {
     };
 
     async function* run() {
-      const first = await prompt[Symbol.asyncIterator]().next();
+      const input = prompt[Symbol.asyncIterator]();
+      const first = await input.next();
+      relay.onPrompt?.(first.value);
       const cwd = String(options.cwd);
       await fs.mkdir(cwd, { recursive: true });
-      const { CLAUDE_CODE_OAUTH_TOKEN: _token, ...adapterEnv } = env;
-      const home = relay.home();
+      const { CLAUDE_CODE_OAUTH_TOKEN: token, ...adapterEnv } = env;
+      const credential = relay.auth === 'oauth' ? { CLAUDE_CODE_OAUTH_TOKEN: token } : { ANTHROPIC_API_KEY: 'offline-stand-in-not-a-secret' };
+      const home = relay.home?.() ?? String(adapterEnv.CLAUDE_CONFIG_DIR ?? adapterEnv.HOME);
       const config = {
         prompt: first.value,
-        options: plain,
-        runtime: { cwd, env: { ...adapterEnv,
+        options: { ...plain, ...relay.takeOptionOverrides?.() },
+        streamInput: relay.streamInput === true,
+        reportPid: typeof relay.onSpawn === 'function',
+        runtime: { cwd, env: { ...adapterEnv, ...credential,
           HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: home,
-          ANTHROPIC_BASE_URL: relay.baseUrl(), ANTHROPIC_API_KEY: 'offline-stand-in-not-a-secret',
+          ANTHROPIC_BASE_URL: relay.baseUrl(),
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_AUTOUPDATER: '1' } },
         callbacks: {
           canUseTool: typeof canUseTool === 'function',
@@ -186,14 +208,19 @@ export function createClaudeSdkRelay(relay: ClaudeSdkRelayOptions) {
       child.stdin.on('error', () => undefined);
       const stderr: Buffer[] = [];
       child.stderr.on('data', chunk => stderr.push(Buffer.from(chunk)));
-      bridges.push(new Promise<void>(resolve => child.once('close', (code) => {
+      const closed = new Promise<void>(resolve => child.once('close', (code) => {
         if (code !== 0 && !abortController.signal.aborted) failure = new Error(`SDK bridge exit ${code}: ${Buffer.concat(stderr).toString().slice(0, 2000)}`);
         ended = true;
         wake?.();
         resolve();
-      })));
+      }));
+      bridges.push(closed);
       createInterface({ input: child.stdout }).on('line', line => {
-        const parsed = JSON.parse(line) as { type: string; id?: number; message?: unknown; target: string; args: unknown[] };
+        const parsed = JSON.parse(line) as { type: string; id?: number; message?: unknown; pid?: number; target: string; args: unknown[] };
+        if (parsed.type === 'pid') {
+          relay.onSpawn?.(parsed.pid!);
+          return;
+        }
         if (parsed.type === 'frame') {
           const result = parsed.message as { type?: string; terminal_reason?: string };
           if (result.type === 'result') relay.onResult?.(result.terminal_reason);
@@ -208,15 +235,36 @@ export function createClaudeSdkRelay(relay: ClaudeSdkRelayOptions) {
       });
       child.stdin.write(`${JSON.stringify(config)}\n`);
       if (abortController.signal.aborted) stop();
-      for (;;) {
-        if (frames.length) { yield frames.shift(); continue; }
-        if (ended) break;
-        await new Promise<void>(resolve => { wake = resolve; });
-        wake = undefined;
+      if (relay.streamInput) {
+        void (async () => {
+          for (;;) {
+            const next = await input.next();
+            if (next.done) break;
+            relay.onPrompt?.(next.value);
+            send({ type: 'prompt', message: next.value });
+          }
+        })().catch(() => undefined).finally(() => send({ type: 'end' }));
       }
-      if (failure) throw failure;
+      try {
+        for (;;) {
+          if (frames.length) { yield frames.shift(); continue; }
+          if (ended) break;
+          await new Promise<void>(resolve => { wake = resolve; });
+          wake = undefined;
+        }
+        if (failure) throw failure;
+      } finally {
+        // Like the SDK's own iterator: a caller that stops reading closes the
+        // query, which ends Claude Code's input and waits for it to exit.
+        if (!ended) {
+          send({ type: 'close' });
+          await Promise.race([closed, new Promise(resolve => setTimeout(resolve, 10_000))]);
+        }
+      }
     }
-    return Object.assign(run(), { close: stop });
+    // `interrupt()` reaches the real query in the bridge before any later stop, as in-process.
+    const interrupt = () => { send({ type: 'interrupt' }); return Promise.resolve(undefined); };
+    return Object.assign(run(), { close: stop, interrupt });
   }
 
   return { relayQuery, settled: () => Promise.all(bridges).then(() => undefined) };

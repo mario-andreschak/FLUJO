@@ -138,30 +138,49 @@ export function claudeOAuthUsageResult(response: { status: number; retryAfter: s
   return snapshot;
 }
 
+function epochTime(value: unknown): string | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 && value * 1000 <= 8.64e15
+    ? new Date(value * 1000).toISOString() : null;
+}
+
+/** One plan window from a rate-limit report; `utilization` is a 0-1 fraction there. */
+function reportedWindow(type: string, status: unknown, utilization: unknown, resetsAt: unknown): AllowanceWindow | undefined {
+  const known = Object.hasOwn(CLAUDE_WINDOWS, type) ? CLAUDE_WINDOWS[type] : undefined;
+  if (!known) return undefined;
+  const used = status === 'rejected' ? 100
+    : typeof utilization === 'number' && Number.isFinite(utilization) && utilization >= 0 ? Math.round(utilization * 1000) / 10 : null;
+  if (used === null) return undefined;
+  const [label, model] = known;
+  return { id: type, label, remainingPercent: remainingFromUsed(used), resetAt: epochTime(resetsAt), ...(model ? { modelFamily: model } : {}) };
+}
+
 /**
  * The SDK's `rate_limit_event` repeats Claude's rate-limit response headers.
  * They come with model turns, so they also reach a setup-token that may not
- * read the usage page. Claude only sends a number near a limit: `allowed`
- * carries none and ends earlier warnings, `allowed_warning` carries
- * `utilization` as a 0-1 fraction, and `rejected` means the window is used up.
+ * read the usage page. Claude Code 2.1.316 and later report every plan window
+ * in `unifiedWindows` (a 0-1 `utilization` each), near a limit or not. Older
+ * ones send a number only near a limit: `allowed_warning` with `utilization`,
+ * or `rejected` for a window that is used up. `allowed` ends earlier warnings.
+ * The result is applied in order: 'clear' first drops older signals.
  */
-export function claudeRateLimitSignal(info: unknown, observedAt = new Date().toISOString()): AllowanceSnapshot | 'clear' | undefined {
+export function claudeRateLimitSignals(info: unknown, observedAt = new Date().toISOString()): Array<AllowanceSnapshot | 'clear'> {
   const data = record(info);
-  if (data?.status === 'allowed') return 'clear';
-  const type = typeof data?.rateLimitType === 'string' ? data.rateLimitType : '';
-  const known = Object.hasOwn(CLAUDE_WINDOWS, type) ? CLAUDE_WINDOWS[type] : undefined;
-  if (!data || !known) return undefined;
-  const utilization = data.utilization;
-  const used = data.status === 'rejected' ? 100
-    : data.status === 'allowed_warning' && typeof utilization === 'number' && Number.isFinite(utilization) && utilization >= 0
-      ? Math.round(utilization * 1000) / 10 : null;
-  if (used === null) return undefined;
-  const resets = data.resetsAt;
-  const resetAt = typeof resets === 'number' && Number.isSafeInteger(resets) && resets > 0 && resets * 1000 <= 8.64e15
-    ? new Date(resets * 1000).toISOString() : null;
-  const [label, model] = known;
-  const signal: AllowanceWindow = { id: type, label, remainingPercent: remainingFromUsed(used), resetAt, ...(model ? { modelFamily: model } : {}) };
-  return { provider: 'claude', source: 'claude-rate-limit-event', observedAt, windows: [signal] };
+  if (!data) return [];
+  const windows = new Map<string, AllowanceWindow>();
+  for (const [type, value] of Object.entries(record(data.unifiedWindows) ?? {})) {
+    const row = record(value);
+    const window = row && reportedWindow(type, row.status, row.utilization, row.resetsAt);
+    if (window) windows.set(type, window);
+  }
+  const type = typeof data.rateLimitType === 'string' ? data.rateLimitType : '';
+  if (data.status === 'allowed_warning' || data.status === 'rejected') {
+    const named = reportedWindow(type, data.status, data.status === 'rejected' ? undefined : data.utilization, data.resetsAt);
+    if (named && (!windows.has(type) || data.status === 'rejected')) windows.set(type, named);
+  }
+  const snapshot: AllowanceSnapshot | undefined = windows.size
+    ? { provider: 'claude', source: 'claude-rate-limit-event', observedAt, windows: [...windows.values()] } : undefined;
+  if (data.status === 'allowed') return snapshot ? ['clear', snapshot] : ['clear'];
+  return snapshot ? [snapshot] : [];
 }
 
 /** Experimental capability is optional; timeout/failure cannot delay or fail execution. */

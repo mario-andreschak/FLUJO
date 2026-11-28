@@ -1,13 +1,15 @@
 // Local stand-ins for what a FLUJO container talks to in the container smoke (#1408): the
 // Anthropic Messages API as the bundled Claude Code calls it, and one MCP server. They only
 // script answers; FLUJO, its adapters and Claude Code itself run for real, and nothing leaves
-// the machine. The OpenAI-compatible stand-in is the first-use journey's stub model.
+// the machine. The Anthropic side is the shared stand-in in scripts/anthropic-stand-in.mjs.
+// The OpenAI-compatible stand-in is the first-use journey's stub model.
 import { randomUUID } from 'node:crypto';
 import http from 'node:http';
 import { performance } from 'node:perf_hooks';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { closer, listen, readBody, startAnthropicStandIn, systemTextOf, textOf } from '../anthropic-stand-in.mjs';
 
 export const TOOL_MARKER = '[smoke:tool]';
 export const CLASSIFY_INSTRUCTION = 'Answer with exactly one word: order, store or other.';
@@ -17,21 +19,7 @@ export const ANSWERS = Object.freeze({
   tool: 'Your order A-1 ships today.',
 });
 export const ORDER_TOOL = 'lookup_order';
-const MAX_BODY = 8 * 1024 * 1024;
-
 const blocksOf = (content) => (typeof content === 'string' ? [{ type: 'text', text: content }] : Array.isArray(content) ? content : []);
-const textOf = (content) => blocksOf(content).filter((block) => block?.type === 'text').map((block) => block.text).join('\n');
-
-async function readBody(request) {
-  const parts = [];
-  let size = 0;
-  for await (const part of request) {
-    size += part.length;
-    if (size > MAX_BODY) throw new Error('Request body is larger than 8 MiB.');
-    parts.push(part);
-  }
-  return Buffer.concat(parts);
-}
 
 /**
  * The stand-in model's next answer to one Messages API request: a call of the order tool for a
@@ -43,7 +31,7 @@ export function planClaudeReply(body) {
     .filter(({ message }) => message.role === 'user' && textOf(message.content).trim()).at(-1);
   const after = lastText ? messages.slice(lastText.index + 1) : [];
   const toolResultIn = after.some((message) => blocksOf(message.content).some((block) => block?.type === 'tool_result'));
-  const system = Array.isArray(body?.system) ? body.system.map((block) => block?.text ?? '').join('\n') : String(body?.system ?? '');
+  const system = systemTextOf(body?.system);
   const tool = (Array.isArray(body?.tools) ? body.tools : []).find((entry) => String(entry?.name ?? '').includes(ORDER_TOOL));
   const userText = lastText ? textOf(lastText.message.content) : '';
   if (userText.includes(TOOL_MARKER) && !toolResultIn && tool) return { type: 'tool_use', name: tool.name, input: { order_id: 'A-1' } };
@@ -52,78 +40,22 @@ export function planClaudeReply(body) {
   return { type: 'text', text: ANSWERS.plain };
 }
 
-/** The server-sent events of one streamed Messages API answer. */
-export function claudeAnswerEvents(model, block, id = `msg_${randomUUID().replaceAll('-', '')}`) {
-  const start = block.type === 'text'
-    ? { type: 'text', text: '' }
-    : { type: 'tool_use', id: `toolu_${randomUUID().replaceAll('-', '')}`, name: block.name, input: {} };
-  const delta = block.type === 'text'
-    ? { type: 'text_delta', text: block.text }
-    : { type: 'input_json_delta', partial_json: JSON.stringify(block.input) };
-  return [
-    ['message_start', { type: 'message_start', message: { id, type: 'message', role: 'assistant', model, content: [],
-      stop_reason: null, stop_sequence: null, usage: { input_tokens: 20, output_tokens: 1 } } }],
-    ['content_block_start', { type: 'content_block_start', index: 0, content_block: start }],
-    ['content_block_delta', { type: 'content_block_delta', index: 0, delta }],
-    ['content_block_stop', { type: 'content_block_stop', index: 0 }],
-    ['message_delta', { type: 'message_delta', delta: { stop_reason: block.type === 'text' ? 'end_turn' : 'tool_use', stop_sequence: null },
-      usage: { output_tokens: 8 } }],
-    ['message_stop', { type: 'message_stop' }],
-  ];
-}
-
-function listen(server, port, host) {
-  return new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(port, host, () => resolve(server.address().port));
-  });
-}
-
-function closer(server) {
-  return () => new Promise((resolve) => {
-    server.closeAllConnections();
-    server.close(() => resolve());
-  });
-}
-
 /**
  * A stand-in for Anthropic's Messages API. Claude Code reaches it through ANTHROPIC_BASE_URL with
  * FLUJO's subscription token unchanged; `requests` records when each model request arrived.
  */
 export async function startClaudeStandIn({ port = 0, host = '127.0.0.1', clock = () => performance.now() } = {}) {
   const requests = [];
-  const server = http.createServer(async (request, response) => {
-    const arrival = clock();
-    try {
-      const url = new URL(request.url ?? '/', 'http://stand-in.invalid');
-      if (request.method !== 'POST' || url.pathname !== '/v1/messages') {
-        await readBody(request);
-        response.writeHead(404, { 'content-type': 'application/json' }).end(JSON.stringify({
-          type: 'error', error: { type: 'not_found_error', message: `The stand-in serves POST /v1/messages only, not ${request.method} ${url.pathname}.` } }));
-        return;
-      }
-      const body = JSON.parse((await readBody(request)).toString('utf8') || '{}');
+  const standIn = await startAnthropicStandIn({
+    port, host, requireCredential: false,
+    reply: ({ body, record }) => {
       const block = planClaudeReply(body);
-      requests.push({ arrival, model: body.model, stream: body.stream === true, oauth: /^Bearer sk-ant-oat01-/.test(request.headers.authorization ?? ''),
+      requests.push({ arrival: clock(), model: body.model, stream: body.stream === true, oauth: record.oauth,
         tools: (body.tools ?? []).length, answer: block.type });
-      const events = claudeAnswerEvents(body.model, block);
-      if (body.stream) {
-        response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
-        for (const [event, data] of events) response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-        response.end();
-        return;
-      }
-      const message = events[0][1].message;
-      const content = block.type === 'text' ? [{ type: 'text', text: block.text }] : [{ ...events[1][1].content_block, input: block.input }];
-      response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ...message, content,
-        stop_reason: events[4][1].delta.stop_reason, usage: { input_tokens: 20, output_tokens: 8 } }));
-    } catch (error) {
-      if (!response.headersSent) response.writeHead(400, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: String(error?.message ?? error) } }));
-    }
+      return { blocks: [block], usage: { output_tokens: 8 } };
+    },
   });
-  const chosen = await listen(server, port, host);
-  return { baseUrl: `http://${host}:${chosen}`, requests, close: closer(server) };
+  return { baseUrl: standIn.baseUrl, requests, close: standIn.close };
 }
 
 const TOOLS = Object.freeze([
