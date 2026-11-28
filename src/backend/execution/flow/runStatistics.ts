@@ -7,6 +7,9 @@ import {
 } from '@/backend/services/statistics';
 import { queueSubflowRunOutcome } from '@/backend/execution/flow/subflowRecovery';
 import type { FlowRunInput, FlowRunResult } from './runFlowContract';
+import { traceSpan } from './turnTrace';
+import { flowService } from '@/backend/services/flow/index';
+import { statisticsRevisionId } from '@/backend/services/statistics/metadata';
 
 /** What the run statistics need from runFlow. `state` returns the run's current state object. */
 export type RunStatisticsContext = {
@@ -115,4 +118,34 @@ export function createRunStatistics(context: RunStatisticsContext): {
   };
 
   return { ensureRunStarted, finalizeRun };
+}
+
+/**
+ * Fills in the flow name and the opaque revision fingerprint the run
+ * statistics record, from the pinned snapshot or the saved flow. Best-effort:
+ * a failed read leaves them unset; the flow id stays authoritative.
+ */
+export async function resolveRunFlowRevision(sharedState: SharedState): Promise<void> {
+  if (
+    sharedState.flowId
+    && (!sharedState.statisticsFlowName || !sharedState.statisticsFlowRevisionId)
+  ) {
+    try {
+      const executionFlow = sharedState.flowSnapshot
+        ?? await flowService.getFlow(sharedState.flowId);
+      sharedState.statisticsFlowName ??= executionFlow?.name;
+      // Opaque, installation-local fingerprint of the execution configuration
+      // (graph plus node configuration). Statistics store only the fingerprint;
+      // the conversation's snapshot separately preserves its definition.
+      if (executionFlow && !sharedState.statisticsFlowRevisionId) {
+        sharedState.statisticsFlowRevisionId = await traceSpan('stats.revisionId', () => statisticsRevisionId('flow', {
+          id: executionFlow.id,
+          nodes: executionFlow.nodes,
+          edges: executionFlow.edges,
+        }));
+      }
+    } catch {
+      // Snapshot names are best-effort; the stable flow id remains authoritative.
+    }
+  }
 }
