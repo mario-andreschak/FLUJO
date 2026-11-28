@@ -83,11 +83,6 @@
       "count": 1
     }
   },
-  "src/backend/execution/flow/handlers/ModelHandler.ts": {
-    "flujo/no-double-cast": {
-      "count": 1
-    }
-  },
   "src/backend/execution/flow/handlers/nativeOriginalHost.ts": {
     "flujo/no-double-cast": {
       "count": 1

@@ -87,6 +87,7 @@ jest.mock('@/backend/services/model/adapters', () => ({
 }));
 
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
+import { getCompactionGlobalSettings } from '@/backend/execution/flow/handlers/modelHandlerSettings';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 
@@ -165,7 +166,6 @@ afterEach(() => jest.restoreAllMocks());
 
 describe('runtime compaction policy settings', () => {
   const runtime = ModelHandler as unknown as {
-    getCompactionGlobalSettings: () => Promise<{ compactionEnabled?: boolean; compactionThresholdPercent?: number }>;
     maybeCompactWire: (...args: unknown[]) => Promise<unknown>;
     generateCompletion: (...args: unknown[]) => Promise<{ success: true; value: { content: string } }>;
   };
@@ -383,9 +383,9 @@ describe('runtime compaction policy settings', () => {
 
   it('loads a saved percentage and keeps the documented disabled policy after a settings error', async () => {
     loadItemMock.mockResolvedValueOnce({ experimental: { compactionThresholdPercent: 60 } });
-    expect(await runtime.getCompactionGlobalSettings()).toMatchObject({ compactionThresholdPercent: 60 });
+    expect(await getCompactionGlobalSettings()).toMatchObject({ compactionThresholdPercent: 60 });
     loadItemMock.mockRejectedValueOnce(new Error('settings unavailable'));
-    expect(await runtime.getCompactionGlobalSettings()).toMatchObject({ compactionEnabled: false });
+    expect(await getCompactionGlobalSettings()).toMatchObject({ compactionEnabled: false });
   });
 
   it('uses the model percentage and current tools/new history despite an old tiny prompt count', async () => {

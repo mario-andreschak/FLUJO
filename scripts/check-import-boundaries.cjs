@@ -33,8 +33,7 @@ function moduleLiteral(node) {
   return undefined;
 }
 
-/** Direct dependencies only. This is an architecture guard, not bundle analysis. */
-function inspectImportBoundaries(root, exceptions = []) {
+function loadConfig(root) {
   const config = ts.getParsedCommandLineOfConfigFile(path.join(root, 'tsconfig.json'), {}, {
     ...ts.sys,
     onUnRecoverableConfigFileDiagnostic: (diagnostic) => {
@@ -44,6 +43,12 @@ function inspectImportBoundaries(root, exceptions = []) {
   if (!config || config.errors.length) {
     throw new Error(config?.errors.map((error) => ts.flattenDiagnosticMessageText(error.messageText, '\n')).join('\n') || 'Missing TypeScript configuration');
   }
+  return config;
+}
+
+/** Direct dependencies only. This is an architecture guard, not bundle analysis. */
+function inspectImportBoundaries(root, exceptions = []) {
+  const config = loadConfig(root);
   // Walk the layers explicitly: tsconfig's include/exclude is not an exemption
   // from the architecture contract. Ignore symlinks and non-source artifacts.
   const files = [];
@@ -99,6 +104,80 @@ function inspectImportBoundaries(root, exceptions = []) {
   };
 }
 
+/** Every module a file imports directly, as repository paths with the importing line. */
+function directImports(root, file, config, cache) {
+  const absolute = path.join(root, file);
+  const source = ts.createSourceFile(absolute, fs.readFileSync(absolute, 'utf8'), ts.ScriptTarget.Latest, true);
+  const imports = [];
+  function visit(node) {
+    const literal = moduleLiteral(node);
+    if (literal && ts.isStringLiteralLike(literal)) {
+      const resolved = ts.resolveModuleName(literal.text, absolute, config.options, ts.sys, cache).resolvedModule;
+      if (resolved) {
+        imports.push({
+          to: posix(path.relative(root, resolved.resolvedFileName)),
+          line: source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1,
+        });
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+  return imports;
+}
+
+/**
+ * Code split out of runFlow.ts, ModelHandler.ts or the MCP service index.ts
+ * (#571) must not import its big file back. A module the big file imports, or
+ * a module listed as split out of it, may not import that file, not even
+ * lazily or for a type. Existing two-way imports are listed with a reason in
+ * `backImportDebt` and fail once they are gone, like the layer debt above.
+ */
+function inspectHotspotImports(root, contract) {
+  const config = loadConfig(root);
+  const sameFile = (file) => (ts.sys.useCaseSensitiveFileNames ? file : file.toLowerCase());
+  const cache = ts.createModuleResolutionCache(root, sameFile, config.options);
+  const importsOf = new Map();
+  const read = (file) => {
+    if (!importsOf.has(file)) importsOf.set(file, directImports(root, file, config, cache));
+    return importsOf.get(file);
+  };
+  const missing = [];
+  const backImports = [];
+  for (const { file: hotspot, modules = [] } of contract.hotspots) {
+    if (!fs.existsSync(path.join(root, hotspot))) {
+      missing.push(hotspot);
+      continue;
+    }
+    for (const split of modules) {
+      if (!fs.existsSync(path.join(root, split))) missing.push(split);
+    }
+    const checked = new Set([sameFile(hotspot)]);
+    for (const candidate of [...read(hotspot).map(({ to }) => to), ...modules]) {
+      if (checked.has(sameFile(candidate))) continue;
+      checked.add(sameFile(candidate));
+      if (!candidate.startsWith('src/') || !fs.existsSync(path.join(root, candidate))) continue;
+      for (const { to, line } of read(candidate)) {
+        if (sameFile(to) === sameFile(hotspot)) backImports.push({ from: candidate, to: hotspot, line });
+      }
+    }
+  }
+  const key = ({ from, to }) => JSON.stringify([sameFile(from), sameFile(to)]);
+  const allowed = new Set();
+  for (const entry of contract.backImportDebt ?? []) {
+    if (!entry.reason?.trim() || !entry.from || !entry.to) {
+      throw new Error('Every hotspot back-import exception needs from, to and a removal reason.');
+    }
+    allowed.add(key(entry));
+  }
+  const present = new Set(backImports.map(key));
+  return {
+    missing,
+    violations: backImports.filter((edge) => !allowed.has(key(edge))),
+    stale: (contract.backImportDebt ?? []).filter((edge) => !present.has(key(edge))),
+  };
+}
+
 function main() {
   const root = path.resolve(__dirname, '..');
   const debt = JSON.parse(fs.readFileSync(path.join(__dirname, 'import-boundary-debt.json'), 'utf8'));
@@ -108,8 +187,17 @@ function main() {
   }
   for (const edge of result.stale) process.stderr.write(`Remove stale import-boundary exception: ${edge.from} -> ${edge.to}\n`);
   process.stdout.write(`Checked ${result.files} source files; ${result.crossings.length} layer crossings; ${result.violations.length} new crossings; ${result.stale.length} stale exceptions.\n`);
-  process.exitCode = result.violations.length || result.stale.length ? 1 : 0;
+  const contract = JSON.parse(fs.readFileSync(path.join(__dirname, 'execution-hotspots.json'), 'utf8'));
+  const hotspots = inspectHotspotImports(root, contract);
+  for (const file of hotspots.missing) process.stderr.write(`scripts/execution-hotspots.json names a missing file: ${file}\n`);
+  for (const edge of hotspots.violations) {
+    process.stderr.write(`${edge.from}:${edge.line} must not import ${edge.to}: it was split out of that file or is used by it. Pass what it needs in as a parameter, or move the shared part into its own module.\n`);
+  }
+  for (const edge of hotspots.stale) process.stderr.write(`Remove stale hotspot back-import exception: ${edge.from} -> ${edge.to}\n`);
+  process.stdout.write(`Checked ${contract.hotspots.length} hotspot files; ${hotspots.violations.length} new back-imports; ${hotspots.stale.length} stale exceptions.\n`);
+  process.exitCode = result.violations.length || result.stale.length
+    || hotspots.missing.length || hotspots.violations.length || hotspots.stale.length ? 1 : 0;
 }
 
-module.exports = { edgeKey, inspectImportBoundaries };
+module.exports = { edgeKey, inspectImportBoundaries, inspectHotspotImports };
 if (require.main === module) main();

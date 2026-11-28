@@ -63,13 +63,10 @@ describe('conversation log live tap without a resolvable FlowExecutor module', (
 
   it('folds streamed Agent SDK transcript messages into the live in-memory state', async () => {
     const { getConversationStates } = await import('@/backend/execution/flow/conversationStateRegistry');
-    const { ModelHandler } = await import('@/backend/execution/flow/handlers/ModelHandler');
+    const { persistStreamedMessage: persist } = await import('@/backend/execution/flow/handlers/streamedAssistantMessages');
     const state = { conversationId: CONVERSATION, messages: [] as unknown[], flowId: 'f' };
     getConversationStates().set(CONVERSATION, state as never);
 
-    const persist = (ModelHandler as unknown as {
-      persistStreamedMessage(conversationId: string, message: unknown): void;
-    }).persistStreamedMessage;
     persist(CONVERSATION, { id: 'stream-1', role: 'assistant', content: 'working', timestamp: 1 });
     persist(CONVERSATION, { id: 'stream-1', role: 'assistant', content: 'working on it', timestamp: 1 });
 

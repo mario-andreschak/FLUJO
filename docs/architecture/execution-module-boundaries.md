@@ -7,10 +7,10 @@ This is a map of existing responsibilities and a contract for incremental
 changes. It does not establish installed-release acceptance or award a grade.
 
 Every file and test named on this page was checked against the code again on
-November 25, 2026 ([#661](https://github.com/mario-andreschak/FLUJO/issues/661)).
-The splitting work in #571 will move code out of `runFlow.ts`, `ModelHandler.ts`
-and the MCP service `index.ts` after that check, so re-run the
-[path check](#before-you-start) before relying on a file name here.
+November 27, 2026, after #571 split `runFlow.ts`, `ModelHandler.ts` and the MCP
+service `index.ts` into modules with one job each (see
+[the module map](#the-three-big-files-and-the-modules-split-out-of-them)).
+Re-run the [path check](#before-you-start) before relying on a file name here.
 
 ## Where to change a behavior
 
@@ -23,19 +23,19 @@ not a claim that an additional human maintainer has accepted responsibility.
 
 | Responsibility | Existing entry point and state owner | Contract to preserve | Integration owner |
 | --- | --- | --- | --- |
-| Run lifecycle | `src/backend/execution/flow/runFlow.ts`; `runAdmission.ts` reserves run capacity; the live state map lives in `conversationStateRegistry.ts` and `FlowExecutor.conversationStates` reads it | `runFlow` claims run admission, acquires the workspace/conversation execution lock, validates loaded/input state, registers cancellation, and drives graph steps. Preserve explicit invocation source, terminal/paused distinction, and run-owned cleanup. | Maturity for behavior; Code health for sequenced extraction |
+| Run lifecycle | `src/backend/execution/flow/runFlow.ts` with `runStateLoading.ts`, `runStateSetup.ts`, `runTurnAdmission.ts` and `runPreflight.ts` (start of a run); `runAdmission.ts` reserves run capacity; the live state map lives in `conversationStateRegistry.ts` and `FlowExecutor.conversationStates` reads it | `runFlow` claims run admission, acquires the workspace/conversation execution lock, validates loaded/input state, registers cancellation, and drives graph steps. Preserve explicit invocation source, terminal/paused distinction, and run-owned cleanup. | Maturity for behavior; Code health for sequenced extraction |
 | Persona instruction/snapshot decisions | `personaRunContract.ts`, called by `runFlow.ts`; [contract](./persona-run-contract.md) | Keep the attribution triple, root/hash binding and same-Activity comparison at their existing caller sites. Schema parsing, context cloning, top-level admission, live authority and all operation ordering remain in `runFlow`. | Code health for extraction; Maturity/Security own behavioral enforcement |
 | Conversation serialization | `conversationExecutionLock.ts` | One process-global, workspace-keyed queue; async-local reentry must not deadlock. A failed predecessor does not poison later runs. | Maturity |
 | Execution authority | `executionAuthority.ts`; `src/backend/execution/extensions/` | Assert the current fence before effects; durable mutations use `commitFlowDurableMutation` and the authority's atomic commit capability. Authority failures escape best-effort catches. Loading a snapshot never reconstructs a runtime capability. | Security/Production consume original authority; Code health preserves interfaces |
 | Cancellation | `cancellationCoordinator.ts`, `cancellation.ts`, `toolCancelRegistry.ts` | Admission-barrier check and run registration are atomic in one event-loop step. Cancellation aborts active work and respects ancestry/tombstones; release each registration. | Maturity; Production owns worker recovery |
-| Approval and debugger pause | `toolApprovalRegistry.ts`, `resumeAfterApproval.ts`, `runFlow.ts` | A pause keeps the live state owned. Resume applies the decision to the pending call before continuing; do not dispatch an unapproved tool while extracting code. | Maturity; Security owns permission changes |
+| Approval and debugger pause | `toolApprovalRegistry.ts`, `resumeAfterApproval.ts`, `runFlow.ts` (the pause), `runToolApproval.ts`, `runDebugPause.ts` | A pause keeps the live state owned. Resume applies the decision to the pending call before continuing; do not dispatch an unapproved tool while extracting code. | Maturity; Security owns permission changes |
 | Subflows | `nodes/SubflowNode.ts`, `subflowCommunication.ts`, `subflowRecovery.ts`, `handlers/subflowToolInvocation.ts`, `handlers/subflowDetachedInvocation.ts` | Parent/child and lane identities include logical-run lineage. Queued messages are consumed at safe boundaries. Ephemeral children do not become durable sidebar conversations. Unknown external tool effects are not automatically replayed. | Maturity; Production owns restart policy |
 | Conversation persistence | `persistConversationState.ts`, `conversationPublication.ts`, `conversationLog.ts`, `loadConversationState.ts`, `recoveryCheckpoint.ts` | Canonical log, snapshot and checkpoint are distinct. Snapshot and log writes for one conversation go through `conversationPublication.ts` in order; a write whose outcome is uncertain leaves a fence that the next complete write clears, and the fence never blocks later writes. Reject unsafe IDs, deleted and ephemeral snapshots; strip trace/runtime capabilities; retain authority checks. Recovery reconciliation cannot grant permission to repeat uncertain effects. | Maturity; Security owns privacy/crypto |
 | Conversation cache | `conversationStateCache.ts` around the map in `conversationStateRegistry.ts` | Keep one live-state registry. Only persistently terminal, unowned entries may be evicted; persistence failure must retain the state. | Maturity (#569) |
-| Provider dispatch | `handlers/ModelHandler.ts`; `src/backend/services/model/adapters/` | The handler assembles input and selects the adapter; the adapter owns the actual SDK boundary. An intended turn is not an observed SDK dispatch. Preserve approval/authority/abort checks and each actual attempt marker. | Maturity; external streams own SDK/history consumers |
-| Dispatch archive | `modelTurnArchive.ts` invoked by SDK callbacks in `handlers/ModelHandler.ts` | When archiving is enabled, persist the SDK request before emitting `model:dispatch`; update its outcome before `model:dispatch-result`. Preserve exact dispatch ID/ordinal and canonical versus wire context. Ordinary archive I/O failures may warn and continue; authority failures must propagate. | Maturity (#569) |
+| Provider dispatch | `handlers/ModelHandler.ts` (the attempt and its retries), `handlers/providerWire.ts` (what is sent), `handlers/contextOverflowRetry.ts`; `src/backend/services/model/adapters/` | The handler assembles input and selects the adapter; the adapter owns the actual SDK boundary. An intended turn is not an observed SDK dispatch. Preserve approval/authority/abort checks and each actual attempt marker. | Maturity; external streams own SDK/history consumers |
+| Dispatch archive | `modelTurnArchive.ts` invoked by SDK callbacks in `handlers/ModelHandler.ts`; `handlers/nativeOriginalPublication.ts` for native Original sessions | When archiving is enabled, persist the SDK request before emitting `model:dispatch`; update its outcome before `model:dispatch-result`. Preserve exact dispatch ID/ordinal and canonical versus wire context. Ordinary archive I/O failures may warn and continue; authority failures must propagate. | Maturity (#569) |
 | Execution events | `engine/ExecutionEventBus.ts` and `src/shared/types/execution/events.ts` | Event sequence allocation/log append and UI delivery are separate responsibilities. UI retention changes cannot remove canonical history or synthesize provider dispatches. | Maturity; history/Brain consumers own their adapters |
-| MCP connection ownership | `src/backend/services/mcp/index.ts` and `lifecycleCoordinator.ts` | Client/transport maps are process-global and workspace-scoped. The coordinator owns connect/teardown promises, generation and demand bookkeeping; it does not duplicate the clients. Old transport callbacks must not remove a replacement client. | Security owns isolation; Production owns #547 receipts |
+| MCP connection ownership | `src/backend/services/mcp/index.ts` (connect, disconnect, callbacks), `serviceRegistries.ts` (the maps), `connectionScheduling.ts` (startup and retries) and `lifecycleCoordinator.ts` | Client/transport maps are process-global and workspace-scoped. The coordinator owns connect/teardown promises, generation and demand bookkeeping; it does not duplicate the clients. Old transport callbacks must not remove a replacement client. | Security owns isolation; Production owns #547 receipts |
 | MCP demand/teardown | `mcpLeasePool.ts`, `connection.ts`, `ownerScope.ts` | Fold concurrent connect/teardown; keep leases/pins live until release. Await graceful close and verified descendant teardown. Server name alone is not an identity across workspaces. Derive Bash owner scope from the run. | Production for shutdown/recovery; Security for execution capabilities |
 
 The process-global maps exist because Next.js can load multiple module graphs in
@@ -43,6 +43,145 @@ one process. Replacing them with module-local registries changes behavior even
 when an ordinary unit test uses only one instance. See the
 [MCP lifecycle guide](../features/mcp-lifecycle-hardening.md) and
 [execution extensions contract](../features/execution-extensions.md).
+
+## The three big files and the modules split out of them
+
+On November 27, 2026 (#571) the three biggest execution and MCP files were
+split by responsibility. Code was moved, not rewritten: each move is its own
+commit, and the same test suites pass before and after (see
+[how it was checked](#how-the-split-was-checked)). Public exports stay where
+they were: `runFlow.ts` still exports the run types, `ModelHandler` keeps its
+public methods, and `mcpService` keeps every public method as a one-line call
+into the module that now owns the code.
+
+| File | Lines before (`wip-cleanup` `de5a1cdf`) | Lines after |
+| --- | --- | --- |
+| `src/backend/execution/flow/runFlow.ts` | 4,048 | 2,056 |
+| `src/backend/execution/flow/handlers/ModelHandler.ts` | 5,279 | 1,700 |
+| `src/backend/services/mcp/index.ts` | 4,294 | 2,532 |
+
+What stays in each file is the part that needs all of its state at once:
+`runFlow.ts` keeps admission, locking, the step loop, the approval pause
+(only runFlow pauses a run, see `docs/corrections/one-tool-approval-gate.md`)
+and terminal persistence. `ModelHandler.ts` keeps `callModel` and
+`generateCompletion`, which wire the modules below together and own the
+provider attempt, its retries and the cancellation watch. The MCP service keeps
+connecting, disconnecting, tool listing and tool calls, which share the live
+client and transport registries.
+
+### Contracts every split module keeps
+
+- **One job.** Each module's first line says what it is for, in one sentence.
+- **No import back.** A split module never imports its big file, not even
+  lazily or for a type. What it needs comes in as parameters: the run's current
+  state, an emitter, or a small *host* object of service methods. The checks
+  below enforce this.
+- **Late binding stays late.** `runFlow` replaces its state object after every
+  step, so modules read it through a getter (`state()`) or receive it at each
+  call. MCP hosts read registries through accessor functions when used, so a
+  retry that fires minutes later sees its workspace's current registry.
+- **Tests keep their seams.** Modules call service methods through the host,
+  so a test that replaces `mcpService.connectServer` (or another public
+  method) still sees every internal call.
+
+### runFlow.ts (`src/backend/execution/flow/`)
+
+| Module | Owns | Contract |
+| --- | --- | --- |
+| `runFlowContract.ts` | Run input and result types | Types only; `runFlow.ts` re-exports them. |
+| `runInputValidation.ts` | Checks a request before anything loads | Pure; throws `TypeError` for an invalid source, meeting context, Persona authority or Core App refs. |
+| `runStateLoading.ts` | Loading the live or saved conversation; refusing one this run may not continue | Never loads storage for an ephemeral run; Persona-owned or meeting-reserved conversations throw. |
+| `runStateSetup.ts` | The state object of the run and this invocation's inputs on it | Sets `unattended` from this run's source every time; keeps the conversation's first `source`. |
+| `runStatistics.ts` | `run.started`, `run.paused`, `run.finished` and the flow revision | `run.started` and `run.finished` at most once per logical run; a pause records `run.paused` each time. |
+| `runTurnAdmission.ts` | Admitting the request's messages; pinning a new conversation's flow | Returns the error result when no flow resolves; display-only subflow steps never enter the transcript. |
+| `runTurnRouting.ts` | The node a turn enters at | A new message goes to the step it names, an errored turn's Retry replays from its entry node. |
+| `runPreflight.ts` | Flow validation, allowed models, Quick Chat switch, entry conditions | Returns whether a check failed; runFlow then takes its ordinary error path. |
+| `runSteeringDrain.ts` | Folding steering messages into a running flow | Only at a transcript-safe boundary; a failed write re-queues the messages. |
+| `runDebugPause.ts` | Debugger boundaries, attach requests, breakpoints, pause events | Receives the current state and emitter at each call. |
+| `runToolApproval.ts` | Which calls need a person; the live decision a sub-flow asks for | Never pauses the run itself. |
+| `runUsage.ts` | Token usage totals and the usage event | A call without reported usage is counted as not reported. |
+| `unattendedDriveForward.ts` | Pushing an unattended run on after a plain-text answer | Unchanged decision rules (#218). |
+| `stagedHandoff.ts` | Finding a staged hand-off and its unanswered calls | Pure. |
+| `personaActivityState.ts` | Installing a new Persona Activity snapshot | Only when a new Activity rebuilds the prompt prefix. |
+| `runFlowEvents.ts` | Announcing finished runs on the flow-run event bus | Fire and forget. |
+| `runFlowResult.ts` | Shaping the final error or output | Pure. |
+
+### ModelHandler.ts (`src/backend/execution/flow/handlers/`)
+
+| Module | Owns | Contract |
+| --- | --- | --- |
+| `modelCompletionContract.ts` | The options of one provider completion (`GenerateCompletionOptions`) | Types only; modules that receive `generateCompletion` use it. |
+| `providerWire.ts` | Building what one completion sends | Changes only the wire, never the canonical conversation; returns an error Result when the request cannot fit. |
+| `wireCompaction.ts` | Summarizing compaction of old history on the wire | Receives `generateCompletion` and the cancellation check as parameters. |
+| `contextOverflowRetry.ts` | One smaller retry wire after a context-length rejection | Undefined when nothing can shrink; the caller then keeps the provider error. |
+| `contextWindowFit.ts` | Input budget, token estimate, oversized result capture, `read_resource` arming | Reads and writes only run resources. |
+| `providerErrorShape.ts` | Provider error bodies and thrown errors as one readable error | Authority errors are rethrown, never shaped. |
+| `providerAttemptStatistics.ts` | `model.attempt` statistics per provider attempt | Never affects the provider call. |
+| `nativeOriginalPublication.ts` | Publishing the native Original session of an archived dispatch | Any mismatch holds the invocation; reports the session as soon as it exists. |
+| `selfOrchestratedToolExecutors.ts` | FLUJO tools an agent SDK runs inside its own loop | Only tools the call offers get an executor. |
+| `liveModelProjection.ts` | Live transcript, delta and tool-progress events of a running call | Ordered writes under the run's authority; closed before draining. |
+| `modelSteering.ts` | Steering messages for agent SDK adapters | Persist before sending; acknowledge or return to the inbox. |
+| `modelTurnResult.ts` | Turning a successful reply into conversation messages | Starts from the complete threaded input; wire-only changes never reach it. |
+| `streamedAssistantMessages.ts` | Folding and retracting streamed assistant prose | Retracts only prose of a failed attempt, never tool activity. |
+| `modelHandlerSettings.ts` | The settings ModelHandler reads | A failed read uses the documented default. |
+| `toolCallProcessing.ts` | One model turn's tool calls: approval, MCP and FLUJO tools, subflows | Results in call order; the approval gate before any dispatch. |
+| `modelMedia.ts` | Saving model media | Shared by both paths. |
+
+### MCP service index.ts (`src/backend/services/mcp/`)
+
+| Module | Owns | Contract |
+| --- | --- | --- |
+| `serviceRegistries.ts` | The process-global client, transport, generation and schema-hash maps; `scopedRegistry` | Imported first by the service; the default workspace keeps the original maps. |
+| `connectionScheduling.ts` | Startup sweep and backoff retries after an unexpected close | A retry pings a live client before tearing anything down; needs-user-action failures stop retrying. |
+| `connectionTest.ts` | The "Test Run" probe on a throwaway client | Never registers the client; one classic-handshake retry. |
+| `serverStatus.ts` | The status the MCP page shows | A live client is authoritative over stale OAuth hints. |
+| `serverConfigSave.ts` | What a config save writes: encrypted secrets, the managed root folder | Masked values keep the stored secret; bindings stay references. |
+| `serverConfigUpdate.ts` | Saving, renaming and deleting a config; aligning the live connection | A rename migrates flow references and tears down everything under the old name before connecting the new one. |
+| `serviceSkills.ts` | MCP Skills through the service | Loading a skill needs an approval for the exact manifest digest. |
+| `serviceEvents.ts` | MCP server events: list, subscribe, stream, poll, Claude channel | Each call takes a lease and checks the server is enabled. |
+| `headerAuthScopes.ts` | Static Authorization headers; removing stale inferred OAuth scopes | Removes only the exact legacy marker. |
+| `transportInspection.ts` | The innermost transport; stdout lines that are not MCP messages | Pure. |
+
+### Checks that hold the split
+
+- `npm run check:hotspots` (`scripts/check-hotspot-sizes.mjs`): each big file
+  has a line ceiling in `scripts/execution-hotspots.json` that may only go
+  down, and every module listed there must be named in this guide.
+- `npm run check:boundaries` (`scripts/check-import-boundaries.cjs`) and
+  `__tests__/architecture/executionHotspots.test.ts`: nothing a big file
+  imports, and no listed split module, may import the big file back. Four older
+  lazy imports stay listed as debt with a reason: `subflowRecovery.ts` loads
+  `runFlow` on demand to resume a parent, `workspace.ts` disconnects every MCP
+  server before deleting a workspace, and `tools.ts` and `betaClient.ts` check
+  that the live client is still current for MCP Tasks. Tests stub those seams,
+  so they change only together with their tests.
+- Rules: `docs/corrections/hotspot-files-only-shrink.md`,
+  `docs/corrections/split-modules-never-import-back.md` and
+  `docs/corrections/split-modules-are-documented.md`.
+
+### How the split was checked
+
+The same four Jest folders (`__tests__/flow`, `__tests__/model`,
+`__tests__/mcp`, `__tests__/chat`, 695 files, 8,835 tests) and
+`npm run test:checks` ran on the untouched bundle (`de5a1cdf`) and after the
+last move, and their fail lists were compared file by file.
+
+- `npm run test:checks`: 198 of 198 before, 206 of 206 after (the new size and
+  back-import check tests).
+- Jest before: 38 files with 185 failing tests. After: 44 files with 232, on a
+  far busier machine (57 minutes instead of 31). Every test that failed only
+  after the split passed when its file ran again on its own, except two files
+  that fail the same way on the untouched bundle: `nativeOriginalHost` (real
+  child processes; alone, the bundle and the split each lost two different
+  tests to timeouts) and `serverTasks` (imports none of the moved code).
+  `executionOrdering` then failed exactly the two tests it fails on the bundle.
+- The failures on both sides are this Windows machine, not the code: permission
+  probes ("not private to this account"), host consent and container tests,
+  missing timing headroom, and two bundle failures outside #571
+  (`executionOrdering`, `conversationLogLiveTapIndependence`).
+
+Each move was also checked on its own with the TypeScript compiler (including
+unused imports in the moved files), ESLint and the tests that exercise it.
 
 ## Import direction
 
@@ -178,7 +317,7 @@ the exact commit you will use and check that the code is still where this page
 says (PowerShell or any shell):
 
 ```sh
-git ls-files --error-unmatch src/shared/types/execution/invocation.ts src/backend/execution/flow/runFlow.ts src/backend/services/mcp/index.ts src/backend/services/mcp/lifecycleCoordinator.ts __tests__/flow/invocationSource.test.ts __tests__/flow/unattendedDriveForward.test.ts __tests__/mcp/mcpRestartLoop.test.ts scripts/check-import-boundaries.cjs
+git ls-files --error-unmatch src/shared/types/execution/invocation.ts src/backend/execution/flow/runStateSetup.ts src/backend/services/mcp/index.ts src/backend/services/mcp/lifecycleCoordinator.ts __tests__/flow/invocationSource.test.ts __tests__/flow/unattendedDriveForward.test.ts __tests__/mcp/mcpRestartLoop.test.ts scripts/check-import-boundaries.cjs
 git grep -n "isUnattendedFlowInvocation(input.source)" -- src
 git grep -n "transport.onclose = bindToCurrentWorkspace" -- src/backend/services/mcp
 ```
@@ -238,7 +377,7 @@ Operator, with the clock running:
 3. The bug report: "A flow started through the API carries on by itself after
    the model answers in plain text, as if nobody were watching. Chat runs behave
    correctly." Start from `src/shared/types/execution/invocation.ts` and the
-   place in `runFlow.ts` that uses it.
+   place in `runStateSetup.ts` (called by `runFlow.ts`) that uses it.
 4. Explain out loud what you found ([what the observer listens for](#what-the-observer-listens-for)).
 5. Fix production code only: do not change, skip or delete tests, and do not
    bring the old file back with `git checkout` or `git restore`. Then
@@ -271,8 +410,9 @@ Task A:
 - `isUnattendedFlowInvocation` treats only `chat` and `api` as attended; the
   other six sources (`schedule`, `trigger`, `subflow`, `mcp`, `internal`,
   `meeting`) run unattended.
-- `runFlow` keeps the conversation's first `source`, but works out `unattended`
-  fresh for every run from that run's own source.
+- The run (`installRunInputs` in `runStateSetup.ts`) keeps the conversation's
+  first `source`, but works out `unattended` fresh for every run from that
+  run's own source.
 - The old `unattended` flag in a flow's file decides nothing, because a flow
   cannot know who started this run. The tests "does NOT drive forward for
   attended api runs" and "ignores legacy unattended:false for a scheduled run"
@@ -347,7 +487,7 @@ Task A, pick one:
 1. In `src/shared/types/execution/invocation.ts`, make
    `isUnattendedFlowInvocation` return `source !== 'chat'`. Aimed at the `api`
    cases in `invocationSource.test.ts` and `unattendedDriveForward.test.ts`.
-2. In `runFlow.ts`, change
+2. In `runStateSetup.ts`, change
    `sharedState.unattended = isUnattendedFlowInvocation(input.source);` to
    `sharedState.unattended = input.source !== 'chat';`. Aimed at the `api`
    cases in `unattendedDriveForward.test.ts` only: the shared helper still looks
@@ -365,9 +505,9 @@ Task B, pick one:
    unexpected close of the live transport".
 
 These seeds were worked out by reading the tests on November 25, 2026, not by
-running them; the seed check in steps 2 and 3 confirms them on the day. After
-#571 the lines may sit in another file; change the same decision wherever it
-now lives.
+running them; the seed check in steps 2 and 3 confirms them on the day. The
+file names above match the code after #571 (November 27, 2026); if the path
+check finds a line elsewhere, change the same decision wherever it now lives.
 
 ## Size inventory and evidence limits
 

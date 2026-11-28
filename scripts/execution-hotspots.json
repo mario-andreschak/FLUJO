@@ -1,0 +1,88 @@
+{
+  "about": "The three biggest execution and MCP files (#571). maxLines only goes down (npm run check:hotspots). Modules listed here were split out of the file and must not import it back, and nothing the file imports may import it back (node scripts/check-import-boundaries.cjs). See docs/architecture/execution-module-boundaries.md.",
+  "hotspots": [
+    {
+      "file": "src/backend/execution/flow/runFlow.ts",
+      "maxLines": 2056,
+      "modules": [
+        "src/backend/execution/flow/runFlowContract.ts",
+        "src/backend/execution/flow/runFlowEvents.ts",
+        "src/backend/execution/flow/runFlowResult.ts",
+        "src/backend/execution/flow/unattendedDriveForward.ts",
+        "src/backend/execution/flow/stagedHandoff.ts",
+        "src/backend/execution/flow/personaActivityState.ts",
+        "src/backend/execution/flow/runInputValidation.ts",
+        "src/backend/execution/flow/runStateLoading.ts",
+        "src/backend/execution/flow/runStatistics.ts",
+        "src/backend/execution/flow/runTurnRouting.ts",
+        "src/backend/execution/flow/runPreflight.ts",
+        "src/backend/execution/flow/runDebugPause.ts",
+        "src/backend/execution/flow/runUsage.ts",
+        "src/backend/execution/flow/runSteeringDrain.ts",
+        "src/backend/execution/flow/runToolApproval.ts",
+        "src/backend/execution/flow/runStateSetup.ts",
+        "src/backend/execution/flow/runTurnAdmission.ts"
+      ]
+    },
+    {
+      "file": "src/backend/execution/flow/handlers/ModelHandler.ts",
+      "maxLines": 1700,
+      "modules": [
+        "src/backend/execution/flow/handlers/toolCallProcessing.ts",
+        "src/backend/execution/flow/handlers/modelMedia.ts",
+        "src/backend/execution/flow/handlers/providerErrorShape.ts",
+        "src/backend/execution/flow/handlers/contextWindowFit.ts",
+        "src/backend/execution/flow/handlers/modelHandlerSettings.ts",
+        "src/backend/execution/flow/handlers/streamedAssistantMessages.ts",
+        "src/backend/execution/flow/handlers/modelCompletionContract.ts",
+        "src/backend/execution/flow/handlers/wireCompaction.ts",
+        "src/backend/execution/flow/handlers/selfOrchestratedToolExecutors.ts",
+        "src/backend/execution/flow/handlers/liveModelProjection.ts",
+        "src/backend/execution/flow/handlers/modelSteering.ts",
+        "src/backend/execution/flow/handlers/modelTurnResult.ts",
+        "src/backend/execution/flow/handlers/providerWire.ts",
+        "src/backend/execution/flow/handlers/contextOverflowRetry.ts",
+        "src/backend/execution/flow/handlers/providerAttemptStatistics.ts",
+        "src/backend/execution/flow/handlers/nativeOriginalPublication.ts"
+      ]
+    },
+    {
+      "file": "src/backend/services/mcp/index.ts",
+      "maxLines": 2532,
+      "modules": [
+        "src/backend/services/mcp/serviceRegistries.ts",
+        "src/backend/services/mcp/serverConfigSave.ts",
+        "src/backend/services/mcp/serverStatus.ts",
+        "src/backend/services/mcp/serviceSkills.ts",
+        "src/backend/services/mcp/transportInspection.ts",
+        "src/backend/services/mcp/headerAuthScopes.ts",
+        "src/backend/services/mcp/connectionTest.ts",
+        "src/backend/services/mcp/serviceEvents.ts",
+        "src/backend/services/mcp/connectionScheduling.ts",
+        "src/backend/services/mcp/serverConfigUpdate.ts"
+      ]
+    }
+  ],
+  "backImportDebt": [
+    {
+      "from": "src/backend/execution/flow/subflowRecovery.ts",
+      "to": "src/backend/execution/flow/runFlow.ts",
+      "reason": "Lazy import to resume the parent run after a recovered subflow join. Remove when recovery receives runFlow as a parameter."
+    },
+    {
+      "from": "src/utils/workspace.ts",
+      "to": "src/backend/services/mcp/index.ts",
+      "reason": "Lazy import to disconnect every MCP server before a workspace is deleted. Remove when workspace deletion takes an MCP disconnect hook."
+    },
+    {
+      "from": "src/backend/services/mcp/tools.ts",
+      "to": "src/backend/services/mcp/index.ts",
+      "reason": "Lazy import to check and reacquire the live client while following an MCP Task. Remove when the task path receives a client lookup as a parameter."
+    },
+    {
+      "from": "src/backend/services/mcp/betaClient.ts",
+      "to": "src/backend/services/mcp/index.ts",
+      "reason": "Lazy import to check that the beta client is still the live client for MCP Tasks. Remove when the beta client receives a client lookup as a parameter."
+    }
+  ]
+}
