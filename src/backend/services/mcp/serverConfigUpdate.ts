@@ -343,9 +343,11 @@ export async function handleConnectionStateChange(
 }
 
 /**
- * Delete an MCP server configuration
+ * Remove a saved MCP server config and its live connection. The service's
+ * deleteServerConfig is this raw removal; people delete through
+ * deleteMcpServerAndMoveUses (serverDeletion.ts).
  */
-export async function deleteServerConfig(host: ServerConfigUpdateHost, serverName: string): Promise<MCPServiceResponse> {
+export async function removeServerConfig(host: ServerConfigUpdateHost, serverName: string): Promise<MCPServiceResponse> {
   log.debug(`deleteServerConfig: Entering method for server ${serverName}`);
 
   // First disconnect if connected

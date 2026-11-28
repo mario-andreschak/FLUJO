@@ -2363,7 +2363,7 @@ export class MCPService {
   }
 
   async deleteServerConfig(serverName: string): Promise<MCPServiceResponse> {
-    return serverConfigUpdate.deleteServerConfig(this.configUpdateHost(), serverName);
+    return serverConfigUpdate.removeServerConfig(this.configUpdateHost(), serverName);
   }
 
   /**
