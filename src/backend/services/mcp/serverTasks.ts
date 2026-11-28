@@ -140,6 +140,35 @@ function boundedJson(value: unknown, maxBytes: number): string {
   return text;
 }
 
+/** The ledger's own shape check for one stored task. */
+function isStoredTaskRecord(item: unknown): item is TaskRecord {
+  return !(!isRecord(item) || typeof item.taskId !== 'string' || !/^[0-9a-f-]{36}$/.test(item.taskId)
+    || Object.keys(item).some(key => !['taskId', 'status', 'createdAt', 'lastUpdatedAt', 'ttlMs', 'pollIntervalMs',
+      'ownerId', 'credentialId', 'workspaceId', 'policyRevision', 'expiresAt', 'process', 'payload', 'errorCode', 'acceptedInputIds', 'executionPending',
+      'boundConversationId'].includes(key))
+    || !['working', 'input_required', 'completed', 'failed', 'cancelled'].includes(String(item.status))
+    || !isValidWorkspaceName(item.workspaceId) || typeof item.ownerId !== 'string' || item.ownerId.length > 64
+    || typeof item.credentialId !== 'string' || item.credentialId.length > 64
+    || typeof item.policyRevision !== 'string' || item.policyRevision.length > 256
+    || typeof item.executionPending !== 'boolean'
+    || (item.boundConversationId !== undefined && (typeof item.boundConversationId !== 'string' || !BOUND_ID.test(item.boundConversationId)))
+    || (!terminal(item.status as ServerTaskStatus) && item.executionPending !== true && item.boundConversationId === undefined)
+    || !Number.isSafeInteger(item.expiresAt) || !Number.isSafeInteger(item.ttlMs)
+    || Number(item.ttlMs) < 1000 || Number(item.ttlMs) > LIMITS.ttlMs
+    || !Number.isSafeInteger(item.pollIntervalMs) || Number(item.pollIntervalMs) < 100
+    || typeof item.createdAt !== 'string' || !Number.isFinite(Date.parse(item.createdAt))
+    || typeof item.lastUpdatedAt !== 'string' || !Number.isFinite(Date.parse(item.lastUpdatedAt))
+    || !isRecord(item.process) || !Number.isSafeInteger(item.process.pid) || Number(item.process.pid) <= 0
+    || typeof item.process.processInstanceId !== 'string' || item.process.processInstanceId.length > 128
+    || (item.process.processBirthMarkerV2 !== undefined && (typeof item.process.processBirthMarkerV2 !== 'string'
+      || item.process.processBirthMarkerV2.length > 256))
+    || !Array.isArray(item.acceptedInputIds) || item.acceptedInputIds.length > LIMITS.inputCount
+    || item.acceptedInputIds.some(id => typeof id !== 'string' || id.length > 128)
+    || (item.errorCode !== undefined && !['TASK_INTERRUPTED', 'TASK_FAILED', 'TASK_AUTH_REVOKED', 'TASK_EXPIRED'].includes(String(item.errorCode)))
+    || (item.payload !== undefined && (typeof item.payload !== 'string' || !item.payload.startsWith('v2:')
+      || Buffer.byteLength(item.payload) > LIMITS.payloadBytes * 2)));
+}
+
 /** One instance may serve many requests; jobs also survive Next route-bundle recreation. */
 export class ServerTaskStore {
   private readonly filename: string;
@@ -173,36 +202,14 @@ export class ServerTaskStore {
       const value: unknown = JSON.parse(raw.toString('utf8'));
       if (!isRecord(value) || value.schemaVersion !== 1 || !Array.isArray(value.tasks)
         || value.tasks.length > LIMITS.records || Object.keys(value).some(key => !['schemaVersion', 'tasks'].includes(key))) fail('TASK_STORAGE_UNAVAILABLE');
+      const tasks: TaskRecord[] = [];
       const ids = new Set<string>();
       for (const item of value.tasks) {
-        if (!isRecord(item) || typeof item.taskId !== 'string' || !/^[0-9a-f-]{36}$/.test(item.taskId)
-          || Object.keys(item).some(key => !['taskId', 'status', 'createdAt', 'lastUpdatedAt', 'ttlMs', 'pollIntervalMs',
-            'ownerId', 'credentialId', 'workspaceId', 'policyRevision', 'expiresAt', 'process', 'payload', 'errorCode', 'acceptedInputIds', 'executionPending',
-            'boundConversationId'].includes(key))
-          || ids.has(item.taskId) || !['working', 'input_required', 'completed', 'failed', 'cancelled'].includes(String(item.status))
-          || !isValidWorkspaceName(item.workspaceId) || typeof item.ownerId !== 'string' || item.ownerId.length > 64
-          || typeof item.credentialId !== 'string' || item.credentialId.length > 64
-          || typeof item.policyRevision !== 'string' || item.policyRevision.length > 256
-          || typeof item.executionPending !== 'boolean'
-          || (item.boundConversationId !== undefined && (typeof item.boundConversationId !== 'string' || !BOUND_ID.test(item.boundConversationId)))
-          || (!terminal(item.status as ServerTaskStatus) && item.executionPending !== true && item.boundConversationId === undefined)
-          || !Number.isSafeInteger(item.expiresAt) || !Number.isSafeInteger(item.ttlMs)
-          || Number(item.ttlMs) < 1000 || Number(item.ttlMs) > LIMITS.ttlMs
-          || !Number.isSafeInteger(item.pollIntervalMs) || Number(item.pollIntervalMs) < 100
-          || typeof item.createdAt !== 'string' || !Number.isFinite(Date.parse(item.createdAt))
-          || typeof item.lastUpdatedAt !== 'string' || !Number.isFinite(Date.parse(item.lastUpdatedAt))
-          || !isRecord(item.process) || !Number.isSafeInteger(item.process.pid) || Number(item.process.pid) <= 0
-          || typeof item.process.processInstanceId !== 'string' || item.process.processInstanceId.length > 128
-          || (item.process.processBirthMarkerV2 !== undefined && (typeof item.process.processBirthMarkerV2 !== 'string'
-            || item.process.processBirthMarkerV2.length > 256))
-          || !Array.isArray(item.acceptedInputIds) || item.acceptedInputIds.length > LIMITS.inputCount
-          || item.acceptedInputIds.some(id => typeof id !== 'string' || id.length > 128)
-          || (item.errorCode !== undefined && !['TASK_INTERRUPTED', 'TASK_FAILED', 'TASK_AUTH_REVOKED', 'TASK_EXPIRED'].includes(String(item.errorCode)))
-          || (item.payload !== undefined && (typeof item.payload !== 'string' || !item.payload.startsWith('v2:')
-            || Buffer.byteLength(item.payload) > LIMITS.payloadBytes * 2))) fail('TASK_STORAGE_UNAVAILABLE');
+        if (!isStoredTaskRecord(item) || ids.has(item.taskId)) fail('TASK_STORAGE_UNAVAILABLE');
         ids.add(item.taskId);
+        tasks.push(item);
       }
-      return value as unknown as Ledger;
+      return { schemaVersion: 1, tasks };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { schemaVersion: 1, tasks: [] };
       throw error instanceof ServerTaskError ? error : new ServerTaskError('TASK_STORAGE_UNAVAILABLE');

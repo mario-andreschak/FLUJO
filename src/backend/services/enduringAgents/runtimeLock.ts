@@ -278,11 +278,10 @@ async function readLockRecord(lockPath: string): Promise<Record<string, unknown>
   return parsed as Record<string, unknown>;
 }
 
-function parseOwnerRecord(
-  lockPath: string,
-  parsed: Record<string, unknown>,
-): LockOwnerRecord {
-  if (
+type ReadRecord<T> = Record<string, unknown> & T;
+
+function isLockOwnerRecord(parsed: Record<string, unknown>): parsed is ReadRecord<LockOwnerRecord> {
+  return !(
     typeof parsed.ownerId !== 'string'
     || !UUID_FILE_SEGMENT.test(parsed.ownerId)
     || typeof parsed.processInstanceId !== 'string'
@@ -299,10 +298,23 @@ function parseOwnerRecord(
     )
     || typeof parsed.workspace !== 'string'
     || typeof parsed.acquiredAt !== 'number'
-  ) {
-    throw new PersonaRuntimeLockCorruptError(lockPath);
-  }
-  return parsed as unknown as LockOwnerRecord;
+  );
+}
+
+type RecoveryTarget = Pick<RecoveryOwnerRecord, 'targetOwnerId' | 'targetProcessInstanceId' | 'targetPid'>;
+
+function hasRecoveryTarget(parsed: Record<string, unknown>): parsed is ReadRecord<RecoveryTarget> {
+  return typeof parsed.targetOwnerId === 'string'
+    && UUID_FILE_SEGMENT.test(parsed.targetOwnerId)
+    && typeof parsed.targetProcessInstanceId === 'string'
+    && typeof parsed.targetPid === 'number'
+    && Number.isInteger(parsed.targetPid)
+    && parsed.targetPid > 0;
+}
+
+function parseOwnerRecord(lockPath: string, parsed: Record<string, unknown>): LockOwnerRecord {
+  if (!isLockOwnerRecord(parsed)) throw new PersonaRuntimeLockCorruptError(lockPath);
+  return parsed;
 }
 
 async function readOwner(lockPath: string): Promise<LockOwnerRecord | null> {
@@ -314,17 +326,8 @@ async function readRecoveryOwner(lockPath: string): Promise<RecoveryOwnerRecord 
   const parsed = await readLockRecord(lockPath);
   if (!parsed) return null;
   const owner = parseOwnerRecord(lockPath, parsed);
-  if (
-    typeof parsed.targetOwnerId !== 'string'
-    || !UUID_FILE_SEGMENT.test(parsed.targetOwnerId)
-    || typeof parsed.targetProcessInstanceId !== 'string'
-    || typeof parsed.targetPid !== 'number'
-    || !Number.isInteger(parsed.targetPid)
-    || parsed.targetPid <= 0
-  ) {
-    throw new PersonaRuntimeLockCorruptError(lockPath);
-  }
-  return { ...owner, ...parsed } as unknown as RecoveryOwnerRecord;
+  if (!hasRecoveryTarget(parsed)) throw new PersonaRuntimeLockCorruptError(lockPath);
+  return { ...owner, ...parsed };
 }
 
 async function listRecoveryOwners(

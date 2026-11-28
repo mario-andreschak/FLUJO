@@ -1473,7 +1473,7 @@ export class SchedulerService {
   }
 
   private validateRestrictionFields(input: Partial<PlannedExecution>): string | null {
-    const raw = input as unknown as Record<string, unknown>;
+    const raw: Record<string, unknown> = { ...input };
     if (
       raw.startRestriction !== undefined
       && !['unrestricted', 'singleton', 'exclusive'].includes(String(raw.startRestriction))

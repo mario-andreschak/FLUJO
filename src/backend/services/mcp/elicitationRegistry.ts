@@ -67,7 +67,7 @@ interface PendingElicitation {
   timer: ReturnType<typeof setTimeout>;
 }
 
-const globalForRegistry = globalThis as unknown as {
+const globalForRegistry = globalThis as typeof globalThis & {
   __flujoElicitationRegistry?: Map<string, PendingElicitation>;
 };
 const registry: Map<string, PendingElicitation> =

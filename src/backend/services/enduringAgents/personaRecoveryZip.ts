@@ -172,11 +172,10 @@ export function decodePersonaRecoveryZip(
     } else {
       // The native inflater stops at this cap even when ZIP metadata lies about
       // the true expanded length. Do not first inflate unbounded with JSZip.
-      // Node returns { buffer, engine } with info:true; @types/node currently
-      // exposes only the ordinary Buffer overload for this synchronous call.
+      // With info:true Node returns { buffer, engine } (typed in src/types/node-zlib-info.d.ts).
       const inflated = inflateRawSync(compressed, {
         maxOutputLength: Math.max(1, member.size), info: true,
-      }) as unknown as { buffer: Buffer; engine: { bytesWritten: number } };
+      });
       content = inflated.buffer;
       if (inflated.engine.bytesWritten !== member.compressedSize) throw new PersonaRecoveryError('Recovery ZIP contains trailing compressed data.');
     }

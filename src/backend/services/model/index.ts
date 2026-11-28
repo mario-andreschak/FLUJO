@@ -50,6 +50,7 @@ import { ModelCatalogBusyError } from '@/backend/services/enduringAgents/runtime
 import { loadStoredModels } from './storedModels';
 import { newRecordId } from '@/shared/recordId';
 import { getCurrentWorkspace } from '@/utils/workspace';
+import { isRecord } from '@/shared/utils/records';
 
 function catalogWriteFailure(error: unknown): ModelServiceResponse {
   return {
@@ -1023,7 +1024,7 @@ class ModelService {
       });
 
       if (error instanceof OpenAI.APIError) {
-        const body = (error as unknown as { error?: unknown }).error as Record<string, unknown> | undefined;
+        const body = isRecord(error.error) ? error.error : undefined;
         const sanitized = ModelService.sanitizeProviderError(body, error.message);
         return {
           success: false,

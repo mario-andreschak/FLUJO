@@ -35,7 +35,7 @@ export interface TaskInputState {
   lastRequestedAt: number;
 }
 
-const globalForRegistry = globalThis as unknown as {
+const globalForRegistry = globalThis as typeof globalThis & {
   __flujoMcpTaskInputRegistry?: Map<string, TaskInputState>;
 };
 const registry: Map<string, TaskInputState> =

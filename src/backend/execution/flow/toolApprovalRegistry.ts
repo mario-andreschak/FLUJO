@@ -33,7 +33,7 @@ export interface LiveApprovalListing {
   expiresAt?: number;
 }
 
-const globalForRegistry = globalThis as unknown as {
+const globalForRegistry = globalThis as typeof globalThis & {
   __flujoToolApprovals?: Map<string, Map<string, PendingApproval>>;
 };
 const registry: Map<string, Map<string, PendingApproval>> =

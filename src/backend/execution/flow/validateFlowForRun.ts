@@ -5,7 +5,6 @@ import { mcpService } from '@/backend/services/mcp';
 import { validateFlow, FlowValidationResult } from '@/utils/shared/flowValidation';
 import { Flow } from '@/shared/types/flow';
 import type { MCPServerConfig } from '@/shared/types/mcp';
-import type { VFlow } from '@/utils/shared/flowValidation';
 
 const log = createLogger('backend/execution/flow/validateFlowForRun');
 
@@ -78,7 +77,7 @@ export async function validateFlowObjectForRun(flow: Flow): Promise<FlowValidati
     serverTools = undefined;
   }
 
-  return validateFlow(flow as unknown as VFlow, { models, servers, serverTools });
+  return validateFlow(flow, { models, servers, serverTools });
 }
 
 /**

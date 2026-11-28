@@ -554,7 +554,7 @@ export async function listWorkspaces(): Promise<WorkspaceInfo[]> {
   };
   let entries: WorkspaceDirent[] = [];
   try {
-    entries = (await fs.readdir(root, { withFileTypes: true })) as unknown as WorkspaceDirent[];
+    entries = await fs.readdir(root, { withFileTypes: true });
   } catch (error) {
     // No workspaces directory yet (fresh install, or migration not run): the
     // default workspace is still the correct answer.

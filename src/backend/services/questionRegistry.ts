@@ -76,7 +76,7 @@ function cloneQuestions(questions: QuestionSpec[]): QuestionSpec[] {
   return questions.map(question => ({ ...question, options: [...question.options] }));
 }
 
-const globalForRegistry = globalThis as unknown as {
+const globalForRegistry = globalThis as typeof globalThis & {
   __flujoQuestionRegistry?: Map<string, PendingQuestion>;
 };
 const registry: Map<string, PendingQuestion> =

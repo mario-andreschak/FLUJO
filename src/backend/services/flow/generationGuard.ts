@@ -72,7 +72,7 @@ function varRefRegExp(name: string): RegExp {
 function nodeReferencedVars(node: FlowSpecNode): string[] {
   const names = new Set<string>();
   for (const field of TEXT_FIELDS) {
-    const value = (node as unknown as Record<string, unknown>)[field];
+    const value = node[field];
     if (typeof value === 'string') for (const n of referencedRunVars(value)) names.add(n);
   }
   if (Array.isArray(node.spawnBriefs)) {
@@ -86,8 +86,8 @@ function nodeReferencedVars(node: FlowSpecNode): string[] {
 /** Apply a string transform to every text field + spawn brief of a node. */
 function transformNodeTexts(node: FlowSpecNode, fn: (text: string) => string): void {
   for (const field of TEXT_FIELDS) {
-    const value = (node as unknown as Record<string, unknown>)[field];
-    if (typeof value === 'string') (node as unknown as Record<string, unknown>)[field] = fn(value);
+    const value = node[field];
+    if (typeof value === 'string') node[field] = fn(value);
   }
   if (Array.isArray(node.spawnBriefs)) {
     node.spawnBriefs = node.spawnBriefs.map((b) => (typeof b === 'string' ? fn(b) : b));

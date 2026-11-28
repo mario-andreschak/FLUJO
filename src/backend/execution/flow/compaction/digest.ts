@@ -9,7 +9,7 @@ const STRING_CHUNK_SIZE = 16 * 1024;
 const HASH_BUFFER_SIZE = 32 * 1024;
 
 function hasCallableToJSON(value: unknown): boolean {
-  return typeof value === 'function' && typeof (value as unknown as { toJSON?: unknown }).toJSON === 'function';
+  return typeof value === 'function' && 'toJSON' in value && typeof value.toJSON === 'function';
 }
 
 function canonicalize(value: unknown): unknown {

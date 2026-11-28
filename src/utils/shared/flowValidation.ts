@@ -29,6 +29,7 @@ import {
   PERSONA_MEMORY_GATEWAY_SERVER,
   PERSONA_MEMORY_MAINTENANCE_COMMIT_TOOL,
 } from '@/shared/types/enduringAgent/personaMemoryGateway';
+import { isRecord } from '@/shared/utils/records';
 
 export type FlowIssueSeverity = 'error' | 'warning';
 
@@ -649,11 +650,11 @@ export function validateFlow(flow: VFlow, context: FlowValidationContext = {}): 
       continue;
     }
     entries.forEach((entry: unknown, index: number) => {
-      if (entry && typeof entry === 'object' && 'kind' in entry && entry.kind === 'modelDecision') {
-        for (const issue of modelDecisionIssues(entry as unknown as Record<string, unknown>, `Static node "${getNodeLabel(node)}"`)) {
+      if (isRecord(entry) && entry.kind === 'modelDecision') {
+        for (const issue of modelDecisionIssues(entry, `Static node "${getNodeLabel(node)}"`)) {
           add(issue.severity, issue.code, issue.message, node);
         }
-        const bound = (entry as { boundModel?: unknown }).boundModel;
+        const bound = entry.boundModel;
         if (typeof bound !== 'string' || !bound) {
           add('error', 'model-decision-no-model', `Static node "${getNodeLabel(node)}" has a model decision with no model.`, node);
         } else if (haveModels && !modelById.has(bound)) {

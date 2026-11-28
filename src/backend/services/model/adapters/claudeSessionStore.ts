@@ -110,7 +110,17 @@ export function computePrefixHash(
 }
 
 /** Ignores transport ids/timestamps; retains content, tool identity, media and ordering. */
-export function computeHistoryHash(messages: readonly { role: string; [key: string]: unknown }[], leadingSystems = 0): string {
+/** The message fields a session's history hash covers. */
+export interface SessionHistoryMessage {
+  role: string;
+  content?: unknown;
+  tool_calls?: unknown;
+  tool_call_id?: unknown;
+  name?: unknown;
+  media?: unknown;
+}
+
+export function computeHistoryHash(messages: readonly SessionHistoryMessage[], leadingSystems = 0): string {
   const hash = createHash('sha256').update('claude-history-v2\0');
   for (let index = leadingSystems; index < messages.length; index++) {
     const message = messages[index];
@@ -136,7 +146,7 @@ export function computeHistoryHash(messages: readonly { role: string; [key: stri
 export async function findReusableSession(
   key: string,
   prefixHash: string,
-  currentMessages: readonly { role: string; [key: string]: unknown }[],
+  currentMessages: readonly SessionHistoryMessage[],
   currentLeadingSystemMessageCount: number,
   onMiss?: (reason: SessionReuseMiss) => void,
 ): Promise<StoredSession | undefined> {

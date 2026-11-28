@@ -94,7 +94,7 @@ export function filterUnsupportedMediaInputs(
     if (!Array.isArray(message.content)) return message;
     let changed = false;
     const content = message.content.map(rawPart => {
-      const part = rawPart as unknown as WirePart;
+      const part: WirePart = { ...rawPart };
       const modality = partInputModality(part);
       if (!modality || supported.has(modality)) return rawPart;
       changed = true;
@@ -205,7 +205,7 @@ export async function hydrateRunResourceMedia(
   return Promise.all(messages.map(async (message) => {
     if (!Array.isArray(message.content)) return message;
     const content = await Promise.all(message.content.map(async (rawPart) => {
-      const part = rawPart as unknown as WirePart;
+      const part: WirePart = { ...rawPart };
       const uri = referencedUri(part);
       if (!uri?.startsWith('flujo://run/')) return rawPart;
       let read: Awaited<ReturnType<typeof readRunResource>> = null;
@@ -232,7 +232,7 @@ export async function hydrateRunResourceMedia(
         return {
           type: 'text',
           text: `[media attachment unavailable — its stored payload (${uri}) could not be read; it may have passed the run-resource retention window]`,
-        } as unknown as typeof rawPart;
+        } as typeof rawPart;
       }
       const mimeType =
         (contentItem as { mimeType?: string }).mimeType ??

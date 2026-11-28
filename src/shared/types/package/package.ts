@@ -148,9 +148,12 @@ export type PackagedTrigger =
  */
 export type PackagedPlannedExecution = Omit<
   PlannedExecution,
-  'trigger' | 'personaId' | 'behaviorSlotKey'
+  'trigger' | 'personaId' | 'behaviorSlotKey' | 'createdAt' | 'updatedAt'
 > & {
   trigger: PackagedTrigger;
+  /** Kept when exported and optional on import; an installed execution gets fresh timestamps. */
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 /** A reusable, unbound Behavior template. Flow-authored tool authority is preserved verbatim. */

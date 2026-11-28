@@ -6,6 +6,7 @@ import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { createLogger } from '@/utils/logger';
 import { MCPServerConfig, SERVER_DIR_PREFIX } from '@/shared/types/mcp';
 import { getWorkspaceDataDir } from '@/utils/workspace';
+import { propertyOf } from '@/shared/utils/records';
 
 const log = createLogger('app/api/mcp/utils');
 
@@ -90,7 +91,7 @@ function collectErrorChain(error: unknown): { messages: string[]; codes: string[
   while (current && depth < 10) {
     if (current instanceof Error) {
       if (current.message) messages.push(current.message);
-      const code = (current as unknown as { code?: unknown }).code;
+      const code = propertyOf(current, 'code');
       if (typeof code === 'string') codes.push(code);
     } else if (typeof current === 'string') {
       messages.push(current);
@@ -337,7 +338,7 @@ export function isAuthRequiredError(error: unknown): boolean {
 
   if (isOAuthAuthenticationError(error)) return true;
 
-  const httpCode = (error as unknown as { code?: unknown }).code;
+  const httpCode = propertyOf(error, 'code');
   if (httpCode === 401 || httpCode === 403) return true;
 
   return AUTH_REQUIRED_MESSAGE_PATTERNS.some(pattern => error.message.includes(pattern));
@@ -353,7 +354,7 @@ export function isOAuthAuthenticationError(error: unknown): boolean {
 
   if (error.name === 'OAuthAuthenticationRequired') return true;
 
-  const oauthErrorCode = (error as unknown as { errorCode?: unknown }).errorCode;
+  const oauthErrorCode = propertyOf(error, 'errorCode');
   if (typeof oauthErrorCode === 'string' && oauthErrorCode.length > 0) return true;
 
   return error.message.includes('OAuth authentication required');

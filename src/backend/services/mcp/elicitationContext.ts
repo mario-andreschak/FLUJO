@@ -21,7 +21,7 @@ export interface ElicitationRunContext {
   getUnattended: () => boolean;
 }
 
-const globalForCtx = globalThis as unknown as {
+const globalForCtx = globalThis as typeof globalThis & {
   __flujoElicitationContexts?: Map<string, ElicitationRunContext>;
 };
 const contexts: Map<string, ElicitationRunContext> =

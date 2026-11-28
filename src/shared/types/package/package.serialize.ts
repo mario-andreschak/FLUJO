@@ -139,7 +139,9 @@ function packPlannedExecution(pe: PlannedExecution): PackagedPlannedExecution {
     // A conversation id only means something on this installation.
     delete copy.trigger.steerConversationId;
   }
-  return copy as unknown as PackagedPlannedExecution;
+  // Persona-controlled executions were refused above, so neither field is set.
+  const { personaId: _personaId, behaviorSlotKey: _behaviorSlotKey, ...packaged } = copy;
+  return packaged;
 }
 
 /** Assemble a (not-yet-validated) FlujoPackage from raw inputs. */
@@ -180,7 +182,7 @@ export function serializePackage(input: SerializePackageInput): {
 } {
   const draft = buildPackage(input);
   assertNoEncryptedBlobs(draft);
-  const validated = flujoPackageSchema.parse(draft) as unknown as FlujoPackage;
+  const validated: FlujoPackage = flujoPackageSchema.parse(draft);
   const json = JSON.stringify(validated);
   const size = byteLength(json);
   if (size > MANIFEST_SIZE_CAP_BYTES) {
@@ -203,7 +205,7 @@ export function parsePackage(json: string): FlujoPackage {
     );
   }
   const raw = JSON.parse(json);
-  return flujoPackageSchema.parse(raw) as unknown as FlujoPackage;
+  return flujoPackageSchema.parse(raw);
 }
 
 /** Result of {@link validatePackage}: never throws. */
@@ -244,6 +246,6 @@ export function validatePackage(value: unknown): ValidatePackageResult {
     });
     return { success: false, errors };
   }
-  const data = result.data as unknown as FlujoPackage;
+  const data: FlujoPackage = result.data;
   return { success: true, data, warnings: unusedSecretWarnings(data) };
 }

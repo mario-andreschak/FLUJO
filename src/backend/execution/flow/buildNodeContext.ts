@@ -3,6 +3,7 @@ import { FlujoChatMessage } from '@/shared/types/chat';
 import type { ModelInputSnapshot, ModelInputProvenanceEntry } from './types';
 import { mediaDataUrl, type ModelMediaPart } from '@/shared/types/model/media';
 import { requireFunctionToolCalls, type ModelProviderMetadata } from '@/shared/types/openai';
+import { propertyOf } from '@/shared/utils/records';
 
 /** True when this assistant turn is mid-action (made tool calls). */
 function isToolCallTurn(
@@ -356,6 +357,21 @@ export function stripHandoffPlumbing(messages: FlujoChatMessage[], sourceIndexes
   return out;
 }
 
+/** OpenAI's user content parts plus the media parts FLUJO's adapters translate for their provider. */
+type WireUserContentPart =
+  | OpenAI.ChatCompletionContentPart
+  | { type: 'audio_url'; audio_url: { url: string; mime_type?: string } }
+  | { type: 'video_url'; video_url: { url: string; mime_type?: string } }
+  | { type: 'file'; file: { file_data: string; filename?: string; mime_type?: string } };
+
+const isTextPart = (part: WireUserContentPart): part is OpenAI.ChatCompletionContentPartText => part.type === 'text';
+
+function mediaPartKey(part: WireUserContentPart): string {
+  const nested = propertyOf(part, 'image_url') ?? propertyOf(part, 'audio_url')
+    ?? propertyOf(part, 'video_url') ?? propertyOf(part, 'file');
+  return `${part.type}|${JSON.stringify(nested ?? '')}`;
+}
+
 /**
  * Convert FLUJO's threaded messages into clean OpenAI-spec wire messages:
  * stripHandoffPlumbing (see above) plus removal of every FLUJO-internal
@@ -368,7 +384,7 @@ export function stripHandoffPlumbing(messages: FlujoChatMessage[], sourceIndexes
  * "400 Bad Request". The wire payload must contain only what the OpenAI chat
  * spec defines.
  */
-function mediaReferencePart(part: ModelMediaPart): Record<string, unknown> | undefined {
+function mediaReferencePart(part: ModelMediaPart): WireUserContentPart | undefined {
   // Prefer the durable URI over the display URL. The latter is normally a
   // relative FLUJO HTTP route that a cloud provider cannot fetch; ModelHandler
   // resolves flujo:// references to private data URLs immediately before the
@@ -424,19 +440,14 @@ function mediaArtifactSummary(media: ModelMediaPart[]): string {
 function userContentWithMedia(
   content: OpenAI.ChatCompletionUserMessageParam['content'],
   media: ModelMediaPart[],
-): OpenAI.ChatCompletionUserMessageParam['content'] {
-  const parts: Array<Record<string, unknown>> = Array.isArray(content)
-    ? content.map(part => ({ ...(part as unknown as Record<string, unknown>) }))
+): WireUserContentPart[] {
+  const parts: WireUserContentPart[] = Array.isArray(content)
+    ? content.map(part => ({ ...part }))
     : (content ? [{ type: 'text', text: content }] : []);
-  const seen = new Set(parts.map(part => {
-    const nested = part.image_url ?? part.audio_url ?? part.video_url ?? part.file;
-    return `${String(part.type ?? '')}|${JSON.stringify(nested ?? '')}`;
-  }));
+  const seen = new Set(parts.map(mediaPartKey));
   const artifactSummary = mediaArtifactSummary(media);
-  const existingText = [...parts].reverse().find(
-    part => part.type === 'text' && typeof part.text === 'string',
-  );
-  const existingTextValue = typeof existingText?.text === 'string' ? existingText.text : undefined;
+  const existingText = [...parts].reverse().filter(isTextPart).find(part => typeof part.text === 'string');
+  const existingTextValue = existingText?.text;
   if (existingText && existingTextValue && !existingTextValue.includes(artifactSummary)) {
     existingText.text = `${existingTextValue}\n\n${artifactSummary}`;
   } else if (!existingText) {
@@ -445,14 +456,12 @@ function userContentWithMedia(
   for (const item of media) {
     const reference = mediaReferencePart(item);
     if (!reference) continue;
-    const nested =
-      reference.image_url ?? reference.audio_url ?? reference.video_url ?? reference.file;
-    const key = `${String(reference.type ?? '')}|${JSON.stringify(nested ?? '')}`;
+    const key = mediaPartKey(reference);
     if (seen.has(key)) continue;
     seen.add(key);
     parts.push(reference);
   }
-  return parts as unknown as OpenAI.ChatCompletionUserMessageParam['content'];
+  return parts;
 }
 
 /**

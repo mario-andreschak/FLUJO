@@ -464,6 +464,6 @@ export class ExecutionEventBus {
 }
 
 // Singleton across the process (and across Next.js hot-reloads in dev).
-const globalForBus = globalThis as unknown as { __flujoExecutionEventBus?: ExecutionEventBus };
+const globalForBus = globalThis as typeof globalThis & { __flujoExecutionEventBus?: ExecutionEventBus };
 export const executionEventBus =
   globalForBus.__flujoExecutionEventBus ?? (globalForBus.__flujoExecutionEventBus = new ExecutionEventBus());

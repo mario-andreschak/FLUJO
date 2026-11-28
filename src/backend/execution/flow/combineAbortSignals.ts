@@ -14,8 +14,7 @@ export function combineAbortSignals(
   if (present.length === 0) return undefined;
   if (present.length === 1) return present[0];
 
-  const anyFn = (AbortSignal as unknown as { any?: (s: AbortSignal[]) => AbortSignal }).any;
-  if (typeof anyFn === 'function') return anyFn(present);
+  if (typeof AbortSignal.any === 'function') return AbortSignal.any(present);
 
   const controller = new AbortController();
   const alreadyAborted = present.find(s => s.aborted);

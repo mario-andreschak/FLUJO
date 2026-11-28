@@ -12,6 +12,7 @@
 import { createLogger } from '@/utils/logger';
 import { ServerCandidate, QualitySignal, QualitySignalProvider } from '../types';
 import { normalizeCount, WEEKLY_DOWNLOADS_SATURATION } from '../scorer';
+import { propertyOf } from '@/shared/utils/records';
 
 const log = createLogger('backend/services/mcp/quality/providers/npmDownloads');
 
@@ -81,8 +82,8 @@ export const npmDownloadsProvider: QualitySignalProvider = {
         const body = (await res.json()) as Record<string, { downloads?: number } | null>;
         // A single-name bulk request returns the point shape directly, not a map.
         if (chunk.length === 1) {
-          const one = body as unknown as { package?: string; downloads?: number };
-          if (typeof one.downloads === 'number') downloads.set(chunk[0], one.downloads);
+          const count = propertyOf(body, 'downloads');
+          if (typeof count === 'number') downloads.set(chunk[0], count);
         } else {
           for (const name of chunk) {
             const point = body[name];

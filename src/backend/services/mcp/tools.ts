@@ -295,6 +295,7 @@ export async function callTool(
       ? await modernTasks.callTool(JSON.parse(JSON.stringify(requestParams)), { ...extensionDispatchOptions(callOptions), expectedConversationId: trustedConversationId })
       : isBetaClient(client)
       ? await (
+          // eslint-disable-next-line flujo/no-double-cast -- betaClient.ts types a v2-beta client as the SDK1 Client, whose callTool takes a result schema before the options.
           client.callTool as unknown as (
             params: typeof requestParams,
             options?: typeof callOptions,

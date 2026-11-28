@@ -399,7 +399,7 @@ export async function prepareGithubServerRuntime(input: GithubInstallInput): Pro
         secretNames.has(name) ? { value, metadata: { isSecret: true } } : value,
       ]),
     );
-    const config = {
+    const config: Partial<MCPServerConfig> = {
       name: input.name,
       transport: 'stdio',
       command: 'node',
@@ -411,7 +411,7 @@ export async function prepareGithubServerRuntime(input: GithubInstallInput): Pro
       source,
       _installCommand: installCommand,
       _buildCommand: buildCommand,
-    } as unknown as Partial<MCPServerConfig>;
+    };
     return { installed: true, serverName: input.name, config };
   } catch (error) {
     if (error instanceof BundledFlujoWorkloadError) throw error;

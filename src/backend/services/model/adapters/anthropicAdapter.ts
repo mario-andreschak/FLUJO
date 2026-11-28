@@ -467,7 +467,7 @@ function toChatCompletion(
         },
       });
     } else {
-      const nativeBlock = block as unknown as Record<string, unknown>;
+      const nativeBlock: Record<string, unknown> = { ...block };
       const nativeType = typeof nativeBlock.type === 'string' ? nativeBlock.type : '';
       if (['image', 'audio', 'video', 'file', 'document'].includes(nativeType)) {
         const source = nativeBlock.source && typeof nativeBlock.source === 'object'

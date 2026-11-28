@@ -2,7 +2,7 @@ import { PersonaRecoveryError } from './personaRecoveryError';
 import { createHash } from 'node:crypto';
 import {
   PersonaActivitySchema, PersonaSchema, PersonaWorkItemSchema, BehaviorMaintenanceRunSchema,
-  type PersonaDeletionTombstone,
+  PersonaDeletionTombstoneSchema,
 } from '@/shared/types/enduringAgent';
 import { assertValidWorkspaceName } from '@/utils/workspace';
 import { PERSONA_SHARDED_COLLECTIONS } from '@/utils/storage/backend';
@@ -111,7 +111,7 @@ export function planPersonaRecoveryRestore(archive: Buffer, destinationWorkspace
   const origins = mergePersonaRecoveryOrigins([
     ...recovery.origins.tombstones,
     ...recovery.graph.records.filter((record) => record.collection === c.deletionTombstones)
-      .map((record) => record.parsed as unknown as PersonaDeletionTombstone),
+      .map((record) => PersonaDeletionTombstoneSchema.parse(record.parsed)),
   ]);
   files.push({ path: 'db/persona-recovery/origin.json', bytes: json(origins) });
   // Retain the exact source archive, including the unmodified private records

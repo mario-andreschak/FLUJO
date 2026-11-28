@@ -220,6 +220,6 @@ export function paginateList<T>(items: T[], parsed: ParsedListArgs): ListPage<T>
 export function pagedCallToolResult<T>(page: ListPage<T>): CallToolResult {
   return {
     content: [{ type: 'text', text: JSON.stringify(page.items, null, 2) }],
-    structuredContent: page as unknown as Record<string, unknown>,
+    structuredContent: { ...page },
   };
 }

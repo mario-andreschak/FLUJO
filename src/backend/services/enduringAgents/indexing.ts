@@ -241,11 +241,13 @@ async function loadGeneration(config: Config): Promise<CollectionGeneration | nu
   try {
     const value = JSON.parse(await fs.readFile(generationPath(config), 'utf8')) as unknown;
     const data = objectEntry(value);
-    if (!data || data.schemaVersion !== 1 || data.collection !== config.collection
-      || !Number.isSafeInteger(data.revision) || (data.revision as number) < 0
-      || !Number.isSafeInteger(data.sourceCount) || (data.sourceCount as number) < 0
-      || typeof data.dirty !== 'boolean') return null;
-    return data as unknown as CollectionGeneration;
+    if (!data) return null;
+    const { schemaVersion, collection, revision, sourceCount, dirty } = data;
+    if (schemaVersion !== 1 || collection !== config.collection
+      || typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 0
+      || typeof sourceCount !== 'number' || !Number.isSafeInteger(sourceCount) || sourceCount < 0
+      || typeof dirty !== 'boolean') return null;
+    return { schemaVersion, collection: config.collection, revision, sourceCount, dirty };
   } catch (error) {
     if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
       log.warn(`Could not load ${config.collection} index generation; rebuilding.`, error);

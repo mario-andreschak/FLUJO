@@ -1,5 +1,4 @@
 import path from 'node:path';
-import { clearLine, cursorTo } from 'node:readline';
 import {
   MigrationLandscapeSession,
   terminalCanShowMigrationLandscape,
@@ -58,6 +57,10 @@ export interface MigrationProgressReporterOptions {
   animationIntervalMs?: number;
   input?: MigrationTerminalInput;
 }
+
+/** The control sequences node:readline's clearLine(stream, 0) and cursorTo(stream, 0) write. */
+const CLEAR_LINE = '\u001B[2K';
+const CURSOR_TO_LINE_START = '\u001B[1G';
 
 const ANSI = {
   reset: '\u001B[0m',
@@ -781,9 +784,8 @@ class TtyMigrationProgressReporter implements MigrationProgressReporter {
 
   private clearLiveLine(): void {
     if (!this.liveLineRendered) return;
-    const writable = this.stream as unknown as NodeJS.WritableStream;
-    clearLine(writable, 0);
-    cursorTo(writable, 0);
+    this.stream.write(CLEAR_LINE);
+    this.stream.write(CURSOR_TO_LINE_START);
     this.liveLineRendered = false;
   }
 
