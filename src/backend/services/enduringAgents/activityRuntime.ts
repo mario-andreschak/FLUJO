@@ -2184,23 +2184,32 @@ export async function readWithPersonaActivityLease<T>(
 ): Promise<T> {
   const fence = LeaseFenceSchema.parse(value) as PersonaLeaseFence;
   return withPersonaRuntimeLock(fence.personaId, async (lock) => {
-    const deadline = runtimeClock.monotonicNow() + 5_000;
     let active = true;
     const pending = new Set<Promise<void>>();
-    const assertLifetime = () => {
-      if (!active || runtimeClock.monotonicNow() >= deadline) {
-        throw new PersonaLeaseLostError(fence.personaId, 'Held Persona Activity read expired.');
+    const assertOpen = () => {
+      if (!active) throw new PersonaLeaseLostError(fence.personaId, 'Held Persona Activity read ended.');
+    };
+    // The lease heartbeat needs this lock to renew. A read may use the first
+    // half of the lease's renewal window and leaves the second half for the
+    // renewal, so a slow PC lengthens the read instead of refusing it after a
+    // fixed few seconds. A read stopped here leaves the lease intact; the next
+    // read after the renewal gets a whole window again.
+    const assertWithinHalfLease = (lease: PersonaLease) => {
+      if (runtimeClock.now() >= lease.renewedAt + Math.floor((lease.expiresAt - lease.renewedAt) / 2)) {
+        throw new PersonaLeaseLostError(fence.personaId, 'Held Persona Activity read used half of its lease; the lease renews before the next read.');
       }
     };
     const reader: HeldPersonaActivityRead = Object.freeze({
       assertCurrent: () => {
         const check = (async () => {
-          assertLifetime();
+          assertOpen();
           await lock.assertOwned();
-          assertLifetime();
-          await requireActiveRunnableLease(lock, fence);
+          assertOpen();
+          // Real expiry is refused and recorded here before the read's own bound.
+          const { lease } = await requireActiveRunnableLease(lock, fence);
+          assertWithinHalfLease(lease);
           await lock.assertOwned();
-          assertLifetime();
+          assertOpen();
         })();
         pending.add(check);
         void check.then(() => pending.delete(check), () => pending.delete(check));
