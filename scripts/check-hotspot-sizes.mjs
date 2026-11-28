@@ -3,10 +3,10 @@
 // feature (#571). Each has a line ceiling in scripts/execution-hotspots.json,
 // and the ceiling only goes down. This check fails when a file grows past its
 // ceiling, when a file shrank but its ceiling was not lowered, when a branch
-// raises a ceiling, and when a module split out of one of them is not named in
-// the architecture guide.
+// raises a ceiling, when a module split out of one of them is not named in
+// the architecture guide, and when the guide names a file that does not exist.
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -53,6 +53,36 @@ export function findUndocumentedModules(hotspots, guideText) {
   return missing;
 }
 
+/** File names the guide writes in backticks outside code blocks: `runFlow.ts`, `src/a/b.ts`, `flow/x.test.ts`. */
+export function guideFileNames(guideText) {
+  const prose = guideText.replace(/```[\s\S]*?```/g, '');
+  const names = new Set();
+  for (const [, token] of prose.matchAll(/`([^`\s]+)`/g)) {
+    if (/^[\w@[\]-][\w@.[\]/-]*\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs|json|md)$/.test(token)) names.add(token);
+  }
+  return [...names];
+}
+
+/**
+ * Where a short name in the guide may live: the repository root, `__tests__/`,
+ * every folder the guide writes in backticks, and the folders of the big files
+ * and their split modules.
+ */
+export function guideFolders(hotspots, guideText) {
+  const folders = new Set(['', '__tests__/']);
+  for (const [, folder] of guideText.matchAll(/`([\w.[\]/-]+\/)`/g)) folders.add(folder);
+  for (const { file, modules = [] } of hotspots) {
+    for (const named of [file, ...modules]) folders.add(`${path.posix.dirname(named)}/`);
+  }
+  return [...folders];
+}
+
+/** Lists file names in the guide that exist in none of its folders. */
+export function findMissingGuideFiles(hotspots, guideText, exists) {
+  const folders = guideFolders(hotspots, guideText);
+  return guideFileNames(guideText).filter((name) => !folders.some((folder) => exists(`${folder}${name}`)));
+}
+
 /** Lowers every stale ceiling to the file's current length. Never raises one. */
 export function lowerCeilings(contract, linesOf) {
   return {
@@ -64,7 +94,7 @@ export function lowerCeilings(contract, linesOf) {
   };
 }
 
-export function describeProblems(problems, raised, undocumented = []) {
+export function describeProblems(problems, raised, undocumented = [], missingFiles = []) {
   const out = [];
   const grew = problems.filter((problem) => problem.kind === 'grew');
   const stale = problems.filter((problem) => problem.kind === 'stale');
@@ -72,6 +102,7 @@ export function describeProblems(problems, raised, undocumented = []) {
     out.push('These files grew past their line ceiling:');
     for (const { file, lines, maxLines } of grew) out.push(`  ${file}  ${maxLines} -> ${lines}`);
     out.push(`Move the new code into a module with one clear job (see ${GUIDE}) and import it.`);
+    out.push('If the file must still call it, move a nearby block of the same kind out with it ("Adding to a big file" in the guide).');
     out.push('Do not raise the ceiling.');
   }
   if (stale.length) {
@@ -89,12 +120,17 @@ export function describeProblems(problems, raised, undocumented = []) {
     for (const file of undocumented) out.push(`  ${file}`);
     out.push('Add each one to the module map there: what it owns and the contract it keeps.');
   }
+  if (missingFiles.length) {
+    out.push(`${GUIDE} names files that do not exist:`);
+    for (const name of missingFiles) out.push(`  ${name}`);
+    out.push('Write each as its path from the repository root, or as its name inside a folder the guide names in backticks.');
+    out.push('If the file moved or was removed, point the guide at the code that owns the behaviour now.');
+  }
   return out.join('\n');
 }
 
-/** The guide's text, or nothing when no module is listed. A missing guide names no module. */
-function readGuide(cwd, contract) {
-  if (!contract.hotspots.some(({ modules = [] }) => modules.length)) return '';
+/** The guide's text. A missing guide names nothing. */
+function readGuide(cwd) {
   try {
     return readFileSync(path.join(cwd, GUIDE), 'utf8');
   } catch {
@@ -140,12 +176,14 @@ export function run({ cwd = process.cwd(), env = process.env, argv = process.arg
   }
 
   const problems = findSizeProblems(contract.hotspots, linesOf);
-  const undocumented = findUndocumentedModules(contract.hotspots, readGuide(cwd, contract));
-  if (problems.length || raised.length || undocumented.length) {
-    error(describeProblems(problems, raised, undocumented));
+  const guideText = readGuide(cwd);
+  const undocumented = findUndocumentedModules(contract.hotspots, guideText);
+  const missingFiles = findMissingGuideFiles(contract.hotspots, guideText, (file) => existsSync(path.join(cwd, file)));
+  if (problems.length || raised.length || undocumented.length || missingFiles.length) {
+    error(describeProblems(problems, raised, undocumented, missingFiles));
     return 1;
   }
-  log(`Hotspot sizes hold (${baseNote}): ${contract.hotspots.map(({ file, maxLines }) => `${path.basename(file)} ${maxLines}`).join(', ')}; every split module is in the guide.`);
+  log(`Hotspot sizes hold (${baseNote}): ${contract.hotspots.map(({ file, maxLines }) => `${path.basename(file)} ${maxLines}`).join(', ')}; every split module is in the guide and every file it names exists.`);
   return 0;
 }
 
