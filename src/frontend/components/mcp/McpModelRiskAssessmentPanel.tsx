@@ -80,6 +80,9 @@ function eligibleModels(value: unknown): Choice[] {
   return value.flatMap(model => {
     if (!record(model) || !text(model.id, 256) || !text(model.name, 256)
       || (model.outputModalities !== undefined && (!Array.isArray(model.outputModalities) || !model.outputModalities.every(item => typeof item === 'string')))
+      // A provider or adapter FLUJO does not know is never a supported text model.
+      || (model.provider !== undefined && !isModelProvider(model.provider))
+      || (model.adapter !== undefined && !isModelAdapter(model.adapter))
       || !supportsMcpModelRiskAssessment({
         provider: isModelProvider(model.provider) ? model.provider : undefined,
         adapter: isModelAdapter(model.adapter) ? model.adapter : undefined,
