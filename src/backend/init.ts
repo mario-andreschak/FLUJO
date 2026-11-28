@@ -2,6 +2,7 @@ import { Cron } from 'croner';
 import { verifyStorage } from '@/utils/storage/backend';
 import { mcpService } from '@/backend/services/mcp';
 import { sweepOldRunResources } from '@/backend/services/runResources';
+import { sweepUnsavedRunStores } from '@/backend/execution/flow/stepToolResults';
 import { snapshotStore } from '@/backend/services/snapshot/SnapshotStore';
 import { reconcileOrphanedTasks, sweepOldSubflowTasks } from '@/backend/services/subflowTasks';
 import { refreshSpotlightServers } from '@/backend/services/spotlight';
@@ -242,6 +243,7 @@ function armRetentionSweep(): void {
   if (!global.__flujo_retention_cron) {
     global.__flujo_retention_cron = new Cron('0 * * * *', { unref: true }, () => {
       void sweepEveryWorkspace('run-resource', () => sweepOldRunResources());
+      void sweepEveryWorkspace('unsaved-run tool result', () => sweepUnsavedRunStores());
     });
     log.info('Armed run-resource retention sweep (hourly)');
   }

@@ -88,6 +88,7 @@ const PROPERTY_SPECS: Record<NodeType, readonly PropertySpec[]> = {
     { key: 'enableTodoTool', label: 'Enable todo tool', defaultValue: false },
     { key: 'toolLoading', label: 'Tool descriptions', defaultValue: 'auto' },
     { key: 'codeMode', label: 'Code mode', defaultValue: 'auto' },
+    { key: 'toolResultLimit', label: 'Tool result size limit' },
     { key: 'captureVariable', label: 'Capture variable' },
     { key: 'captureResource', label: 'Capture resource' },
     { key: 'captureKv', label: 'Capture key-value reference' },

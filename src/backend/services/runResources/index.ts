@@ -792,6 +792,17 @@ export async function readRunResourceBounded(
     range: { startChar, endChar, ...(truncated ? { nextChar: endChar } : {}) } };
 }
 
+/** Ids of every store in this workspace whose name starts with `prefix`. */
+export async function listRunResourceStoreIds(prefix: string): Promise<string[]> {
+  try {
+    const dirents = await fs.readdir(runResourcesDir(), { withFileTypes: true });
+    return dirents.filter(d => d.isDirectory() && SAFE_ID.test(d.name) && d.name.startsWith(prefix)).map(d => d.name);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
 /** Remove a conversation's resources (called from conversation DELETE). */
 export async function deleteRunResources(conversationId: string): Promise<void> {
   assertSafeId(conversationId, 'conversationId');

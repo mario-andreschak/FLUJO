@@ -12,6 +12,8 @@ import {
   commitFlowDurableMutation,
   type FlowDurableMutationContext,
 } from './executionAuthority';
+import { resolveNodeToolResultLimit } from './stepToolResults';
+import type { SharedState } from './types';
 
 const INLINE_PREVIEW_CHARS = 1200;
 
@@ -159,7 +161,7 @@ export async function hydrateLazyToolPayloads(
   messages: unknown[],
   canonicalMessages: FlujoChatMessage[],
   targetConversationId: string,
-  durableContext: FlowDurableMutationContext = {},
+  durableContext: FlowDurableMutationContext & Partial<Pick<SharedState, 'flowId' | 'flowSnapshot'>> = {},
 ): Promise<unknown[]> {
   const canonicalById = new Map(canonicalMessages.map((message) => [message.id, message]));
 
@@ -201,6 +203,8 @@ export async function hydrateLazyToolPayloads(
         } else {
           const full = await readExactPayload(ref, message.tool_call_id, 'result');
           const settings = await getRunResourceSettings();
+          // The limit of the step that produced the result, for that step's model (#1226).
+          const step = await resolveNodeToolResultLimit(durableContext, message.processNodeId);
           const bounded = await commitFlowDurableMutation(durableContext, () => boundToolResult({
               conversationId: targetConversationId,
               toolCallId: message.tool_call_id,
@@ -209,6 +213,8 @@ export async function hydrateLazyToolPayloads(
               nodeId: full.entry.producedBy.nodeId,
               content: full.text,
               settings,
+              contextWindow: step.contextWindow,
+              limit: step.limit,
             }),
           );
           content = bounded.content;

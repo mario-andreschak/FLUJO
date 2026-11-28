@@ -71,6 +71,7 @@ import { combineAbortSignals } from '../combineAbortSignals';
 import { upsertMessageById } from '../conversationMessages';
 import type { DecodedTool } from '../handlers/toolNamespace';
 import { addLoadedDeferredTools, attachRuntimeOnly, planStepTools } from '../toolLoading/planStepTools';
+import { stepToolResultsFor } from '../stepToolResults';
 import OpenAI from 'openai';
 import { v4 as uuidv4 } from 'uuid'; // Import uuid
 
@@ -876,6 +877,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     // prompts on this conversation's event stream and honour the approval setting.
     conversationId: sharedState.conversationId,
     runId: sharedState.logicalRunId,
+    toolResults: stepToolResultsFor(node_params?.properties, sharedState),
     archiveModelTurns: !sharedState.ephemeral,
     codexSession: sharedState.codexSessions?.[nodeId],
     responsesSession: sharedState.responsesSessions?.[nodeId],
@@ -1474,6 +1476,7 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
             toolNameMap, // Lets self-orchestrating adapters dispatch tool calls to mcpService
             toolCatalog: prepResult.toolCatalog,
             markToolsLoaded: prepResult.markToolsLoaded,
+            toolResults: prepResult.toolResults,
             conversationId: prepResult.conversationId, // For mid-run tool-approval prompts
             runId: prepResult.runId,
             codexSession: prepResult.codexSession,

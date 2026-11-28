@@ -3,7 +3,7 @@
   "hotspots": [
     {
       "file": "src/backend/execution/flow/runFlow.ts",
-      "maxLines": 2056,
+      "maxLines": 2055,
       "modules": [
         "src/backend/execution/flow/runFlowContract.ts",
         "src/backend/execution/flow/runFlowEvents.ts",
@@ -21,7 +21,8 @@
         "src/backend/execution/flow/runSteeringDrain.ts",
         "src/backend/execution/flow/runToolApproval.ts",
         "src/backend/execution/flow/runStateSetup.ts",
-        "src/backend/execution/flow/runTurnAdmission.ts"
+        "src/backend/execution/flow/runTurnAdmission.ts",
+        "src/backend/execution/flow/stepToolResults.ts"
       ]
     },
     {

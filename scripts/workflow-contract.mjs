@@ -15,13 +15,14 @@ const JOURNEY_PHONE = 'npm run journey:first-use -- --viewport 390x844';
 const BIG_APP = 'npx playwright test --config=playwright.features-first-use.config.mjs';
 const TOOL_TESTER = 'npx playwright test --config=playwright.features.config.mjs';
 const FRONT_DOOR = 'npm run journey:front-door';
+const TOOL_RESULT_LIMIT = 'npm run check:tool-result-limit';
 
 /**
  * The first-use journey (#572) walks a fresh production build on desktop and
  * phone screens, then reaches every tool of a 128-tool app and tests the tool
  * tester on that build, with nothing optional, and keeps its evidence even when it fails.
  * On the same build, an app view must show in a chat opened through a signed-in
- * front door (#1336).
+ * front door (#1336), and the tool result size limit is checked in the browser (#1226).
  */
 export function assertFirstUseJourneyJob(workflow) {
   const job = workflow?.jobs?.['first-use-journey'];
@@ -45,6 +46,10 @@ export function assertFirstUseJourneyJob(workflow) {
   if (frontDoor <= build || !kept.some(line => line.endsWith('/flujo-drive/evidence/front-door/'))) {
     throw new Error('The broad qualification must show an app view in a chat through a signed-in front door '
       + `(${FRONT_DOOR}) after the production build, with nothing optional, and keep its screenshots and report even when it fails.`);
+  }
+  if (at(TOOL_RESULT_LIMIT) <= build || !kept.some(line => line.endsWith('/flujo-drive/evidence/tool-result-limit/'))) {
+    throw new Error('The broad qualification must check the tool result size limit in the browser '
+      + `(${TOOL_RESULT_LIMIT}) after the production build, with nothing optional, and keep its screenshots and report even when it fails.`);
   }
 }
 const ANTIGRAVITY_INSTALL = "node -e \"require('./bin/antigravity-runtime.cjs').resolveBinary().then(binary => console.log(binary))\"";

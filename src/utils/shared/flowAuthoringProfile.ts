@@ -19,6 +19,7 @@ const ADVANCED_PROCESS_PROPERTIES = new Set([
   'enableTodoTool',
   'toolLoading',
   'codeMode',
+  'toolResultLimit',
   'captureVariable',
   'captureResource',
   'captureKv',

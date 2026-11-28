@@ -53,6 +53,8 @@ export interface ProcessNodeProperties extends Record<string, unknown> {
     enableTodoTool?: boolean;
     toolLoading?: import('@/shared/types/flow/toolLoading').ToolLoadingMode;
     codeMode?: import('@/shared/types/flow/toolLoading').CodeModeSetting;
+    /** #1226: this step's own tool result size limit; absent = the workspace setting. */
+    toolResultLimit?: import('@/shared/toolResultLimit').StepToolResultLimit;
     requireApprovalFor?: string[];
     requireApprovalForWrites?: boolean;
     personaTools?: unknown;

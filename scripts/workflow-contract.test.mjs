@@ -507,6 +507,19 @@ for (const [label, change, expected] of [
     const upload = journeyJob(files).steps.find(step => step.uses?.startsWith('actions/upload-artifact@'));
     upload.with.path = upload.with.path.split('\n').filter(line => !line.includes('/evidence/front-door/')).join('\n');
   }, /signed-in front door/],
+  ['a first-use job without the tool result size limit check', files => {
+    journeyJob(files).steps = journeyJob(files).steps.filter(step => step.run !== 'npm run check:tool-result-limit');
+  }, /tool result size limit/],
+  ['an optional tool result size limit check', files => { journeyStep(files, 'npm run check:tool-result-limit')['continue-on-error'] = true; }, /first-use journey/],
+  ['a tool result size limit check before the production build', files => {
+    const steps = journeyJob(files).steps;
+    const [check] = steps.splice(steps.findIndex(step => step.run === 'npm run check:tool-result-limit'), 1);
+    steps.splice(steps.findIndex(step => step.run === 'npm run build'), 0, check);
+  }, /tool result size limit/],
+  ['a tool result size limit check that drops its evidence', files => {
+    const upload = journeyJob(files).steps.find(step => step.uses?.startsWith('actions/upload-artifact@'));
+    upload.with.path = upload.with.path.split('\n').filter(line => !line.includes('/evidence/tool-result-limit/')).join('\n');
+  }, /tool result size limit/],
 ]) {
   test(`broad qualification refuses ${label}`, () => {
     const files = readWorkflows();

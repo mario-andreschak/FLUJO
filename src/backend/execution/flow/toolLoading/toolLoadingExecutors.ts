@@ -60,6 +60,8 @@ export interface ToolLoadingContext {
   authorizePersonaCoreMcp?: (serverName: string, nodeId?: string) => Promise<void>;
   /** Sizes the result limit for the model that reads the answer (#1226). */
   contextWindow?: number;
+  /** The step's own result limit and where a moved answer is kept (#1226). */
+  toolResults?: import('@/shared/toolResultLimit').StepToolResults;
   scriptLimits?: Partial<ScriptLimits>;
 }
 
@@ -196,20 +198,22 @@ async function executeRunToolScript(args: Record<string, unknown>, context: Tool
 
 /** Keep an answer within the tool result limit, storing the full text as a run resource when it is too long. */
 async function bounded(content: string, name: string, context: ToolLoadingContext): Promise<string> {
-  if (!context.conversationId) return content;
+  const store = context.toolResults?.store ?? context.conversationId;
+  if (!store) return content;
   try {
     const [{ boundToolResult }, { getRunResourceSettings }] = await Promise.all([
       import('@/backend/services/runResources/boundToolResult'),
       import('@/backend/services/runResources'),
     ]);
     const result = await boundToolResult({
-      conversationId: context.conversationId,
+      conversationId: store,
       toolCallId: `${name}_${uuidv4()}`,
       toolName: name,
       nodeId: context.nodeId,
       content,
       settings: await getRunResourceSettings(),
       contextWindow: context.contextWindow,
+      limit: context.toolResults?.limit,
     });
     return result.content;
   } catch (error) {

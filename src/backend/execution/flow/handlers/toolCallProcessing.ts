@@ -500,6 +500,7 @@ export async function processToolCallsAdmitted(input: ToolCallProcessingInput): 
             beforeToolDispatch: input.beforeToolDispatch,
             authorizePersonaCoreMcp: input.executionAuthority?.authorizePersonaCoreMcp,
             contextWindow: input.modelContextWindow,
+            toolResults: input.toolResults,
           });
           emit?.({
             type: 'tool:result',
@@ -704,10 +705,12 @@ export async function processToolCallsAdmitted(input: ToolCallProcessingInput): 
 
         // Run-resource settings drive both the tool-args capture (below,
         // before the call) and the tool-result auto-capture (after the call).
-        // Fetched once here, only when we have a conversation to scope writes
-        // to — so legacy/ephemeral call sites keep byte-identical behaviour.
+        // Fetched once here, only when there is a store for the writes. A run
+        // that saves nothing captures nothing, but still moves results over
+        // the size limit to its store (#1226).
+        const resultStore = input.toolResults?.store ?? conversationId;
         let runResourceSettings: RunResourceSettings | undefined;
-        if (conversationId) {
+        if (resultStore) {
           try {
             runResourceSettings = await getRunResourceSettings();
           } catch (error) {
@@ -933,7 +936,7 @@ export async function processToolCallsAdmitted(input: ToolCallProcessingInput): 
         ) {
           // Same test boundToolResult applies below (#1226), so exactly one
           // of the two writes the full copy whatever the setting says.
-          const resultBound = resolveToolResultBound(runResourceSettings, input.modelContextWindow);
+          const resultBound = resolveToolResultBound(runResourceSettings, input.modelContextWindow, input.toolResults?.limit);
           if (!measureToolResult(receivedResultContent, resultBound).over) {
             try {
               await commitFlowDurableMutation(durableContext, async () => {
@@ -979,10 +982,10 @@ export async function processToolCallsAdmitted(input: ToolCallProcessingInput): 
         // wire in full (not even on the first turn) and both ends of a long
         // log survive. Runs AFTER auto-capture (binaries already stubbed) so
         // only the remaining text form is bounded. Never breaks the run.
-        if (result.success && conversationId && runResourceSettings) {
+        if (result.success && resultStore && runResourceSettings) {
           try {
             const bounded = await commitFlowDurableMutation(durableContext, () => boundToolResult({
-                conversationId,
+                conversationId: resultStore,
                 toolCallId: id,
                 server: serverName,
                 toolName,
@@ -990,6 +993,7 @@ export async function processToolCallsAdmitted(input: ToolCallProcessingInput): 
                 content: receivedResultContent,
                 settings: runResourceSettings,
                 contextWindow: input.modelContextWindow,
+                limit: input.toolResults?.limit,
               }),
             );
             if (bounded.spilled) {

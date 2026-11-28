@@ -228,6 +228,8 @@ export interface ProcessNodeProperties {
     /** #1448: offer `run_tool_script` (code mode). 'auto' (default) offers it
      *  together with on-demand descriptions; 'on' always; 'off' never. */
     codeMode?: import('@/shared/types/flow/toolLoading').CodeModeSetting;
+    /** #1226: this step's own tool result size limit; absent = the workspace setting. */
+    toolResultLimit?: import('@/shared/toolResultLimit').StepToolResultLimit;
     /** Issue #415: explicit native Persona tools authored for this Process. */
     personaTools?: PersonaNativeAbilityId[];
     boundModel?: string;
@@ -1755,6 +1757,8 @@ export interface ProcessNodePrepResult extends BasePrepResult {
     toolCatalog?: import('./toolLoading/toolLoadingExecutors').StepToolCatalog;
     /** Non-enumerable: records deferred tools the model loaded (#1448). */
     markToolsLoaded?: (names: readonly string[]) => void;
+    /** #1226: the step's own tool result size limit and where moved results are kept. */
+    toolResults?: import('@/shared/toolResultLimit').StepToolResults;
     /** Runtime-only run cancellation forwarded to the in-flight model call. */
     abortSignal?: AbortSignal;
     /** Safe actor attribution paired with executionAuthority for fail-closed writes. */

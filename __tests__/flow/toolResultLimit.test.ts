@@ -7,6 +7,7 @@ import {
   autoToolResultBytes,
   kilobytesToToolResultBytes,
   normalizeRunResourceSettings,
+  normalizeStepToolResultLimit,
   resolveToolResultBound,
   toolResultBytesToKilobytes,
   toolResultLimitSettings,
@@ -138,5 +139,59 @@ describe('normalizeRunResourceSettings', () => {
     expect(toolResultLimitSettings({ toolResultTruncationEnabled: true, toolResultLimitMode: 'custom', toolResultMaxBytes: 4096 })).toEqual({
       toolResultTruncationEnabled: true, toolResultLimitMode: 'custom', toolResultMaxBytes: 4096, toolResultMaxLines: 10_000,
     });
+  });
+});
+
+describe('the limit an AI step sets for itself', () => {
+  it('wins over the workspace setting in both directions and keeps the workspace line limit', () => {
+    expect(resolveToolResultBound(DEFAULT_RUN_RESOURCE_SETTINGS, 200_000, { mode: 'custom', maxBytes: 2048 }))
+      .toMatchObject({ maxBytes: 2048, maxLines: 10_000, reason: 'limit' });
+    expect(resolveToolResultBound(on({ toolResultMaxLines: 50 }), 200_000, { mode: 'auto' }))
+      .toMatchObject({ maxBytes: 100_000, maxLines: 50, reason: 'limit' });
+    expect(resolveToolResultBound(on({ toolResultLimitMode: 'custom', toolResultMaxBytes: 1024 }), 200_000, { mode: 'off' }))
+      .toMatchObject({ maxBytes: 400_000, maxLines: 0, reason: 'safety' });
+  });
+
+  it('never lifts the safety ceiling', () => {
+    expect(resolveToolResultBound(DEFAULT_RUN_RESOURCE_SETTINGS, 8_000, { mode: 'custom', maxBytes: 100 * 1024 * 1024 }))
+      .toMatchObject({ maxBytes: 16_000, reason: 'safety' });
+  });
+
+  it('reads only what the editor can save; anything else means "use the workspace setting"', () => {
+    expect(normalizeStepToolResultLimit({ mode: 'off' })).toEqual({ mode: 'off' });
+    expect(normalizeStepToolResultLimit({ mode: 'custom', maxBytes: 65_536 })).toEqual({ mode: 'custom', maxBytes: 65_536 });
+    for (const broken of [undefined, null, 'auto', [], { mode: 'custom' }, { mode: 'custom', maxBytes: 0 }, { mode: 'huge' }]) {
+      expect(normalizeStepToolResultLimit(broken)).toBeUndefined();
+    }
+    expect(resolveToolResultBound(on(), 200_000, { mode: 'custom', maxBytes: -5 } as never)).toMatchObject({ maxBytes: 100_000 });
+  });
+});
+
+describe('the step limit in an agent description (FlowSpec)', () => {
+  const { compileFlowSpec, flowToSpec } = jest.requireActual('@/utils/shared/flowSpecCompiler') as typeof import('@/utils/shared/flowSpecCompiler');
+  const example = jest.requireActual('../../docs/examples/code-mode-folder-report.flowspec.json') as import('@/utils/shared/flowSpecCompiler').FlowSpec;
+  const context = { models: [{ id: 'model', name: '<your model>' }], servers: [{ name: 'filesystem' }] };
+  const withLimit = (toolResultLimit: unknown) => compileFlowSpec({
+    ...example,
+    nodes: example.nodes.map((node) => node.type === 'process' ? { ...node, toolResultLimit: toolResultLimit as never } : node),
+  }, context);
+  const stepOf = (compiled: ReturnType<typeof compileFlowSpec>) => compiled.flow!.nodes.find((node) => node.type === 'process')!;
+
+  it.each([
+    [64, { mode: 'custom', maxBytes: 64 * 1024 }],
+    ['auto', { mode: 'auto' }],
+    ['off', { mode: 'off' }],
+  ])('stores %p on the step and gives it back the same way', (written, stored) => {
+    const compiled = withLimit(written);
+    expect(stepOf(compiled).data.properties?.toolResultLimit).toEqual(stored);
+    expect(flowToSpec(compiled.flow!).nodes.find((node) => node.type === 'process')?.toolResultLimit).toEqual(written);
+  });
+
+  it('warns and keeps the workspace setting for anything else', () => {
+    for (const broken of [0, 2.5, 200_000, 'big']) {
+      const compiled = withLimit(broken);
+      expect(stepOf(compiled).data.properties?.toolResultLimit).toBeUndefined();
+      expect(compiled.issues.map((issue) => issue.code)).toContain('invalid-tool-result-limit');
+    }
   });
 });

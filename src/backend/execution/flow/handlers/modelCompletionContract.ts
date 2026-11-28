@@ -59,6 +59,8 @@ export type GenerateCompletionOptions = {
    * the producing tool_call_id; used by self-orchestrating adapters for
    * resource-aware truncation markers (issue #168). */
   runResourceMarkers?: Map<string, ToolResourceMarker>;
+  /** #1226: the step's own tool result size limit and where moved results are kept. */
+  toolResults?: CompletionInput['toolResults'];
   /** #154: opt-in to Agent SDK session reuse (resume + delta) for the Claude
    * subscription adapter. Resolved by callModel from the experimental setting
    * and node eligibility. */

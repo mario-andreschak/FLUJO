@@ -12,6 +12,7 @@ import type { HumanTaskDecision } from './types';
 import { commitToolCheckpoint } from './recoveryCheckpoint';
 import { addLoadedDeferredTools } from './toolLoading/planStepTools';
 import type { StorageKey } from '@/shared/types/storage';
+import { resolveStepToolResults } from './stepToolResults';
 
 const log = createLogger('backend/execution/flow/resumeAfterApproval');
 
@@ -193,6 +194,12 @@ export async function applyApprovalDecision(
         requireToolApproval: sharedState.requireApproval,
         onApprovalRequired: sharedState.onApprovalRequired,
         approvalConversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
+        // The same store, run owner and size limit as a call that needed no approval (#1226).
+        conversationId: sharedState.ephemeral ? undefined : sharedState.conversationId,
+        runId: sharedState.logicalRunId,
+        node: sharedState.currentNodeId ? { nodeId: sharedState.currentNodeId } : undefined,
+        unattended: sharedState.unattended,
+        ...await resolveStepToolResults(sharedState),
       });
     } catch (error) {
       if (storageKey) await commitToolCheckpoint(storageKey, sharedState, [toolCallToProcess], 'unknown');

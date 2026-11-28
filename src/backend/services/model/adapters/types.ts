@@ -317,6 +317,13 @@ export interface CompletionInput {
    */
   runResourceMarkers?: Map<string, ToolResourceMarker>;
   /**
+   * The AI step's own tool result size limit and the conversation whose run
+   * resources keep moved results (#1226). Adapters that call FLUJO's tools
+   * themselves size each result with these; `store` falls back to
+   * `conversationId`.
+   */
+  toolResults?: import('@/shared/toolResultLimit').StepToolResults;
+  /**
    * Cache-routing hint for providers with a sharded automatic prompt cache
    * (OpenAI's `prompt_cache_key`). Requests carrying the same key AND the same
    * prefix are routed to the same machine, so a warm cache is actually found

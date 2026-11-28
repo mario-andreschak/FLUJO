@@ -442,6 +442,22 @@ describe('ClaudeSubscriptionAdapter — built-in tool suppression (#166)', () =>
     expect(env.MAX_MCP_OUTPUT_TOKENS).toBe(expected);
   });
 
+  it('sizes the SDK persistence limit with the step\'s own limit over the workspace setting (#1226)', async () => {
+    const { getRunResourceSettings } = jest.requireMock('@/backend/services/runResources') as {
+      getRunResourceSettings: jest.Mock;
+    };
+    getRunResourceSettings.mockResolvedValueOnce({ toolResultTruncationEnabled: true, toolResultLimitMode: 'auto' });
+
+    await new ClaudeSubscriptionAdapter().createCompletion(baseInput({
+      model: { ...baseInput().model, contextWindow: 1_000_000 },
+      conversationId: 'conv-1',
+      toolResults: { limit: { mode: 'custom', maxBytes: 300_000 } },
+      tools: [],
+    }));
+
+    expect((capturedOptions().env as Record<string, string>).MAX_MCP_OUTPUT_TOKENS).toBe('300000');
+  });
+
   it('disables all built-in tools on the query options for a tools-less node', async () => {
     const adapter = new ClaudeSubscriptionAdapter();
     await adapter.createCompletion(baseInput({ tools: [] }));

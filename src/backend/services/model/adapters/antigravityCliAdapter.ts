@@ -120,6 +120,7 @@ export class AntigravityCliAdapter implements CompletionAdapter {
       runId,
       nodeId,
       runResourceMarkers,
+      toolResults,
       sessionResume,
     } = input;
     const fullInput = normalizeMessageInput(messages, runResourceMarkers);
@@ -462,12 +463,13 @@ export class AntigravityCliAdapter implements CompletionAdapter {
               // Tool-boundary bound (#251), same as the subscription path: this
               // bypasses ModelHandler's processToolCalls, so bound here or the
               // guarantee silently wouldn't apply on Antigravity CLI runs.
-              if (conversationId) {
+              const resultStore = toolResults?.store ?? conversationId;
+              if (resultStore) {
                 const bound = async () => {
                   try {
                     const settings = await getRunResourceSettings();
                     return await boundToolResult({
-                      conversationId,
+                      conversationId: resultStore,
                       toolCallId: callId,
                       server,
                       toolName: originalTool,
@@ -475,6 +477,7 @@ export class AntigravityCliAdapter implements CompletionAdapter {
                       content: resultContent,
                       settings,
                       contextWindow: model.contextWindow,
+                      limit: toolResults?.limit,
                     });
                   } catch (err) {
                     rethrowFlowExecutionAuthorityError(err);

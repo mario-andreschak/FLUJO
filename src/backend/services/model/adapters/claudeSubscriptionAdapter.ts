@@ -21,7 +21,7 @@ import { ownerScopeForRun } from '@/backend/services/mcp/ownerScope';
 import { getRunResourceSettings } from '@/backend/services/runResources';
 import { boundToolResult } from '@/backend/services/runResources/boundToolResult';
 import { withBoundedToolText } from '@/backend/services/runResources/toolResultBound';
-import { resolveToolResultBound } from '@/shared/toolResultLimit';
+import { resolveToolResultBound, type StepToolResultLimit } from '@/shared/toolResultLimit';
 import { splitToolResultMedia } from '@/backend/services/runResources/toolResultMedia';
 import {
   resolveInvokedToolUiLink,
@@ -177,8 +177,8 @@ const MAX_TOOL_NAME_LEN = 110;
 // so using the byte count as a token count is deliberately conservative.
 const MIN_CLAUDE_MCP_OUTPUT_TOKENS = 64 * 1024;
 
-function claudeMcpOutputTokens(settings: RunResourceSettings | undefined, contextWindow?: number): number {
-  const { maxBytes } = resolveToolResultBound(settings ?? DEFAULT_RUN_RESOURCE_SETTINGS, contextWindow);
+function claudeMcpOutputTokens(settings: RunResourceSettings | undefined, contextWindow?: number, step?: StepToolResultLimit): number {
+  const { maxBytes } = resolveToolResultBound(settings ?? DEFAULT_RUN_RESOURCE_SETTINGS, contextWindow, step);
   return Math.max(MIN_CLAUDE_MCP_OUTPUT_TOKENS, Math.ceil(maxBytes));
 }
 
@@ -403,6 +403,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     runId,
     nodeId,
     runResourceMarkers,
+    toolResults,
     sessionResume,
     systemPromptPolicy = 'stable',
     onSessionEvent,
@@ -950,13 +951,14 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             // processToolCalls, so without bounding here the guarantee would
             // silently not apply on Claude-subscription runs. Spill oversized
             // results to a run resource and show a head+tail preview instead.
-            if (conversationId) {
+            const resultStore = toolResults?.store ?? conversationId;
+            if (resultStore) {
               try {
                 const settings = runResourceSettings ?? await getRunResourceSettings();
                 abortController.signal.throwIfAborted();
                 if (toolScopeClosed) throw new Error('Claude tool scope has ended.');
                 const bounded = await boundToolResult({
-                  conversationId,
+                  conversationId: resultStore,
                   toolCallId: callId,
                   server,
                   toolName: originalTool,
@@ -964,6 +966,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
                   content: resultContent,
                   settings,
                   contextWindow: model.contextWindow,
+                  limit: toolResults?.limit,
                 });
                 if (bounded.spilled) {
                   resultContent = bounded.content;
@@ -1062,7 +1065,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     childEnv.CLAUDE_CODE_OAUTH_TOKEN = apiKey;
     childEnv.CLAUDE_CODE_STARTUP_FAILURE_RESULTS = '1';
     childEnv.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS = '1';
-    childEnv.MAX_MCP_OUTPUT_TOKENS = String(claudeMcpOutputTokens(runResourceSettings, model.contextWindow));
+    childEnv.MAX_MCP_OUTPUT_TOKENS = String(claudeMcpOutputTokens(runResourceSettings, model.contextWindow, toolResults?.limit));
     delete childEnv.ANTHROPIC_API_KEY;
 
     // #1408 opt-in warm process: a request that starts a fresh Claude session
