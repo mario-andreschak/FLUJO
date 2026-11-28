@@ -44,6 +44,7 @@ export interface ClaudeSpareBinding {
   canUseTool: CanUseTool;
   preToolUse: HookCallback;
   postToolBatch: HookCallback;
+  sessionStart: HookCallback;
   tools: ReadonlyMap<string, ToolHandler>;
 }
 
@@ -231,6 +232,7 @@ export function prepareClaudeSpare(params: {
     canUseTool: CanUseTool;
     preToolUse: HookCallback;
     postToolBatch: HookCallback;
+    sessionStart: HookCallback;
     toolHandler: (name: string) => ToolHandler;
   }) => Options;
 }): void {
@@ -257,6 +259,8 @@ export function prepareClaudeSpare(params: {
       postToolBatch: (input, toolUseId, opts) => binding.current
         ? binding.current.postToolBatch(input, toolUseId, opts)
         : Promise.resolve({ continue: false, stopReason: unbound }),
+      sessionStart: (input, toolUseId, opts) => binding.current
+        ? binding.current.sessionStart(input, toolUseId, opts) : Promise.resolve({}),
       toolHandler: name => (args, extra) => {
         const handler = binding.current?.tools.get(name);
         return handler ? handler(args, extra)

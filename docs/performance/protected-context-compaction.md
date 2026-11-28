@@ -20,10 +20,22 @@ Before shortening, the exact rejected request is stored as a searchable archive
 (original roles and message IDs; `read_resource` with `search_text`), and the
 shortened request points to it. If that archive cannot be written, the retry
 still runs without the pointer; the saved conversation is unchanged either way.
-These parts come from PR #1327. Two of its parts were not taken: a fixed
-96,000-token budget for models without a known window, which would refuse
-requests a larger model accepts, and capturing every small tool result on every
-refit, which rewrites them each turn without an idempotency key.
+These parts come from PR #1327. Its two remaining parts now work without a
+fixed limit (November 28, 2026):
+
+- Instead of a fixed 96,000-token budget for models without a known window,
+  the size a provider refused becomes that model's input budget for an hour
+  (`rememberContextRejection` in `handlers/contextWindowFit.ts`). The number
+  the refusal states wins ("maximum context length is …", "prompt is too long:
+  … > … maximum"); otherwise 70% of the refused request. Each refusal can only
+  lower it while it lasts, it applies to the summary trigger and the preflight
+  refit, and it is forgotten after an hour, so a larger window needs no restart
+  and no setting.
+- At the emergency boundary every tool result is stored, not only oversized
+  ones, and arguments longer than 256 characters too. A completed group of
+  small results can then leave the wire as an exact receipt instead of making
+  the request impossible. Markers are rebuilt from the store on every call, so
+  each payload is written once, not on every long turn.
 
 Completed tool groups can leave an emergency wire only when runtime-captured
 resource metadata is bound to each exact call ID. A URI mentioned in a tool
@@ -153,14 +165,105 @@ before later turns can use delta-only resume.
 
 | Route | FLUJO summary and masking | Provider's own compaction | When saved native state is dropped |
 |---|---|---|---|
-| Chat Completions, Anthropic Messages, Gemini, Ollama | Yes, plus the last-resort refit | Not used. The Anthropic adapter does not send `compact_20260112` | No reusable native window; per-message signatures stay with their messages |
+| Anthropic Messages (`anthropic` adapter) | Exact records, retained user turns and the last-resort refit always; FLUJO's own summarizer when Anthropic's is refused, missing or the history is too long for one request | Anthropic writes the summary (on-demand compaction, beta `compact-2026-09-04`); FLUJO keeps the signed block with its summary and sends it back first and unchanged | A refused block is sent once more as plain text; a model change, a changed prefix or a new policy makes a new summary |
+| Chat Completions, Gemini, Ollama | Yes, plus the last-resort refit | Not used | No reusable native window; per-message signatures stay with their messages |
 | Responses (`openai-responses`, `openrouter-agent`) | A new summary starts only with a new user request; tool follow-ups of the same request reuse it or stay unsummarized, so signed output can be replayed | Compaction items the provider returns are kept and replayed unchanged; FLUJO does not ask for server-side compaction | Connection, model, provider, endpoint, credential, tool or source-prefix change |
 | Codex | Yes, capped at 220,000 tokens, plus the 980,000-character transport refit | Codex's own `contextCompaction` items are accepted; `thread/compact/start` is allowed but FLUJO never starts it by itself | Prefix hash (`native-history-v2`) or endpoint change starts a new thread |
-| Claude Agent SDK | Yes, on the text projection | The SDK manages its own session; FLUJO does not control it | Prefix hash (`native-history-v2`) change starts a new session |
+| Claude Agent SDK | Yes, on the text projection | Claude Code compacts its own session; right after, its `SessionStart` hook (source `compact`) puts FLUJO's standing instructions and exact receipts back in | Prefix hash (`native-history-v2`) change starts a new session; so does a carry that could not hold every record |
 
 Only one owner rewrites a given request: FLUJO's summary replaces history on
 the wire it sends, and native windows are reused only while their recorded
 prefix still matches that wire.
+
+### Anthropic's own compaction (November 28, 2026)
+
+On the Anthropic (Native) route Anthropic writes the summary itself
+([on-demand compaction](https://platform.claude.com/docs/en/build-with-claude/compaction-on-demand),
+beta `compact-2026-09-04`; Anthropic's docs prefer it to the token-threshold
+`compact_20260112` form). FLUJO still decides when to compact, exactly as for
+its own summary, and sends one request with `compaction: { type: "summarize" }`
+carrying the same leading system messages, the same tools and exactly the
+messages the summary replaces, the final reply included. Its `instructions`
+are FLUJO's own summary rules, so the same things survive whichever side
+writes the summary. When the conversation already opens with an earlier signed
+summary of the same prefix, that block opens the request ("compact again").
+
+The answer is one signed `compaction` block. FLUJO keeps it field for field
+with the summary (`WireSummaryArtifact.anthropicCompaction`), beside the
+summary as text. On every later request the adapter sends the block first, as
+the opening content of the first assistant turn, with the beta header and a
+cache breakpoint after it. FLUJO's exact records follow it unchanged in the
+same turn: recorded source observations, execution receipts, resource locators
+and the archive pointer, then the retained original user turns. The model can
+therefore drop nothing that FLUJO keeps itself. The saved conversation never
+changes, and the block survives a restart with the rest of the summary
+metadata.
+
+Fallbacks, all automatic and without a setting:
+
+- The endpoint or a gateway refuses the feature, the summary is cut off, the
+  model calls a tool or refuses, or the summary writes FLUJO's own record
+  headings: FLUJO's own summarizer runs in the same pass, and this model gets
+  FLUJO summaries for 30 minutes before the native one is tried again
+  (`services/model/adapters/anthropicCompaction.ts`).
+- An overload or a dropped connection: FLUJO's summarizer runs this time, and
+  the next compaction tries the native one again.
+- The history is too long for one native request: FLUJO's hierarchical
+  summarizer runs; a native request is never shortened, because its summary
+  must cover exactly what it replaces.
+- A saved block is refused later (signature, content, unknown beta): the same
+  summary goes once more as plain text, so the turn still succeeds.
+- No summary at all: the full saved history goes out with the last-resort
+  refit, as before, and the next model call tries again.
+
+### Fidelity checks on every summary
+
+A generated summary, FLUJO's or Anthropic's, may not write a line that only
+the runtime writes: `## Execution Receipts`, `## Recorded Source Observations`,
+`## Preserved Resources` or the archive pointer. Before this check a
+summarizer could add its own receipt block after the five sections; when a
+history had no real receipts, the next summary carried that invented receipt as
+an exact record. Such summaries are now refused (`forgesRuntimeRecords`).
+FLUJO's own summaries must still contain the five sections; Anthropic's must be
+complete (the API returns `stop_reason: "compaction"` only for a whole summary)
+and not end cut off. Both must shrink the next request.
+
+### What every summary records
+
+Each summary adds a `measurement` to its `summary` event in the model input
+record (`ContextCompactionMeasurement`): who wrote it (`anthropic-native` or
+`flujo`), whether a saved one was reused, wall-clock time, summarizer requests,
+provider-reported input, output and cached tokens, FLUJO's size estimate of the
+next request without and with the summary, retained user turns, exact receipts,
+the app version, the policy version, a digest of the summary prompt and, when a
+native summary was not used on a route that has one, why. Real runs therefore
+measure their own cost, latency and savings, tied to the exact revision and
+configuration.
+
+### How this is checked automatically
+
+- `__tests__/model/anthropicNativeCompaction.test.ts`: the real Anthropic SDK
+  against `scripts/anthropic-stand-in.mjs`, the shared local stand-in of
+  Anthropic's service, which applies the documented compaction rules and signs
+  every summary (its own checks: `scripts/anthropic-stand-in.test.mjs`).
+  The request shape, the byte-for-byte block, the plain-text resend and every
+  refusal path.
+- `__tests__/model/claudeCodeStandIn.test.ts`: the Claude Code bundled with
+  the Agent SDK compacts its own session against the same stand-in, and the
+  next request carries FLUJO's standing instructions again.
+- `__tests__/model/anthropicNativeCompactionFlow.test.ts`: the same stand-in
+  behind `ModelHandler.callModel`: a native summary with FLUJO records after
+  it, reuse and a restart with the same bytes, ten successive native summaries
+  each built on the block before it with the prohibition intact, and every
+  fallback including recovery after the 30-minute pause.
+- `__tests__/model/compactionFidelity.test.ts`: forged record blocks are
+  refused, a provider summary is used word for word with FLUJO records after
+  it, and required instructions stay when no model chooses them.
+- `__tests__/model/claudeCompactionCarry.test.ts`: the carry after Claude
+  Code's own compaction.
+- `__tests__/model/learnedContextLimit.test.ts` and
+  `__tests__/model/contextOverflowRefit.test.ts`: learned limits and small
+  results stored at the emergency boundary.
 
 Visual compaction was removed (#1449): it could not tell when a model misread
 the rendered pages, so it could not be on for everyone. Run resources it saved

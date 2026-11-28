@@ -87,6 +87,7 @@ jest.mock('@/backend/services/model/adapters', () => ({
 }));
 
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
+import { __resetLearnedContextLimits } from '@/backend/execution/flow/handlers/contextWindowFit';
 import { getCompactionGlobalSettings } from '@/backend/execution/flow/handlers/modelHandlerSettings';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
@@ -138,6 +139,8 @@ const toolContentOf = (msgs: OpenAI.ChatCompletionMessageParam[]): string => {
 };
 
 beforeEach(() => {
+  // Each case starts without a size an earlier case's refusal taught.
+  __resetLearnedContextLimits();
   readRunResourceBoundedMock.mockReset();
   loadItemMock.mockReset().mockImplementation(async (_key: unknown, fallback: unknown) => fallback);
   conversationStates.clear();
@@ -712,6 +715,39 @@ describe('context-length overflow refit', () => {
     expect(toolContentOf(calls[0])).toBe(HUGE);
   });
 
+  it('stores small results and long arguments once at the emergency boundary, so their groups can leave as exact receipts (#1327)', async () => {
+    getModelMock.mockResolvedValue({ id: 'model-1', name: 'test-model', provider: 'openai', contextWindow: 6_100, maxTokens: 3700 });
+    let written = 0;
+    writeRunResourceMock.mockImplementation(async (request: { producedBy: { source: string; toolCallId: string } }) => ({
+      uri: `flujo://run/small-store/${request.producedBy.source}-${request.producedBy.toolCallId}-${written++}`,
+      size: 1, kind: 'text', mimeType: 'text/plain', producedBy: request.producedBy,
+    }));
+    const args = JSON.stringify({ query: 'q'.repeat(300) });
+    const messages = [
+      { role: 'user', content: 'Do not repeat any completed action.', id: 'u-old', timestamp: 1 },
+      ...Array.from({ length: 8 }, (_, index) => [
+        { role: 'assistant', content: '', id: 'a-' + index, timestamp: 2 + index,
+          tool_calls: [{ id: 'call-' + index, type: 'function', function: { name: 'read', arguments: args } }] },
+        // Each result is below the oversized-result size; none was stored before.
+        { role: 'tool', tool_call_id: 'call-' + index, content: 'x'.repeat(1_500), id: 't-' + index, timestamp: 2 + index },
+      ]).flat(),
+      { role: 'user', content: 'Continue.', id: 'u-now', timestamp: 20 },
+    ];
+    seedState('small-store');
+    const result = await ModelHandler.callModel({ modelId: 'model-1', prompt: '', messages,
+      iteration: 1, maxIterations: 1, nodeId: 'node-1', nodeName: 'Node', conversationId: 'small-store', compactionMode: 'off',
+    } as Parameters<typeof ModelHandler.callModel>[0]);
+    if (!result.success) throw new Error(result.error.message);
+    expect(createCompletionMock).toHaveBeenCalledTimes(1);
+    const sent = JSON.stringify(calls[0]);
+    expect(sent).toContain('flujo://run/small-store/tool-result-call-0');
+    expect(sent).toContain('"arguments_resource\\":\\"flujo://run/small-store/tool-args-call-0');
+    expect(sent).toContain('Do not repeat any completed action.');
+    const sources = writeRunResourceMock.mock.calls.map(([request]) => request.producedBy.source);
+    expect(sources.filter(source => source === 'tool-result')).toHaveLength(8);
+    expect(sources.filter(source => source === 'tool-args')).toHaveLength(8);
+  });
+
   it('retains the reader for captured small results introduced only by the emergency receipt', async () => {
     getModelMock.mockResolvedValue({ id: 'model-1', name: 'test-model', provider: 'openai', contextWindow: 6_100, maxTokens: 3700 });
     listRunResourcesMock.mockResolvedValue(Array.from({ length: 8 }, (_, index) => ({
@@ -772,6 +808,31 @@ describe('context-length overflow refit', () => {
     // The retry succeeded.
     expect(result.success).toBe(true);
     if (result.success) expect(result.value.content).toBe('ok');
+  });
+
+  it('remembers a refused size, so the next turn is shortened before it is sent, and forgets it later (#1327)', async () => {
+    createCompletionMock.mockImplementation((input: { messages: OpenAI.ChatCompletionMessageParam[] }) => {
+      if (toolContentOf(input.messages).length <= 3000) return defaultCreateCompletion(input);
+      calls.push(input.messages);
+      return Promise.resolve({ completion: { error: { message: 'Prompt is too long' } } });
+    });
+    seedState('conv-learn-1');
+    expect((await callModel('conv-learn-1')).success).toBe(true);
+    expect(createCompletionMock).toHaveBeenCalledTimes(2);
+
+    // The model publishes no context window, yet the next turn is not refused again.
+    seedState('conv-learn-2');
+    expect((await callModel('conv-learn-2')).success).toBe(true);
+    expect(createCompletionMock).toHaveBeenCalledTimes(3);
+    expect(toolContentOf(calls[2]).length).toBeLessThan(3000);
+
+    // An hour later the full request is tried again: a larger window needs no restart.
+    const later = Date.now() + 60 * 60_000 + 1;
+    jest.spyOn(Date, 'now').mockReturnValue(later);
+    seedState('conv-learn-3');
+    expect((await callModel('conv-learn-3')).success).toBe(true);
+    expect(createCompletionMock).toHaveBeenCalledTimes(5);
+    expect(toolContentOf(calls[3]).length).toBe(400_000);
   });
 
   it('refits a known-context request before its first provider call', async () => {

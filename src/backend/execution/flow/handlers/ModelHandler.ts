@@ -43,7 +43,6 @@ import { assertCatalogAdmissionCurrent, assertModelCatalogLeaseOwned, withModelC
 import { hydrateRunResourceMedia } from '@/backend/services/model/mediaHandoff';
 import { resolveEffectiveMaxTurns } from './maxTurns';
 import { resolveEffectiveMaxTokens } from './maxTokens';
-import { COMPACTION_SUMMARY_MARKER } from './summarizingCompaction';
 import { withExactSourceRecall } from '../compaction/exactSourceRecall';
 import { isOwnerCredentialBoundModel, normalizeMaxTokens, validateOwnerCredentialBinding, type Model } from '@/shared/types/model';
 import {
@@ -439,15 +438,7 @@ export class ModelHandler {
         'summarized',
         'Replaced on the provider wire by the injected FLUJO conversation summary.',
       );
-      recordContextCompaction(effectiveModelInput, {
-        kind: 'summary',
-        reason: 'Opt-in AI summarization ran before provider dispatch.',
-        before: compaction.artifact.sourceMessageCount,
-        after: 1,
-        unit: 'messages',
-        omittedMessages: compaction.artifact.sourceMessageCount,
-        injectedMarker: COMPACTION_SUMMARY_MARKER,
-      });
+      recordContextCompaction(effectiveModelInput, compaction.event);
     }
 
     // Call generateCompletion once with the materialized provider projection.
@@ -765,7 +756,6 @@ export class ModelHandler {
       // is provider-agnostic.
       const adapter = getCompletionAdapter(model, singlePhysicalAttempt ? 'openai' : undefined);
 
-      log.debug(`calling chatcompletion`)
       log.verbose('calling chatcompletion now with ADAPTER', model.adapter || 'openai')
       log.verbose('calling chatcompletion now with MODEL', model.name)
       log.verbose('calling chatcompletion now with TEMP', temperature)
@@ -1175,6 +1165,7 @@ export class ModelHandler {
               maxTokens: opts?.maxTokens ?? normalizeMaxTokens(model.maxTokens),
               ...(disableReasoningForRecovery ? { disableReasoningForRecovery: true } : {}),
               outputSchema: opts?.outputSchema,
+              nativeCompaction: opts?.nativeCompaction,
               toolNameMap: nativeToolPort ? undefined : opts?.toolNameMap,
               localToolExecutors: nativeToolPort ? undefined : localToolExecutors,
               nativeToolPort,
@@ -1653,7 +1644,7 @@ export class ModelHandler {
       ) {
         const refit = await refitWireAfterContextOverflow({
           modelId, model, opts, apiMessages, apiSourceIds, sanitizedTools, modelInputForArchive,
-          keepRecentMessages, inputBudget, prepareImages,
+          keepRecentMessages, inputBudget, prepareImages, rejection: result.error,
         });
         if (refit) result = await attemptWithLimitRetry(refit.apiMessages, refit.sanitizedTools);
       }

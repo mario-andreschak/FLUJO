@@ -1,5 +1,16 @@
 import type OpenAI from 'openai';
 
+/**
+ * Anthropic's signed summary of earlier turns (on-demand compaction, #1091),
+ * exactly as the API returned it. FLUJO reads `content` and never changes a
+ * field: the block goes back first and byte for byte, or not at all.
+ */
+export interface AnthropicCompactionRecord {
+  /** The model that wrote the summary. */
+  model: string;
+  block: { type: 'compaction'; content: string } & Record<string, unknown>;
+}
+
 /** Opaque signed output, replayed only by the originating Gemini model. */
 export interface ModelProviderMetadata {
   geminiInteraction?: {
@@ -7,6 +18,7 @@ export interface ModelProviderMetadata {
     transcriptHash: string;
     steps: import('@google/genai').Interactions.Step[];
   };
+  anthropicCompaction?: AnthropicCompactionRecord;
 }
 
 /**

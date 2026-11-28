@@ -15,7 +15,9 @@ import {
   ensureReadResourceArmed,
   estimateOutgoingInputTokens,
   OVERFLOW_TOOL_RESULT_HEAD_CHARS,
+  rememberContextRejection,
 } from './contextWindowFit';
+import type { ExecutionError } from '../errors';
 import type { GenerateCompletionOptions } from './modelCompletionContract';
 import type { PreparedProviderWire } from './providerWire';
 
@@ -28,6 +30,8 @@ export type ContextOverflowRefitInput = Pick<PreparedProviderWire,
   modelId: string;
   model: Model;
   opts: GenerateCompletionOptions | undefined;
+  /** The provider's refusal; a size it states becomes this model's budget for a while. */
+  rejection?: ExecutionError;
 };
 
 /**
@@ -45,6 +49,12 @@ export async function refitWireAfterContextOverflow(
     modelId, model, opts, apiMessages, apiSourceIds, sanitizedTools, modelInputForArchive,
     keepRecentMessages, inputBudget, prepareImages,
   } = input;
+  const rejectedEstimate = estimateOutgoingInputTokens(apiMessages, sanitizedTools, model);
+  // Later requests are shortened before sending instead of being refused again.
+  rememberContextRejection(model.id, rejectedEstimate, input.rejection, opts?.maxTokens);
+  // A native summary must cover exactly what it replaces; a shortened copy
+  // would not. The caller falls back to FLUJO's own summary instead (#1091).
+  if (opts?.nativeCompaction) return undefined;
   const beforeChars = JSON.stringify(apiMessages).length;
   let refitMarkers = opts?.runResourceMarkers;
   if (opts?.conversationId) {
@@ -80,7 +90,7 @@ export async function refitWireAfterContextOverflow(
     recordContextCompaction(modelInputForArchive, {
       kind: 'content-truncation',
       reason: 'One automatic retry after provider context rejection.',
-      before: estimateOutgoingInputTokens(apiMessages, sanitizedTools, model),
+      before: rejectedEstimate,
       unit: 'tokens',
       truncatedMessages: reactiveChangedIndexes.length,
       injectedMarker: '[truncated',
@@ -100,7 +110,7 @@ export async function refitWireAfterContextOverflow(
   // be materially smaller even when the catalogue window says it fits.
   const retryTarget = Math.min(inputBudget ?? Infinity, Math.max(
     1,
-    Math.floor(estimateOutgoingInputTokens(apiMessages, sanitizedTools, model) * 0.7),
+    Math.floor(rejectedEstimate * 0.7),
   ));
   let retryEstimate = estimateOutgoingInputTokens(retryMessages, retryTools, model);
   const priorSourceIds = apiSourceIds;

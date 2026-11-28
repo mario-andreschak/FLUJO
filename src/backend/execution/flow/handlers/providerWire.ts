@@ -43,7 +43,7 @@ import {
   ensureReadResourceArmed,
   estimateOutgoingInputTokens,
   OVERFLOW_TOOL_RESULT_HEAD_CHARS,
-  resolveOutgoingInputBudget,
+  effectiveInputBudget,
 } from './contextWindowFit';
 import type { GenerateCompletionOptions } from './modelCompletionContract';
 
@@ -112,8 +112,9 @@ export async function prepareProviderWire(
     return media === message.media ? message : { ...message, media };
   }));
   const projectedSourceIndexes: Array<number | undefined> = [];
+  const routeAdapter = resolveModelAdapter(model.provider, model.adapter);
   const projectedMessages = toApiMessages(messagesWithMaterializedMedia,
-    resolveModelAdapter(model.provider, model.adapter) === 'gemini', projectedSourceIndexes);
+    routeAdapter === 'gemini' || (routeAdapter === 'anthropic' && 'anthropicCompaction'), projectedSourceIndexes);
   // Antigravity CLI rejects unsupported attachments explicitly in its preflight.
   // Filtering them here would turn an image request into text before that
   // check and allow a response from a model that never received the image.
@@ -135,7 +136,10 @@ export async function prepareProviderWire(
   //   1. scopeMessagesForInput (latest-message mode, settled conversation)
   //   2. stripHandoffPlumbing (handoff prose → plain assistant turn)
   //   3. SubflowNode framed-result push
-  if (requiresUserLastMessage(model)) {
+  // A compaction request summarizes every message it is given, a final reply
+  // included (#1091): the summary replaces exactly those messages on the wire.
+  const nativeCompaction = Boolean(opts?.nativeCompaction);
+  if (requiresUserLastMessage(model) && !nativeCompaction) {
     while (apiMessages.length > 0 && apiMessages[apiMessages.length - 1].role === 'assistant') {
       apiMessages = apiMessages.slice(0, -1);
       apiSourceIds = apiSourceIds.slice(0, -1);
@@ -156,7 +160,7 @@ export async function prepareProviderWire(
   // generic wire afterward and still benefit from the bounded content.
   const keepRecentMessages = await historyKeepRecentMessages();
   const codexMayResume = model.adapter === 'codex-cli' && opts?.sessionResume && opts.codexSession;
-  if (!codexMayResume && !opts?.executionExtensionContext && couldCompact(apiMessages, { keepRecentMessages })) {
+  if (!codexMayResume && !nativeCompaction && !opts?.executionExtensionContext && couldCompact(apiMessages, { keepRecentMessages })) {
     const beforeLosslessRefit = apiMessages;
     const compactedMessages = compactForWire(apiMessages, {
       keepRecentMessages,
@@ -310,12 +314,10 @@ export async function prepareProviderWire(
 
   // A known context window lets us prevent a bad first request rather than
   // waiting for the provider to reject it. Only wire messages are refitted;
-  // the persisted conversation remains unchanged. Models without usable
-  // context metadata keep the historical reactive-overflow behavior.
-  const inputBudget = resolveOutgoingInputBudget(
-    model.contextWindow,
-    opts?.maxTokens
-  );
+  // the persisted conversation remains unchanged. A size the provider refused
+  // recently counts too, so a model without catalogue metadata (or with an
+  // overstated one) is not refused on every turn (#1327).
+  const inputBudget = effectiveInputBudget(modelId, model.contextWindow, opts?.maxTokens);
   const hasImages = apiMessages.some(message => Array.isArray(message.content)
     && message.content.some(part => part.type === 'image_url'));
   if (hasImages && !opts?.executionExtensionContext) {
@@ -364,11 +366,13 @@ export async function prepareProviderWire(
     if (estimatedInputTokens > inputBudget) {
       // A constrained private run cannot introduce resource tools or persist
       // model content while recovering from an oversized provider request.
-      if (opts?.executionExtensionContext) {
+      // A shortened copy would make a native summary miss what it replaces.
+      if (opts?.executionExtensionContext || nativeCompaction) {
         return {
           success: false,
-          error: createModelError('context_budget_exceeded',
-            "The private execution request exceeds the model's context budget.", modelId),
+          error: createModelError('context_budget_exceeded', nativeCompaction
+            ? "The history is too long for one native summary request; FLUJO's own summary takes over."
+            : "The private execution request exceeds the model's context budget.", modelId),
         };
       }
       let budgetMarkers = opts?.runResourceMarkers;

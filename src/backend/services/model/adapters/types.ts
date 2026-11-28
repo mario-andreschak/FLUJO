@@ -173,6 +173,12 @@ export interface CompletionInput {
   codexSession?: CodexSessionMetadata;
   /** Structured-output constraint for capable Codex/OpenAI-compatible routes. */
   outputSchema?: Record<string, unknown>;
+  /**
+   * Ask the provider to summarize `messages` itself instead of answering
+   * (#1091). Only the Anthropic adapter supports it: its result carries the
+   * signed summary in `providerMetadata.anthropicCompaction`, or it throws.
+   */
+  nativeCompaction?: { instructions: string };
   /** Replace or invalidate the durable Codex metadata after an adapter turn. */
   onCodexSessionChange?: (session: CodexSessionMetadata | undefined) => void;
   /** Conversation-owned native output; canonical history remains authoritative. */

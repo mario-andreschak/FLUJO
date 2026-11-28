@@ -5,6 +5,7 @@ import { RUN_RESOURCE_SCHEME } from '@/shared/types/runResources';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import type { FlujoFunctionToolCall } from '@/shared/types/openai';
 import type { CompactionProjectionIdentity, WireSummaryArtifact, SummaryRange } from '../compaction/types';
+import type { AnthropicCompactionRecord } from '@/shared/types/openai';
 import { appendSummaryRanges, type SummaryRangePayload } from '../compaction/summaryHierarchy';
 import { inspectJson } from '../compaction/jsonInspection';
 import { digestProjectedMessages } from '../compaction/digest';
@@ -333,6 +334,58 @@ export function validateCompactionSummary(summary: string): boolean {
     && !/\[(?:truncated|incomplete)\]\s*$/i.test(narrative.trim());
 }
 
+/**
+ * The headings of FLUJO's exact records (observations, receipts, resource
+ * locators) and the archive pointer. Only the runtime writes them, from the
+ * actual source. A generated summary that writes one could forge a receipt
+ * that the next summary would carry as real (#1091), so it is refused.
+ */
+const RUNTIME_RECORD_LINE = /^(?:## (?:Recorded Source Observations|Execution Receipts|Preserved Resources)\b|_\(Earlier turns compacted;)/m;
+
+export function forgesRuntimeRecords(generated: string): boolean {
+  return RUNTIME_RECORD_LINE.test(generated);
+}
+
+/**
+ * A provider's own summary (Anthropic native compaction) is complete when the
+ * API says so; it need not use FLUJO's headings. FLUJO still refuses an empty
+ * one, one that ends cut off, and one that writes FLUJO's record headings.
+ */
+export function validateNativeSummary(content: string): boolean {
+  const text = content.trim();
+  return text.length > 0 && !forgesRuntimeRecords(text) && !/\[(?:truncated|incomplete)\]\s*$/i.test(text);
+}
+
+/** A cached summary is reusable only when its generated part still passes the checks it passed when made. */
+function summaryArtifactValid(artifact: WireSummaryArtifact): boolean {
+  const native = artifact.anthropicCompaction;
+  return native
+    ? artifact.summaryText.startsWith(COMPACTION_SUMMARY_MARKER + '\n\n' + native.block.content)
+      && validateNativeSummary(native.block.content)
+    : validateCompactionSummary(artifact.summaryText);
+}
+
+/** The summary as an assistant turn; a native one also carries its signed block for the adapter. */
+function summaryTurn(id: string, text: string, timestamp: number, nodeId: string | undefined,
+  native: AnthropicCompactionRecord | undefined): FlujoChatMessage {
+  return {
+    id, role: 'assistant', content: text, timestamp,
+    ...(nodeId !== undefined ? { processNodeId: nodeId } : {}),
+    ...(native ? { providerMetadata: { anthropicCompaction: native } } : {}),
+  } as FlujoChatMessage;
+}
+
+/**
+ * What a provider's summarizer is told (#1091): FLUJO's own summary rules, so
+ * the same things survive whichever side writes the summary.
+ */
+export function nativeCompactionInstructions(maxCharacters: number): string {
+  const prompt = buildCompactionPrompt();
+  return prompt.system + `\nThe summary must be at most ${Math.floor(maxCharacters)} characters.`
+    + '\nIf the conversation opens with an earlier summary, merge it with everything after it into one up-to-date summary.'
+    + '\nDo not call tools; respond with the summary text only.\n\n' + prompt.user;
+}
+
 const EXECUTION_RECEIPTS_MARKER = '\n\n## Execution Receipts\n';
 const ARCHIVE_POINTER_PREFIX = '\n\n_(Earlier turns compacted;';
 const EARLIER_RECEIPTS = / earlier receipts are in the full source archive\./;
@@ -533,6 +586,13 @@ export interface CompactHistoryDeps {
   ) => Promise<string | undefined>;
   /** Immutable, content-addressed leaf/parent; parents link to exact sources. */
   writeSummaryRange?: (payload: SummaryRangePayload) => Promise<string | undefined>;
+  /**
+   * The provider summarizes these messages itself (Anthropic native
+   * compaction, #1091). `messages` opens with the leading system messages
+   * and, when one exists, the earlier signed summary. Undefined when it
+   * cannot or did not; FLUJO's own summarizer then runs in the same pass.
+   */
+  summarizeNatively?: (messages: FlujoChatMessage[], instructions: string) => Promise<AnthropicCompactionRecord | undefined>;
   now?: () => number;
   uuid?: () => string;
 }
@@ -632,7 +692,7 @@ export async function compactHistory(
     reusable.sourceStartId === split.toSummarize[0]?.id &&
     reusable.sourceEndId === split.toSummarize.at(-1)?.id &&
     reusable.sourceMessageCount === split.toSummarize.length
-    && validateCompactionSummary(reusable.summaryText)
+    && summaryArtifactValid(reusable)
     && validateSourceObservationBlock(reusable.summaryText, observations)
     && receiptBlockMatches(reusable.summaryText, receipts)
     && (!requiresArchive || (typeof reusable.summaryResourceUri === 'string'
@@ -645,13 +705,8 @@ export async function compactHistory(
       summarizedMessageIds = split.toSummarize.filter(message => message.role !== 'user' || !retained.has(message.id))
         .map(message => message.id);
     }
-    const summaryMessage: FlujoChatMessage = {
-      id: reusable.artifactId,
-      role: 'assistant',
-      content: reusable.summaryText,
-      timestamp: reusable.createdAt,
-      ...(opts.nodeId !== undefined ? { processNodeId: opts.nodeId } : {}),
-    } as FlujoChatMessage;
+    const summaryMessage = summaryTurn(reusable.artifactId, reusable.summaryText, reusable.createdAt,
+      opts.nodeId, reusable.anthropicCompaction);
     return {
       wireMessages: withArchivedInstructionBoundary(selectUserInstructions, reusable.summaryResourceUri, withCurrentRequestBoundary(messages, [
         ...leadingSystem,
@@ -666,11 +721,39 @@ export async function compactHistory(
 
   if (requiresArchive && !deps.writeAnchor && !deps.writeSummaryRange) return null;
 
-  let summaryBody: string;
+  let summaryBody = '';
   let summaryRanges: SummaryRange[] | undefined;
   let hierarchyUri: string | undefined;
   const protectedIds = new Set<string>();
-  try {
+  const narrativeLimit = opts.inputBudgetTokens ? Math.max(512, Math.min(6000, opts.inputBudgetTokens / 8)) : 12000;
+  let native: AnthropicCompactionRecord | undefined;
+  if (deps.summarizeNatively) {
+    // "Compact again": an earlier signed summary of the same prefix opens the
+    // request, and the new block replaces it and everything after it.
+    const nativeEnd = compatibleArtifact?.anthropicCompaction && compatibleArtifact.sourceEndId
+      ? split.toSummarize.findIndex(message => message.id === compatibleArtifact.sourceEndId) : -1;
+    const extendsPrevious = nativeEnd >= 0 && nativeEnd < split.toSummarize.length - 1
+      && digestProjectedMessages([...split.leadingSystem, ...split.toSummarize.slice(0, nativeEnd + 1)]) === compatibleArtifact!.sourceDigest
+      && summaryArtifactValid(compatibleArtifact!);
+    const request = extendsPrevious
+      ? [summaryTurn(compatibleArtifact!.artifactId, compatibleArtifact!.summaryText, compatibleArtifact!.createdAt,
+        opts.nodeId, compatibleArtifact!.anthropicCompaction), ...split.toSummarize.slice(nativeEnd + 1)]
+      : split.toSummarize;
+    try {
+      const record = await deps.summarizeNatively([...split.leadingSystem, ...request], nativeCompactionInstructions(narrativeLimit));
+      if (record && validateNativeSummary(record.block.content)) native = record;
+      else if (record) log.warn('compactHistory: native summary failed validation; using FLUJO\'s own summarizer');
+    } catch (error) {
+      if ((error as { code?: string })?.code === 'flow_execution_authority_lost'
+        || (error as { name?: string })?.name === 'AbortError') throw error;
+      log.warn('compactHistory: native summary failed; using FLUJO\'s own summarizer', error);
+    }
+  }
+  if (native) {
+    summaryBody = native.block.content;
+    // Every old user turn is eligible; required ones stay, the newest others fill the bound.
+    if (selectUserInstructions) split.protectedMessages.forEach(message => protectedIds.add(message.id));
+  } else try {
     let unsummarized = split.toSummarize;
     let previousSummary = split.previousSummary;
     const priorEnd = compatibleArtifact?.sourceEndId
@@ -679,7 +762,7 @@ export async function compactHistory(
       && (!selectUserInstructions || Array.isArray(compatibleArtifact.protectedUserIds))
       && (!deps.writeSummaryRange || Array.isArray(compatibleArtifact.summaryRanges))
       && digestProjectedMessages([...split.leadingSystem, ...split.toSummarize.slice(0, priorEnd + 1)]) === compatibleArtifact.sourceDigest
-      && validateCompactionSummary(compatibleArtifact.summaryText)) {
+      && summaryArtifactValid(compatibleArtifact)) {
       unsummarized = split.toSummarize.slice(priorEnd + 1);
       previousSummary = compatibleArtifact.summaryText.slice(COMPACTION_SUMMARY_MARKER.length).trim();
       summaryRanges = compatibleArtifact.summaryRanges;
@@ -701,7 +784,7 @@ export async function compactHistory(
       .split('\n\n_(Earlier turns compacted;')[0];
     const summarizeChunk = async (chunk: FlujoChatMessage[], leaf: boolean, previous?: string): Promise<string> => {
       const prompt = buildCompactionPrompt({ previousSummary: previous });
-      const maxCharacters = opts.inputBudgetTokens ? Math.max(512, Math.min(6000, opts.inputBudgetTokens / 8)) : 12000;
+      const maxCharacters = narrativeLimit;
       let failure: unknown;
       // These are read-only internal calls. Retry a malformed/incomplete answer
       // locally, before it can abandon an otherwise valid large-history tree.
@@ -724,7 +807,7 @@ export async function compactHistory(
             body = selected.summary;
           }
           if (!body || body.length > maxCharacters || !validateCompactionSummary(body)
-            || body.includes(STRUCTURED_OBSERVATIONS_HEADING)) throw new Error('Invalid range summary');
+            || forgesRuntimeRecords(body)) throw new Error('Invalid range summary');
           for (const id of selectedIds) protectedIds.add(id);
           return body;
         } catch (error) {
@@ -759,8 +842,8 @@ export async function compactHistory(
     summarizedMessageIds = split.toSummarize.filter(message => message.role !== 'user' || !retained.has(message.id))
       .map(message => message.id);
   }
-  if (!summaryBody || !validateCompactionSummary(summaryBody)
-    || summaryBody.includes(STRUCTURED_OBSERVATIONS_HEADING)) {
+  if (native ? !validateNativeSummary(summaryBody)
+    : !summaryBody || !validateCompactionSummary(summaryBody) || forgesRuntimeRecords(summaryBody)) {
     log.warn('compactHistory: incomplete summary returned; falling back (no mutation)');
     return null;
   }
@@ -806,13 +889,8 @@ export async function compactHistory(
     ? `\n\n_(Earlier turns compacted; full pre-summary history preserved at ${anchorUri}.)_`
     : '';
 
-  const summaryMessage: FlujoChatMessage = {
-    id: uuid(),
-    role: 'assistant',
-    content: `${COMPACTION_SUMMARY_MARKER}\n\n${summaryBody}${anchorLine}`,
-    timestamp: now(),
-    ...(opts.nodeId !== undefined ? { processNodeId: opts.nodeId } : {}),
-  } as FlujoChatMessage;
+  const summaryMessage = summaryTurn(uuid(), `${COMPACTION_SUMMARY_MARKER}\n\n${summaryBody}${anchorLine}`, now(),
+    opts.nodeId, native);
 
   const wireMessages = withArchivedInstructionBoundary(selectUserInstructions, anchorUri, withCurrentRequestBoundary(messages, [
     ...leadingSystem,
@@ -834,7 +912,8 @@ export async function compactHistory(
     summaryText: String(summaryMessage.content ?? ''),
     summaryResourceUri: anchorUri,
     ...(retainedUserIds ? { protectedUserIds: retainedUserIds } : {}),
-    ...(summaryRanges ? { summaryRanges } : {}),
+    ...(summaryRanges && !native ? { summaryRanges } : {}),
+    ...(native ? { anthropicCompaction: native } : {}),
     policyVersion: opts.policyVersion,
     modelId: opts.modelId,
     schemaVersion: 1,
@@ -842,6 +921,7 @@ export async function compactHistory(
   };
 
   log.info('compactHistory: built wire summary artifact', {
+    native: Boolean(native),
     summarized: split.toSummarize.length,
     kept: split.toKeep.length,
     updatedPrevious: Boolean(split.previousSummary),

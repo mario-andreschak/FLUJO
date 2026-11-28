@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  API_VERSIONS, createPromptCache, minimumCacheableTokens, oauthUsageBody, startAnthropicStandIn, subscriptionWindows,
-  unifiedRateLimitHeaders, versionViolation,
+  API_VERSIONS, COMPACTION_BETA, createPromptCache, minimumCacheableTokens, oauthUsageBody, signSummary, startAnthropicStandIn,
+  subscriptionWindows, unifiedRateLimitHeaders, versionViolation,
 } from './anthropic-stand-in.mjs';
 
 const OAUTH = { authorization: 'Bearer sk-ant-oat01-stand-in-placeholder', 'content-type': 'application/json' };
@@ -141,4 +141,48 @@ test('the usage page and the Models API answer in their documented shapes', asyn
   assert.equal(models.has_more, false);
   assert.ok(models.data.every((model) => model.type === 'model' && model.id && model.display_name && model.created_at));
   assert.equal((await fetch(`${standIn.baseUrl}/v1/models/claude-unknown`, { headers: KEY })).status, 404);
+});
+
+test('on-demand compaction returns one signed block and holds later requests to the documented rules', async () => {
+  const standIn = await startAnthropicStandIn();
+  try {
+    const BETA = { ...KEY, 'anthropic-beta': COMPACTION_BETA };
+    const history = [{ role: 'user', content: 'Plan the data model.' }, { role: 'assistant', content: 'Recipe and Step.' }];
+    assert.match((await post(standIn, KEY, { model: 'claude-opus-5-5', max_tokens: 4096, messages: history, compaction: { type: 'summarize' } }))
+      .body.error.message, /requires anthropic-beta/);
+    const compacted = await post(standIn, BETA, { model: 'claude-opus-5-5', max_tokens: 4096, messages: history, compaction: { type: 'summarize' } });
+    assert.equal(compacted.body.stop_reason, 'compaction');
+    const [block] = compacted.body.content;
+    assert.deepEqual(Object.keys(block).sort(), ['content', 'signature', 'type']);
+    assert.equal(block.signature, signSummary(block.content));
+    assert.equal(compacted.body.usage.input_tokens, 0);
+    assert.equal(compacted.body.usage.iterations[0].type, 'compaction');
+    assert.deepEqual(standIn.compaction.signed, [block]);
+
+    const next = (messages, headers = BETA) => post(standIn, headers, { model: 'claude-opus-5-5', max_tokens: 256, messages });
+    const later = [{ role: 'assistant', content: [block] }, { role: 'user', content: 'Fields for Recipe?' }];
+    assert.equal((await next(later)).response.status, 200);
+    assert.match((await next(later, KEY)).body.error.message, /does not match any of the expected tags/);
+    assert.equal((await next([{ role: 'user', content: 'x' }, ...later])).body.error.details.error_code, 'compaction_block_misplaced');
+    assert.equal((await next([{ role: 'assistant', content: [{ ...block, content: `${block.content}!` }] }, later[1]]))
+      .body.error.details.error_code, 'compaction_signature_invalid');
+    assert.match((await next([{ role: 'assistant', content: [{ ...block, citations: null }] }, later[1]])).body.error.message, /Extra inputs/);
+    standIn.compaction.refuseReplay = true;
+    assert.equal((await next(later)).response.status, 400);
+
+    // A cut-off summary is still a 200, with no block; a gateway may not know the beta at all.
+    standIn.compaction.reply = () => ({ stopReason: 'max_tokens' });
+    const cut = await post(standIn, BETA, { model: 'claude-opus-5-5', max_tokens: 64, messages: history, compaction: { type: 'summarize' } });
+    assert.deepEqual([cut.response.status, cut.body.stop_reason, cut.body.content.length], [200, 'max_tokens', 0]);
+    standIn.compaction.knownBeta = false;
+    assert.match((await next(later)).body.error.message, /Unexpected value/);
+    // An unresolved tool call cannot be summarized.
+    standIn.compaction.knownBeta = true;
+    standIn.compaction.reply = undefined;
+    const pending = [...history, { role: 'user', content: 'Look it up.' }, { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'lookup', input: {} }] }];
+    assert.match((await post(standIn, BETA, { model: 'claude-opus-5-5', max_tokens: 64, messages: pending, compaction: { type: 'summarize' } }))
+      .body.error.message, /tool call with no result/);
+  } finally {
+    await standIn.close();
+  }
 });

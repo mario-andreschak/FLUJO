@@ -2,7 +2,7 @@ import OpenAI from 'openai';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import type { ModelInputSnapshot, ModelInputProvenanceEntry } from './types';
 import { mediaDataUrl, type ModelMediaPart } from '@/shared/types/model/media';
-import { requireFunctionToolCalls } from '@/shared/types/openai';
+import { requireFunctionToolCalls, type ModelProviderMetadata } from '@/shared/types/openai';
 
 /** True when this assistant turn is mid-action (made tool calls). */
 function isToolCallTurn(
@@ -482,7 +482,8 @@ function userContentWithMedia(
  */
 export function toApiMessages(
   messages: FlujoChatMessage[],
-  preserveProviderMetadata = false,
+  /** true keeps all provider metadata; a key keeps only that kind (a signed Anthropic summary, #1091). */
+  preserveProviderMetadata: boolean | keyof ModelProviderMetadata = false,
   sourceMessageIndexes?: Array<number | undefined>,
 ): OpenAI.ChatCompletionMessageParam[] {
   const out: OpenAI.ChatCompletionMessageParam[] = [];
@@ -510,7 +511,10 @@ export function toApiMessages(
     const message = stripped[index];
     const sourceIndex = strippedIndexes?.[index];
     const { id, timestamp, disabled, processNodeId, depth, usage, usageNotReported, contextUsage, cutOff, noAnswer, injected, agentMessage, triggerEvent, goalTurn, media, providerMetadata, ...wire } = message;
-    const rest = preserveProviderMetadata && providerMetadata ? { ...wire, providerMetadata } : wire;
+    const kept = preserveProviderMetadata === true ? providerMetadata
+      : preserveProviderMetadata && providerMetadata?.[preserveProviderMetadata]
+        ? { [preserveProviderMetadata]: providerMetadata[preserveProviderMetadata] } : undefined;
+    const rest = kept ? { ...wire, providerMetadata: kept } : wire;
 
     if (rest.role === 'tool') {
       // Tool-produced media (captureToolResult) rides on the tool message but

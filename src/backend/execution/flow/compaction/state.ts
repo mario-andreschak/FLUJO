@@ -22,12 +22,20 @@ function boundSummaryArtifacts(candidates: readonly WireSummaryArtifact[]): Wire
     if (identities.has(identity)) continue;
     identities.add(identity);
     const size = artifact.summaryText.length + JSON.stringify(artifact.summaryRanges ?? []).length
-      + JSON.stringify(artifact.protectedUserIds ?? []).length;
+      + JSON.stringify(artifact.protectedUserIds ?? []).length + JSON.stringify(artifact.anthropicCompaction ?? null).length;
     if (retained.length >= 64 || characters + size > 1_048_576) continue;
     characters += size;
     retained.push(artifact);
   }
   return retained.reverse();
+}
+
+/** A signed summary is kept only whole: a block missing its text or type goes. */
+function isAnthropicCompaction(value: unknown): boolean {
+  const record = value as { model?: unknown; block?: { type?: unknown; content?: unknown } } | null;
+  return Boolean(record) && typeof record === 'object' && typeof record!.model === 'string'
+    && Boolean(record!.block) && typeof record!.block === 'object' && record!.block!.type === 'compaction'
+    && typeof record!.block!.content === 'string' && record!.block!.content.length > 0;
 }
 
 function isArtifact(value: unknown): value is WireSummaryArtifact {
@@ -44,6 +52,7 @@ function isArtifact(value: unknown): value is WireSummaryArtifact {
     typeof artifact.createdAt === 'number' &&
     (artifact.protectedUserIds === undefined || (Array.isArray(artifact.protectedUserIds)
       && artifact.protectedUserIds.every(id => typeof id === 'string'))) &&
+    (artifact.anthropicCompaction === undefined || isAnthropicCompaction(artifact.anthropicCompaction)) &&
     (artifact.summaryRanges === undefined || (Array.isArray(artifact.summaryRanges) && artifact.summaryRanges.length <= 256
       && artifact.summaryRanges.every(range => range && Number.isSafeInteger(range.level) && range.level >= 0
         && Number.isSafeInteger(range.sourceMessageCount) && range.sourceMessageCount > 0
