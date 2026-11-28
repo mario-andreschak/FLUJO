@@ -106,10 +106,12 @@ The container smoke (`scripts/smoke-container-image.mjs`, see
 runs the production image on 1 CPU and 2 GB, the size of the voice app's cloud
 machine. Its voice check sends direct calls, tool turns and a continued
 conversation through a Claude subscription model (the bundled Claude Code
-against a stand-in of Anthropic's API) with the three speed settings off and
-then on, and prints first-run and later-run times, the time until the model
-request, MCP list requests and conversation saves per turn in the CI job
-summary. It needs no Claude token and replaces the manual check on that machine.
+against a stand-in of Anthropic's API), holds them to fixed limits (later
+requests take the ready Claude process, one MCP list request and at most 3
+saves per tool turn, at most 2 saves per continued turn), and prints first-run
+and later-run times, the time until the model request, MCP list requests and
+conversation saves per turn in the CI job summary. It needs no Claude token
+and replaces the manual check on that machine.
 
 ## What the columns mean
 

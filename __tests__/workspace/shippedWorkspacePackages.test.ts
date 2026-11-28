@@ -129,12 +129,17 @@ describe('workspace copies of shipped application packages', () => {
       await fs.writeFile(path.join(fixture, 'bundledConsentDiagnostic.mjs'), ts.transpileModule(diagnosticSource, {
         compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
       }).outputText);
+      const settingSource = await fs.readFile(path.join(process.cwd(), 'src/shared/testSetting.ts'), 'utf8');
+      await fs.writeFile(path.join(fixture, 'testSetting.mjs'), ts.transpileModule(settingSource, {
+        compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+      }).outputText);
       await fs.writeFile(path.join(fixture, 'shippedServers.mjs'),
         'export const SHIPPED_MCP_SERVERS = ' + ${JSON.stringify(JSON.stringify(SHIPPED_MCP_SERVERS))} + '; export function shippedMcpAppRoot(){ return process.env.FLUJO_APP_ROOT; }');
       const compiler = webpack({ mode: 'production', target: 'node', optimization: { minimize: false },
         entry: path.join(fixture, 'helper.mjs'), resolve: { extensions: ['.mjs', '.js'], fullySpecified: false,
           alias: { '../security/bundledMcpDependencyGraph': path.join(fixture, 'bundledMcpDependencyGraph.mjs'),
-            '../security/bundledConsentDiagnostic': path.join(fixture, 'bundledConsentDiagnostic.mjs') } },
+            '../security/bundledConsentDiagnostic': path.join(fixture, 'bundledConsentDiagnostic.mjs'),
+            '@/shared/testSetting': path.join(fixture, 'testSetting.mjs') } },
         module: { rules: [{ test: /\\.mjs$/, type: 'javascript/auto', parser: { createRequire: true }, resolve: { fullySpecified: false } }] },
         output: { path: path.join(fixture, 'bundle'), filename: 'helper.cjs', library: { type: 'commonjs2' } },
       });
@@ -156,9 +161,10 @@ describe('workspace copies of shipped application packages', () => {
       process.stdout.write(JSON.stringify(evidence));
     `], { cwd: process.cwd(), timeout: 30_000, maxBuffer: 1024 * 1024 });
     const evidence = JSON.parse(result.stdout);
-    expect(evidence.runtimeError).toBeUndefined();
+    // Compile errors first: a module the helper newly imports must be added to the fixture above.
     expect(evidence.errors).toEqual([]);
     expect(evidence.warnings).toEqual([]);
+    expect(evidence.runtimeError).toBeUndefined();
     expect(evidence.values).toEqual(['external dependency works']);
   }, 35_000);
 

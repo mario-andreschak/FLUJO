@@ -62,15 +62,19 @@ bytes against the recorded digest and linux/amd64 image.
    token on that machine. A Claude subscription model runs through the bundled
    Claude Code, which sends its model requests to a stand-in of Anthropic's
    Messages API (`ANTHROPIC_BASE_URL`) with a placeholder token, and one MCP tool
-   comes from a stand-in MCP server. Direct calls, tool turns and a continued
-   conversation run first with *Keep a Claude process ready*, *Reuse MCP tool
-   lists* and *Fewer saves per turn* off, then on (set in the stored Settings,
-   as a user does). The check judges what FLUJO and the stand-ins observed,
-   never timings (a busy machine scatters them): with the settings on, a Claude
-   Code process waits ready and at least two of three later requests of each
-   kind take one (FLUJO's step timer marks `claude.claimed`), MCP list requests
-   drop and a turn saves fewer times; with them off, none of that happens.
-   Every finished turn must be stored. The times are reported, not judged.
+   comes from a stand-in MCP server. Four direct calls, four tool turns and four
+   turns of one continued conversation run on the path every install uses
+   (since #1449 the ready Claude process, the reused MCP lists and the fewer
+   saves per turn are always on). The check judges what FLUJO and the
+   stand-ins observed, never timings (a busy machine scatters them), against
+   fixed limits from the #1408 measurements, as the median of the later runs
+   (`VOICE_LIMITS` in `inside.mjs`): a Claude Code process waits ready and at
+   least two of three later direct calls and tool turns take one (FLUJO's step
+   timer marks `claude.claimed`; a continued turn resumes its Claude session
+   and starts its own process), a tool turn sends at most one MCP list request
+   and saves the conversation at most 3 times, and a continued turn saves it
+   at most 2 times. Every finished turn must be stored. The times are
+   reported, not judged.
 5. The container is killed (`docker kill`) and started again; every finished
    turn must still be there and both models must still answer.
 

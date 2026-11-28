@@ -7,7 +7,7 @@
 //               not) and a direct model call, with the settings a new install has
 //   voice       the voice-app check that used to need a real Claude token on a 1-vCPU machine:
 //               a Claude subscription model (the bundled Claude Code, talking to a stand-in of
-//               Anthropic's API) and one MCP tool, first with the three speed settings off, then on
+//               Anthropic's API) and one MCP tool, held to the fixed limits in VOICE_LIMITS
 //   verify      after a hard stop and restart: every finished turn is still stored and both
 //               models still answer
 import { readdir, readFile } from 'node:fs/promises';
@@ -26,7 +26,6 @@ export const STAND_IN_PORTS = Object.freeze({ openai: 4310, anthropic: 4311, mcp
 export const RESULT_PREFIX = 'FLUJO_CONTAINER_SMOKE ';
 export const TRACE_FILE = '/tmp/flujo-turn-trace.jsonl';
 export const PLACEHOLDER_TOKEN = 'sk-ant-oat01-container-smoke-stand-in-not-a-token';
-export const SPEED_SETTINGS = Object.freeze(['claudeWarmProcess', 'mcpListCache', 'lowLatencySaves']);
 const APP = process.env.FLUJO_SMOKE_APP_URL ?? 'http://127.0.0.1:4200';
 const RUNS = 4;
 // Like a caller speaking between turns; a prepared Claude process has time to start.
@@ -132,16 +131,6 @@ export function assertTurnsStored(texts, turns, label) {
     }
     position = answer + 1;
   }
-}
-
-/** Speed settings are switched the way a user does it: in the stored Settings. */
-async function setSpeedSettings(on) {
-  const current = (await api('/api/storage?key=speech_settings'))?.value ?? {};
-  const experimental = { ...(current.experimental ?? {}) };
-  for (const name of SPEED_SETTINGS) experimental[name] = on;
-  await api('/api/storage', { key: 'speech_settings', value: { ...current, experimental } });
-  // The flow engine and the MCP client re-read these settings at most once a second.
-  await delay(1_200);
 }
 
 /** Bundled Claude Code processes alive in this container. */
@@ -251,10 +240,9 @@ async function voiceTurn(scenario, standIns, conversation) {
   };
 }
 
-/** One series of turns per scenario with the speed settings off or on. */
-async function voiceSeries(on, standIns) {
-  await setSpeedSettings(on);
-  const series = { on, scenarios: {} };
+/** One series of turns per scenario; the continued turns build one conversation. */
+async function voiceSeries(standIns) {
+  const series = { scenarios: {} };
   const continued = { id: undefined, turns: [] };
   for (const scenario of ['direct', 'tool', 'continue']) {
     const runs = [];
@@ -262,51 +250,61 @@ async function voiceSeries(on, standIns) {
       if (run > 1) await delay(PAUSE_MS);
       runs.push(await voiceTurn(scenario, standIns, continued));
     }
-    // With the setting on, a Claude Code process waits for the next request; with it off none stays.
-    const parked = await waitForClaudeProcesses((count) => (on ? count > 0 : count === 0), 15_000);
+    const parked = await waitForClaudeProcesses((count) => count > 0, 15_000);
     series.scenarios[scenario] = { runs, parkedAfter: parked };
   }
-  assertTurnsStored(await storedTexts(continued.id), continued.turns, `The continued conversation (settings ${on ? 'on' : 'off'})`);
+  assertTurnsStored(await storedTexts(continued.id), continued.turns, 'The continued conversation');
   series.conversation = { id: continued.id, turns: continued.turns };
   return series;
 }
 
-const warm = (series, scenario, key) => median(series.scenarios[scenario].runs.slice(1).map((run) => run[key]));
-
 /**
- * What the three settings must change, from what FLUJO and the stand-ins observed (never from
- * timings, which a busy machine scatters): a Claude Code process waits ready and the next request
- * of the same shape takes it, MCP lists are reused, and a turn saves fewer times. A ready process
- * may miss now and then by design (it is refused or too slow, and FLUJO starts one as before), so
- * two of the three later runs must take one.
+ * Fixed limits from the #1408 measurements on 1 CPU and 2 GB (median of runs 2 to 4), judged by
+ * what FLUJO and the stand-ins observed, never by timings, which a busy machine scatters.
+ *
+ * - After a request FLUJO prepares a Claude Code process, and the next direct call or tool turn
+ *   takes it. One of the three later runs may start its own process: a prepared process that is
+ *   refused or not ready yet is replaced by a fresh start. A continued turn resumes its stored
+ *   Claude session, which always starts its own process (#1449).
+ * - A tool turn sends one list request to its MCP server; every other listing reuses that list.
+ * - A tool turn saves the conversation at most 3 times, a continued turn at most 2 times.
  */
-export function assertSpeedSettingsWork(off, on) {
+export const VOICE_LIMITS = Object.freeze({
+  readyProcessMissesAllowed: 1,
+  mcpListsPerToolTurn: 1,
+  saves: Object.freeze({ tool: 3, continue: 2 }),
+});
+
+const TURN_NAMES = Object.freeze({ direct: 'direct call', tool: 'tool turn', continue: 'continued turn' });
+const laterMedian = (scenario, key) => median((scenario?.runs ?? []).slice(1).map((run) => run[key]));
+
+/** The limits in plain words, for the check list and the CI summary. */
+export function describeVoiceLimits(limits = VOICE_LIMITS) {
+  return `later direct calls and tool turns take the ready Claude process (${limits.readyProcessMissesAllowed} miss allowed); `
+    + `a tool turn sends at most ${limits.mcpListsPerToolTurn} MCP list request and saves at most ${limits.saves.tool} times; `
+    + `a continued turn saves at most ${limits.saves.continue} times`;
+}
+
+export function assertVoiceLimits({ scenarios }, limits = VOICE_LIMITS) {
   const problems = [];
-  for (const [scenario, { parkedAfter }] of Object.entries(off.scenarios)) {
-    if (parkedAfter !== 0) problems.push(`with the settings off, ${parkedAfter} Claude Code processes stayed after the ${scenario} turns`);
-  }
-  const offClaims = Object.values(off.scenarios).flatMap((scenario) => scenario.runs).filter((run) => run.claimed).length;
-  if (offClaims) problems.push(`with the settings off, ${offClaims} requests took a prepared Claude Code process`);
-  if (on.scenarios.direct.parkedAfter < 1) problems.push('with the settings on, no Claude Code process waited for the next request');
-  // A turn that resumes a stored Claude session starts its own process (#1408, part 1), and a
-  // continued conversation always resumes its session (#1449).
+  if (!(scenarios.direct?.parkedAfter >= 1)) problems.push('no Claude Code process waited ready after the direct calls');
   for (const scenario of ['direct', 'tool']) {
-    const later = on.scenarios[scenario].runs.slice(1);
+    const later = (scenarios[scenario]?.runs ?? []).slice(1);
     const claimed = later.filter((run) => run.claimed).length;
-    if (claimed < later.length - 1) {
+    if (!later.length || claimed < later.length - limits.readyProcessMissesAllowed) {
       const misses = [...new Set(later.map((run) => run.spareMiss).filter(Boolean))];
-      problems.push(`only ${claimed} of ${later.length} later ${scenario} requests took a prepared Claude Code process${misses.length ? ` (differing: ${misses.join(', ')})` : ''}`);
+      problems.push(`only ${claimed} of ${later.length} later ${TURN_NAMES[scenario]}s took the ready Claude Code process${misses.length ? ` (differing: ${misses.join(', ')})` : ''}`);
     }
   }
-  const listsOff = warm(off, 'tool', 'mcpLists');
-  const listsOn = warm(on, 'tool', 'mcpLists');
-  if (!(listsOn < listsOff)) problems.push(`MCP lists were not reused (${listsOn} vs ${listsOff} list requests per tool turn)`);
-  for (const scenario of ['tool', 'continue']) {
-    const savesOff = warm(off, scenario, 'saves');
-    const savesOn = warm(on, scenario, 'saves');
-    if (!(savesOn < savesOff)) problems.push(`the ${scenario} turn did not save fewer times (${savesOn} vs ${savesOff} conversation saves)`);
+  const lists = laterMedian(scenarios.tool, 'mcpLists');
+  if (!(lists <= limits.mcpListsPerToolTurn)) {
+    problems.push(`a tool turn sent ${lists ?? 'an unmeasured number of'} MCP list requests, the limit is ${limits.mcpListsPerToolTurn}`);
   }
-  if (problems.length) throw new Error(`The speed settings did not take effect: ${problems.join('; ')}.`);
+  for (const [scenario, limit] of Object.entries(limits.saves)) {
+    const saves = laterMedian(scenarios[scenario], 'saves');
+    if (!(saves <= limit)) problems.push(`a ${TURN_NAMES[scenario]} saved the conversation ${saves ?? 'an unmeasured number of'} times, the limit is ${limit}`);
+  }
+  if (problems.length) throw new Error(`The voice check went over its limits: ${problems.join('; ')}.`);
 }
 
 async function voice() {
@@ -319,14 +317,14 @@ async function voice() {
     await api('/api/mcp/servers', { name: 'smoke', transport: 'streamable', serverUrl: mcp.url, disabled: false });
     await api('/api/flow', smokeFlow({ id: 'smoke-voice-flow', name: FLOWS.voice, model: MODELS.claude, server: 'smoke' }));
     await newTraceLines();
-    const off = await voiceSeries(false, { claude, mcp });
-    const on = await voiceSeries(true, { claude, mcp });
-    assertSpeedSettingsWork(off, on);
+    const series = await voiceSeries({ claude, mcp });
+    assertVoiceLimits(series);
     return {
       checks: ['Claude subscription model answered through the bundled Claude Code', 'one MCP tool call per tool turn',
-        'continued conversations stored every turn', 'speed settings took effect'],
-      series: { off, on },
-      conversations: [off.conversation, on.conversation],
+        'the continued conversation stored every turn', describeVoiceLimits()],
+      limits: VOICE_LIMITS,
+      scenarios: series.scenarios,
+      conversations: [series.conversation],
     };
   } finally {
     await claude.close();

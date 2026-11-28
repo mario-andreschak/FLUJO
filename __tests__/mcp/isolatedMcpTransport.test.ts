@@ -220,24 +220,44 @@ test.each(['FLUJO_MCP_ISOLATION_FILE', 'FLUJO_OWNER_AUTH_FILE'])('refuses multip
   expect(create).not.toHaveBeenCalled();
 });
 
-test('refuses an approval file that changes during its actual descriptor read', async () => {
+/** Change the approval file while FLUJO reads it, on the first `times` opens of that file. */
+function changeApprovalDuringRead(times: number) {
   const open = fs.promises.open.bind(fs.promises);
-  let changed = false;
+  const approvalFile = process.env.FLUJO_MCP_ISOLATION_FILE!;
+  const seen = { opens: 0, changes: 0 };
   jest.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
     const handle = await open(...args);
+    if (path.resolve(String(args[0])) !== path.resolve(approvalFile)) return handle;
+    seen.opens += 1;
+    let changedThisOpen = false;
     const read = handle.read.bind(handle);
     handle.read = (async (...readArgs: Parameters<typeof handle.read>) => {
       const result = await read(...readArgs);
-      if (!changed && result.bytesRead > 0) {
-        changed = true;
-        fs.appendFileSync(process.env.FLUJO_MCP_ISOLATION_FILE!, ' ');
+      if (!changedThisOpen && seen.changes < times && result.bytesRead > 0) {
+        changedThisOpen = true;
+        seen.changes += 1;
+        fs.appendFileSync(approvalFile, ' ');
       }
       return result;
     }) as typeof handle.read;
     return handle;
   });
+  return seen;
+}
+
+test('launches only from a fresh, complete read when the approval file changes during its actual descriptor read', async () => {
+  const seen = changeApprovalDuringRead(1);
+  // The torn read is dropped; the reader starts again and uses the changed, complete file (#1050).
+  await expect(createStdioTransport(config)).resolves.toBeDefined();
+  expect(seen.changes).toBe(1);
+  expect(seen.opens).toBeGreaterThan(1);
+  expect(create).toHaveBeenCalledTimes(1);
+});
+
+test('refuses an approval file that changes during every descriptor read', async () => {
+  const seen = changeApprovalDuringRead(Number.POSITIVE_INFINITY);
   await expect(createStdioTransport(config)).rejects.toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
-  expect(changed).toBe(true);
+  expect(seen.changes).toBeGreaterThan(1);
   expect(create).not.toHaveBeenCalled();
 });
 

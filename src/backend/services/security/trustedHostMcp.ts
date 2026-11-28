@@ -102,13 +102,15 @@ export const trustedHostApprovalsSchema = z.object({
 }).strict().refine(value => new Set(value.approvals.map(item => JSON.stringify([item.workspace, item.serverName]))).size === value.approvals.length);
 const approvalsSchema = trustedHostApprovalsSchema;
 
+const TRUSTED_HOST_MESSAGES = {
+  HOST_CONSENT_REQUIRED: 'MCP host execution requires explicit owner consent for this workspace, server, package revision and capabilities. Configure an approved isolated profile or a separately protected trusted-host approval.',
+  HOST_SOURCE_CHANGED: 'MCP executable or package revision changed. Inspect the fixed package and renew owner consent before execution.',
+  HOST_POLICY_INVALID: 'MCP trusted-host policy is invalid. Use an absolute executable, working directory and fixed workspace package; dynamic package runners require an approved isolated profile.',
+} as const;
+
 export class TrustedHostMcpError extends Error {
-  constructor(readonly code: 'HOST_CONSENT_REQUIRED' | 'HOST_SOURCE_CHANGED' | 'HOST_POLICY_INVALID') {
-    super(code === 'HOST_CONSENT_REQUIRED'
-      ? 'MCP host execution requires explicit owner consent for this workspace, server, package revision and capabilities. Configure an approved isolated profile or a separately protected trusted-host approval.'
-      : code === 'HOST_SOURCE_CHANGED'
-        ? 'MCP executable or package revision changed. Inspect the fixed package and renew owner consent before execution.'
-        : 'MCP trusted-host policy is invalid. Use an absolute executable, working directory and fixed workspace package; dynamic package runners require an approved isolated profile.');
+  constructor(readonly code: keyof typeof TRUSTED_HOST_MESSAGES) {
+    super(TRUSTED_HOST_MESSAGES[code]);
     this.name = 'TrustedHostMcpError';
   }
 }
@@ -215,7 +217,7 @@ function describeRefusal(refusal: PrivateApprovalRefusal): string {
   const hint = refusal.cancelled ? ''
     : refusal.nativeFailure && NATIVE_HINTS[refusal.nativeFailure] ? ` ${NATIVE_HINTS[refusal.nativeFailure]}`
       : TRANSIENT_FILE_ERROR_CODES.has(refusal.errorKind) ? ' This is usually another program, such as antivirus or file indexing, holding the file.'
-        : '';
+        : ` ${TRUSTED_HOST_MESSAGES.HOST_CONSENT_REQUIRED}`;
   return `FLUJO refused a private approval check while ${REFUSAL_STEPS[refusal.phase]} for ${file}: `
     + `${refusal.cancelled ? 'the request was cancelled' : causes.join(', ')}. `
     + `It stopped after ${refusal.attempts === 1 ? '1 try' : `${refusal.attempts} tries`} in ${refusal.elapsedMs} ms.${hint}`;

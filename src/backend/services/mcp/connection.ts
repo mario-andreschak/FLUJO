@@ -1233,20 +1233,9 @@ export function shouldRecreateClient(
     return { needsNewClient: true, reason: "Existing connection is closed" };
   }
 
-  // A change to a connect-time-negotiated client capability must rebuild the
-  // client: it alters both the declared capability (none<->some) and the config the
-  // request handlers close over. Roots are exempt by design (issue 46): the capability
-  // is always declared and content changes are served live by the roots/list handler +
-  // announced via notifications/roots/list_changed — never a rebuild.
-  const currentCapKey =
-    (client as unknown as ClientWithCapKey).__flujoCapKey ?? "";
-  if (currentCapKey !== capabilityKey(config)) {
-    return {
-      needsNewClient: true,
-      reason: "Client capabilities (sampling/elicitation/MCP Apps/Skills) changed",
-    };
-  }
-
+  // A client of the other SDK generation or of another transport type is a new
+  // connection whatever else changed, so those are named first.
+  //
   // Experimental v2-beta protocol toggle (betaClient.ts). Websocket configs always
   // stay on the v1 SDK (the v2 SDK has no websocket transport), so for them the
   // toggle is not a config change.
@@ -1265,18 +1254,34 @@ export function shouldRecreateClient(
   // A v2-beta client's transports are different classes, so the v1 instanceof checks
   // below cannot see them. Its transports carry the same raw config keys plus an
   // explicit kind marker (stashed in betaClient.ts), so compare those instead.
-  if (clientIsBeta) {
-    const transport = client.transport as unknown as
-      TransportWithConfigKey | undefined;
-    if (!transport || transport.__flujoKind !== config.transport) {
-      return {
-        needsNewClient: true,
-        reason: `Transport type changed to ${config.transport}`,
-      };
-    }
+  const betaTransport = clientIsBeta
+    ? client.transport as unknown as TransportWithConfigKey | undefined
+    : undefined;
+  if (clientIsBeta && betaTransport?.__flujoKind !== config.transport) {
+    return {
+      needsNewClient: true,
+      reason: `Transport type changed to ${config.transport}`,
+    };
+  }
+
+  // A change to a connect-time-negotiated client capability must rebuild the
+  // client: it alters both the declared capability (none<->some) and the config the
+  // request handlers close over. Roots are exempt by design (issue 46): the capability
+  // is always declared and content changes are served live by the roots/list handler +
+  // announced via notifications/roots/list_changed — never a rebuild.
+  const currentCapKey =
+    (client as unknown as ClientWithCapKey).__flujoCapKey ?? "";
+  if (currentCapKey !== capabilityKey(config)) {
+    return {
+      needsNewClient: true,
+      reason: "Client capabilities (sampling/elicitation/MCP Apps/Skills) changed",
+    };
+  }
+
+  if (betaTransport) {
     if (config.transport === "stdio") {
       if (
-        transport.__flujoStdioKey !==
+        betaTransport.__flujoStdioKey !==
         stdioConfigKey(config, options?.isolateRuntimeHome === true)
       ) {
         return {
@@ -1284,7 +1289,7 @@ export function shouldRecreateClient(
           reason: "Connection parameters changed",
         };
       }
-    } else if (transport.__flujoHttpKey !== httpConfigKey(config)) {
+    } else if (betaTransport.__flujoHttpKey !== httpConfigKey(config)) {
       return {
         needsNewClient: true,
         reason: `${config.transport} auth/connection parameters changed`,

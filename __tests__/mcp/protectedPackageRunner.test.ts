@@ -53,7 +53,7 @@ let saved: Record<string, string | undefined>;
 let ledger: { schemaVersion: number; ownerId: string; approvals: Array<{
   workspace: string; serverName: string; policyDigest: string; expiresAt: number;
 }> };
-const envNames = ['FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR', 'FLUJO_OWNER_AUTH_FILE', 'FLUJO_MCP_RUNTIME_HOME_ISOLATION',
+const envNames = ['FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR', 'FLUJO_OWNER_AUTH_FILE',
   'FLUJO_MCP_TRUSTED_HOST_FILE', 'FLUJO_MCP_ISOLATION_FILE'];
 const persist = () => fs.writeFileSync(process.env.FLUJO_MCP_TRUSTED_HOST_FILE!, JSON.stringify(ledger), { mode: 0o600 });
 const approve = (value = config) => { ledger.approvals = [{ workspace: getCurrentWorkspace(),
@@ -88,7 +88,6 @@ beforeAll(() => {
   process.env.FLUJO_DATA_DIR = path.join(directory, 'data');
   delete process.env.FLUJO_PARENT_DATA_DIR;
   delete process.env.FLUJO_MCP_ISOLATION_FILE;
-  delete process.env.FLUJO_MCP_RUNTIME_HOME_ISOLATION;
   process.env.FLUJO_OWNER_AUTH_FILE = path.join(directory, 'owner.json');
   process.env.FLUJO_MCP_TRUSTED_HOST_FILE = path.join(directory, 'approval.json');
   fs.writeFileSync(process.env.FLUJO_OWNER_AUTH_FILE, JSON.stringify({ schemaVersion: 1,
@@ -257,30 +256,31 @@ test.each(['missing', 'ambient'])('a reapproved source cannot execute an %s mand
   }
 }), closureTimeout);
 
-test.each(['isolated', 'host'] as const)('a %s approval cannot survive an override flip during the actual source reader', async initialMode => {
+test.each(['isolated', 'host'] as const)('a %s approval cannot survive a runtime-home flip of the server setting during the actual source reader', async initialMode => {
   const policy = trustedHostMcpPolicySchema.parse(config.trustedHost);
   const marker = path.join(directory, 'late-mode-startup-marker');
   const home = path.join(directory, 'late-mode-host-home');
   const hostCwd = path.join(directory, 'late-mode-host-cwd');
   fs.mkdirSync(hostCwd, { recursive: true });
-  const current = { ...config, runtimeHomeMode: 'inherit' as const,
+  // Since #1449 the runtime home comes only from the server's own setting.
+  const current = { ...config, runtimeHomeMode: initialMode,
     cwd: initialMode === 'host' ? hostCwd : config.cwd,
     env: { ...config.env, SYNTHETIC_STARTUP_MARKER: marker,
       ...(initialMode === 'host' ? { HOME: home, USERPROFILE: home, NPM_CONFIG_CACHE: path.join(home, '.npm') } : {}) },
     trustedHost: { ...policy, runtimeHome: initialMode,
       environmentNames: [...policy.environmentNames, 'SYNTHETIC_STARTUP_MARKER'] } };
-  process.env.FLUJO_MCP_RUNTIME_HOME_ISOLATION = initialMode;
   approve(current);
   expect(await saveConfig(new Map([[current.name, current]]))).toMatchObject({ success: true });
   const transport = await createStdioTransport(current, { isolateRuntimeHome: initialMode === 'isolated' });
   const source = path.join(policy.packageRunner!.packageDirectory, 'node_modules', 'owned-probe', 'server.cjs');
   const actualOpen = fs.promises.open.bind(fs.promises);
+  const other = initialMode === 'isolated' ? 'host' : 'isolated';
   let flipped = false;
   const reader = jest.spyOn(fs.promises, 'open').mockImplementation(async (filename, flags, mode) => {
     const handle = await actualOpen(filename, flags, mode);
     if (String(filename) === source && !flipped) {
       flipped = true;
-      process.env.FLUJO_MCP_RUNTIME_HOME_ISOLATION = initialMode === 'isolated' ? 'host' : 'isolated';
+      expect(await saveConfig(new Map([[current.name, { ...current, runtimeHomeMode: other }]]))).toMatchObject({ success: true });
     }
     return handle;
   });
@@ -290,10 +290,9 @@ test.each(['isolated', 'host'] as const)('a %s approval cannot survive an overri
     expect(fs.existsSync(marker)).toBe(false);
   } finally {
     reader.mockRestore();
-    delete process.env.FLUJO_MCP_RUNTIME_HOME_ISOLATION;
     await transport.close();
   }
-}, 25_000);
+}, caseTimeout);
 
 test.each(['expired', 'wrong-owner', 'imported'])('real authority refuses %s approvals', async state => {
   if (state === 'expired') ledger.approvals[0].expiresAt = Date.now() - 1;
