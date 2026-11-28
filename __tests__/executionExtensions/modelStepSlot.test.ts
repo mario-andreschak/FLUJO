@@ -102,7 +102,7 @@ it('takes the Process ordinal in ModelHandler only for a bound call and stops at
   const input = {
     modelId: bound.id, prompt: 'offline fixture',
     messages: [{ id: 'u', role: 'user' as const, content: 'offline fixture', timestamp: 1 }],
-    iteration: 1, maxIterations: 1, nodeId: 'process-a', nodeName: 'Process',
+    nodeId: 'process-a', nodeName: 'Process',
     executionExtensionContext: mintFixture(owner), takeModelStepOrdinal,
   };
   const result = await ModelHandler.callModel(input);
@@ -138,7 +138,7 @@ it('does not consume a Process ordinal for an ordinary model', async () => {
   const result = await ModelHandler.callModel({
     modelId: ordinary.id, prompt: 'offline fixture',
     messages: [{ id: 'u', role: 'user', content: 'offline fixture', timestamp: 1 }],
-    iteration: 1, maxIterations: 1, nodeId: 'process-a', nodeName: 'Process',
+    nodeId: 'process-a', nodeName: 'Process',
     takeModelStepOrdinal,
   });
 
@@ -162,7 +162,7 @@ it('refuses a reusable cursor before owner issuance or provider selection', asyn
   const result = await ModelHandler.callModel({
     modelId: bound.id, prompt: 'offline fixture',
     messages: [{ id: 'u', role: 'user', content: 'offline fixture', timestamp: 1 }],
-    iteration: 1, maxIterations: 1, nodeId: 'process-a', nodeName: 'Process',
+    nodeId: 'process-a', nodeName: 'Process',
     executionExtensionContext: mintFixture(owner),
     takeModelStepOrdinal: () => takeExecutionModelStepOrdinal(state, 'process-a', 'run-a'),
   });

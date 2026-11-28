@@ -139,8 +139,6 @@ const callModel = (conversationId?: string) =>
     modelId: 'model-1',
     prompt: 'hi',
     messages: [{ role: 'user', content: 'hi', id: 'u1', timestamp: 1 }],
-    iteration: 1,
-    maxIterations: 1,
     nodeName: 'Node',
     nodeId: 'node-1',
     conversationId,
@@ -173,7 +171,7 @@ test.each([
     const result = await ModelHandler.callModel({
       modelId: 'model-1', prompt: 'private request',
       messages: [{ role: 'user', id: 'private', timestamp: 1, content: 'private request' }],
-      iteration: 1, maxIterations: 1, nodeName: 'Private', nodeId: 'private',
+      nodeName: 'Private', nodeId: 'private',
       executionExtensionContext: mintFixture(policy),
     } as Parameters<typeof ModelHandler.callModel>[0]);
     expect(result).toMatchObject({ success: false, error: { message: 'execution_model_adapter_forbidden' } });
@@ -192,7 +190,7 @@ test('Antigravity CLI chat attachments reach authoritative adapter rejection bef
   const result = await ModelHandler.callModel({
     modelId: 'model-1', prompt: 'Describe this image.',
     messages: [{ role: 'user', id: 'image-request', timestamp: 1, content: [{ type: 'text', text: 'Describe this image.' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,YQ==' } }] }],
-    iteration: 1, maxIterations: 1, nodeName: 'Node', nodeId: 'node-1',
+    nodeName: 'Node', nodeId: 'node-1',
   } as Parameters<typeof ModelHandler.callModel>[0]);
   expect(result).toMatchObject({ success: false, error: { message: expect.stringContaining('text input only') } });
   expect(mockAntigravityMediaRuntime).not.toHaveBeenCalled();
@@ -204,7 +202,7 @@ test('existing text-only providers replace unsupported media with a short note',
   const result = await ModelHandler.callModel({
     modelId: 'model-1', prompt: 'Describe this image.',
     messages: [{ role: 'user', id: 'image-request', timestamp: 1, content: [{ type: 'text', text: 'Describe this image.' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,YQ==' } }] }],
-    iteration: 1, maxIterations: 1, nodeName: 'Node', nodeId: 'node-1',
+    nodeName: 'Node', nodeId: 'node-1',
   } as Parameters<typeof ModelHandler.callModel>[0]);
   expect(result.success).toBe(true);
   // Since the chat file work, an attachment the model cannot read is replaced by a short note, never dropped silently.
@@ -278,8 +276,6 @@ describe('mid-flight completion cancellation', () => {
       modelId: 'model-1',
       prompt: 'hi',
       messages: [{ role: 'user', content: 'hi', id: 'u1', timestamp: 1 }],
-      iteration: 1,
-      maxIterations: 1,
       nodeName: 'Node',
       nodeId: 'node-1',
       conversationId: 'conv-steering-archive',
@@ -439,8 +435,6 @@ describe('mid-flight completion cancellation', () => {
       modelId: 'model-1',
       prompt: 'hi',
       messages: [{ role: 'user', content: 'hi', id: 'u1', timestamp: 1 }],
-      iteration: 1,
-      maxIterations: 1,
       nodeName: 'Node',
       nodeId: 'node-1',
       conversationId: 'conv-stale-transcript',

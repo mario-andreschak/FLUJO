@@ -42,7 +42,7 @@ async function callModel(conversationId: string, extra: Partial<Parameters<typeo
   return ModelHandler.callModel({
     modelId: 'antigravity', prompt: 'Which word?',
     messages: [{ role: 'user', content: 'Which word?', id: 'u1', timestamp: 1 }],
-    iteration: 1, maxIterations: 1, nodeName: 'Process', nodeId: 'process-node', conversationId, ...extra,
+    nodeName: 'Process', nodeId: 'process-node', conversationId, ...extra,
   } as Parameters<typeof ModelHandler.callModel>[0]);
 }
 

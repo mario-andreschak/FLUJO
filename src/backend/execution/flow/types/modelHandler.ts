@@ -31,8 +31,6 @@ export interface ModelCallInput {
    */
   wireMessages?: FlujoChatMessage[];
   tools?: OpenAI.ChatCompletionFunctionTool[];
-  iteration: number;
-  maxIterations: number;
   /**
    * Optional per-node override of the agentic-turn cap for self-orchestrating
    * adapters (Claude subscription). When set (> 0) it wins; otherwise callModel

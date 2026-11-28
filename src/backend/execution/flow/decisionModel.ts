@@ -134,8 +134,9 @@ function capture(entry: ModelDecisionEntry, sharedState: SharedState, nodeId: st
 }
 
 /**
- * Ask the model. Returns the failure that should stop the run, or null to carry on. The
- * flow's allowed list is not a failure to work around, so breaking it always throws.
+ * Ask the model. Returns the failure that should stop the run, or null to carry on.
+ * Breaking the flow's allowed list is never a decision failure to carry on from, so it
+ * always throws.
  */
 export async function runModelDecision(
   entry: ModelDecisionEntry,

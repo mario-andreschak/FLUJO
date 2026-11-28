@@ -58,7 +58,7 @@ async function callModel(conversationId: string) {
   return ModelHandler.callModel({
     modelId: 'model-1', prompt: 'Reply to Astra.',
     messages: [{ role: 'user', content: 'Reply to Astra.', id: 'u1', timestamp: 1 }],
-    iteration: 1, maxIterations: 1, nodeName: 'Argon', nodeId: 'node-1', conversationId,
+    nodeName: 'Argon', nodeId: 'node-1', conversationId,
   } as Parameters<typeof ModelHandler.callModel>[0]);
 }
 

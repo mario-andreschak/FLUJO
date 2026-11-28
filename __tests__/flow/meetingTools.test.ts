@@ -420,8 +420,6 @@ describe('meeting tool dispatch', () => {
       prompt: 'Meeting protocol.',
       messages: [{ role: 'user', content: 'Round update', id: 'u1', timestamp: 1 }],
       tools: buildMeetingTools().map(toOpenAiTool),
-      iteration: 1,
-      maxIterations: 1,
       nodeName: 'Participant model',
       nodeId: 'process-1',
       conversationId: 'conv-1',

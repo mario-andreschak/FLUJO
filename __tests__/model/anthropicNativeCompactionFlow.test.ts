@@ -136,7 +136,7 @@ const snapshot = (): ModelInputSnapshot => ({
 async function call(messages: FlujoChatMessage[]): Promise<{ events: ContextCompactionEvent[]; content?: string }> {
   const events: ContextCompactionEvent[] = [];
   const result = await ModelHandler.callModel({
-    modelId: 'claude-native', prompt: 'Help with orders.', messages, iteration: 1, maxIterations: 1,
+    modelId: 'claude-native', prompt: 'Help with orders.', messages,
     nodeName: 'Orders', nodeId: 'node-1', conversationId: CONVERSATION, modelInputForArchive: snapshot(),
     onFinalWire: (_wire: OpenAI.ChatCompletionMessageParam[], input?: ModelInputSnapshot) => {
       events.push(...(input?.contextCompaction?.events ?? []));

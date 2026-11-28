@@ -9,11 +9,6 @@
       "count": 1
     }
   },
-  "src/app/api/mcp-registry/route.ts": {
-    "flujo/no-workaround-comment": {
-      "count": 1
-    }
-  },
   "src/app/flows/page.tsx": {
     "flujo/no-raw-timers": {
       "count": 1
@@ -73,11 +68,6 @@
       "count": 1
     }
   },
-  "src/backend/execution/flow/decisionModel.ts": {
-    "flujo/no-workaround-comment": {
-      "count": 1
-    }
-  },
   "src/backend/execution/flow/engine/ExecutionEventBus.ts": {
     "flujo/no-double-cast": {
       "count": 1
@@ -85,11 +75,6 @@
   },
   "src/backend/execution/flow/handlers/nativeOriginalHost.ts": {
     "flujo/no-double-cast": {
-      "count": 1
-    }
-  },
-  "src/backend/execution/flow/nodes/ProcessNode.ts": {
-    "flujo/no-workaround-comment": {
       "count": 1
     }
   },
@@ -373,11 +358,6 @@
   },
   "src/backend/services/workspace/snapshotRestore.ts": {
     "flujo/no-double-cast": {
-      "count": 1
-    }
-  },
-  "src/backend/utils/PromptRenderer.ts": {
-    "flujo/no-workaround-comment": {
       "count": 1
     }
   },
@@ -1344,11 +1324,6 @@
       "count": 1
     }
   },
-  "src/shared/types/mcp/mcp.ts": {
-    "flujo/no-workaround-comment": {
-      "count": 1
-    }
-  },
   "src/shared/types/package/package.serialize.ts": {
     "flujo/no-double-cast": {
       "count": 4
@@ -1366,11 +1341,6 @@
   },
   "src/utils/shared/decisionRules.ts": {
     "flujo/no-double-cast": {
-      "count": 1
-    }
-  },
-  "src/utils/shared/edgeConditions.ts": {
-    "flujo/no-workaround-comment": {
       "count": 1
     }
   },

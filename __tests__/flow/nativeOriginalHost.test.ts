@@ -509,7 +509,7 @@ async function withWorkerClaim(task: (input: {
           messages: [{ id: 'worker-auto-fixture', role: 'user', content: 'automatic offline Source host', timestamp: 1 }], tools: [],
           conversationId: state.conversationId, runId: state.logicalRunId, nodeId: 'node-worker-owned',
           executionExtensionContext: context, archiveModelTurns: true, maxTurns: 3, unattended: true,
-          iteration: 1, maxIterations: 3, nodeName: 'Worker',
+          nodeName: 'Worker',
         }));
       await task({ host, invoke, autoInvoke, enrollment, context, state, workerLedger });
     } finally { restore(); FlowExecutor.conversationStates.delete(state.conversationId!); }

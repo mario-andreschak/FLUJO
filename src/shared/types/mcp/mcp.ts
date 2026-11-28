@@ -197,7 +197,7 @@ export type MCPManagerConfig = {
    * in parallel (bounded), but each server is limited to this many in flight at
    * once so a server that tolerates little parallelism is never overwhelmed.
    * Absent / non-positive ⇒ the conservative module default
-   * (DEFAULT_TOOL_CALL_CONCURRENCY). Config-only for now (no dedicated UI).
+   * (DEFAULT_TOOL_CALL_CONCURRENCY). Set in the server's saved config.
    */
   maxConcurrency?: number;
   /** Server-wide tool argument defaults. A node may override individual keys. */

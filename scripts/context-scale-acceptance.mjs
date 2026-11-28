@@ -155,7 +155,7 @@ try {
     const started = performance.now();
     const inputCount = messages.length;
     const inputDigest = createHash('sha256').update(JSON.stringify(messages)).digest('hex');
-    const input = { modelId: model.id, prompt: '', messages, iteration: 1, maxIterations: 20,
+    const input = { modelId: model.id, prompt: '', messages,
       nodeId: 'stress-node', nodeName: 'Stress', conversationId, runId: randomUUID(), archiveModelTurns: true,
       maxTokens: 1500, requireToolApproval: false, onApprovalRequired: 'fail',
       onFinalWire: wire => { item.wireMessages = wire.length; item.wireCharacters = JSON.stringify(wire).length;
