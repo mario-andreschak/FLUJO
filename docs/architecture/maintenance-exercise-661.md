@@ -103,9 +103,10 @@ not a record of a person doing it.
   handlers are registered, and that newer-protocol clients need them in
   `betaClient.ts`, was not written down.
 - **Checks:** `npm run check:hotspots` failed: `index.ts` grew from 2,532 to
-  2,535 lines. Every handler is registered inside `connectServer`, so any new
-  server message makes the big file grow. The check's message did not say what
-  to do when the big file has to call the new code.
+  2,535 lines. Every handler was registered inside `connectServer`, so any new
+  server message made the big file grow. The check's message did not say what
+  to do when the big file has to call the new code. Both are fixed: see the
+  table below and [repeat it](#repeat-it).
 - **Time:** about 3 minutes.
 
 ### F. Fix a bug in connection scheduling
@@ -136,6 +137,7 @@ not a record of a person doing it.
 | Tool result modules not named | New guide row "Tool results"; `contextWindowFit.ts` row | – |
 | Where server messages are handled; what to do when a big file must grow | New guide row "MCP server notifications", section "Adding to a big file", and a clearer `npm run check:hotspots` message | `scripts/check-hotspot-sizes.test.mjs` |
 | How the five-retry stop recovers | `connectionScheduling.ts` row | – |
+| Every new kind of server message made `index.ts` grow | The handler setup moved out of `connectServer` into `src/backend/services/mcp/serverNotifications.ts`, for classic and newer-protocol clients; `index.ts` went from 2,503 to 2,442 lines and its ceiling went down with it | `__tests__/mcp/serverNotifications.test.ts`, `npm run check:hotspots` |
 | Names the reader could not place (`init.ts`, `workspace.ts`, `install.ts`, `registry.ts`, two test files) | Written as full paths | `npm run check:hotspots` now fails when the guide names a file that does not exist ([rule](../corrections/architecture-guide-names-real-files.md)) |
 
 With these fixes all ten harmful faults planted in this exercise fail a
@@ -144,12 +146,22 @@ did not run). The guide's exercise section now lists the
 seeds with the tests that catch them, so the exercise can be repeated in a few
 minutes.
 
-The one boundary that still needs code to move: the block in `connectServer`
-(`src/backend/services/mcp/index.ts`) that registers the resource, tool-list,
-Claude channel and event-stream handlers on each new client belongs in its own
-module, so that a new server message is added there without growing
-`index.ts`. Another change on the same bundle was rewriting `index.ts` at the
-time, so the move was handed to it.
+The last code move is done too. The block in `connectServer`
+(`src/backend/services/mcp/index.ts`) that set up the resource, tool-list,
+Claude channel and event-stream handlers on each new client, and the matching
+handler list for newer-protocol clients, now live in
+`src/backend/services/mcp/serverNotifications.ts`. The code was moved, not
+rewritten. `index.ts` calls it once per new client.
+
+### Repeat it
+
+To repeat task E today, add the handler for the new message to the module that
+owns it and give it one entry in `registerServerNotifications` and one in
+`newerClientNotifications` in `serverNotifications.ts`. Nothing in `index.ts`
+changes, so `npm run check:hotspots` passes. The guide's
+[repeat it](./execution-module-boundaries.md#repeat-it) section has the
+commands, and its task E table lists the seeds and the tests in
+`__tests__/mcp/serverNotifications.test.ts` that catch them.
 
 ## Not caused by the exercise
 

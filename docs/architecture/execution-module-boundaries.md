@@ -44,7 +44,7 @@ not a claim that an additional human maintainer has accepted responsibility.
 | Tool results | `handlers/toolCallProcessing.ts` (dispatch, order, `tool:result` event, the tool message); in `src/backend/services/runResources/`: `capture.ts` (binary and large results become run resources), `toolResultMedia.ts` (images and audio go to the model as input), `boundToolResult.ts` and `toolResultBound.ts` (the size limit, #1226); `toolRepeatGuard.ts` (success or failure of a call) | Results go back in the order the model asked for them, whatever order they finish in. A failed capture keeps the original result and never breaks the run; authority errors still propagate. `handlers/contextWindowFit.ts` only shrinks results again when a provider rejects a request as too long. | Maturity |
 | Execution events | `engine/ExecutionEventBus.ts` and `src/shared/types/execution/events.ts` | Event sequence allocation/log append and UI delivery are separate responsibilities. UI retention changes cannot remove canonical history or synthesize provider dispatches. | Maturity; history/Brain consumers own their adapters |
 | MCP connection ownership | `src/backend/services/mcp/index.ts` (connect, disconnect, the transport's `onclose` and `onerror` callbacks), `serviceRegistries.ts` (the maps), `connectionScheduling.ts` (startup and retries) and `lifecycleCoordinator.ts` | Client/transport maps are process-global and workspace-scoped. The coordinator owns connect/teardown promises, generation and demand bookkeeping; it does not duplicate the clients. Old transport callbacks must not remove a replacement client: `onclose` and `onerror` act only while their transport is still the one in `activeTransports` for their workspace (`bindToCurrentWorkspace` keeps the workspace). FLUJO's own closes remove the transport first, so they never schedule a retry. Two counters go up with each new client and are not the transport check: `clientGenerations` in `serviceRegistries.ts` makes tool names planned against a replaced client stale, and the coordinator's `generation` makes leases (`mcpLeasePool.ts`) and shutdown receipts stale. | Security owns isolation; Production owns #547 receipts |
-| MCP server notifications | Registered on each new client in `connectServer` (`index.ts`), before `client.connect`; the handlers live in `resourceNotifications.ts` (resource and tool lists), `inboundEvents.ts` (Claude channel) and `serverEventStream.ts` (event streams); newer-protocol clients get theirs in `betaClient.ts` | A handler that acts on the live connection first checks that the message comes from the current client, as the Claude channel handler does. A new notification handler goes into one of these modules; see [adding to a big file](#adding-to-a-big-file) for the line in `index.ts`. | Maturity |
+| MCP server notifications | `serverNotifications.ts` sets them up: `registerServerNotifications` on each new classic client and `newerClientNotifications` for a newer-protocol client, both called once from `connectServer` (`index.ts`) before `client.connect`. The handlers themselves live in `resourceNotifications.ts` (resource and tool lists), `inboundEvents.ts` (Claude channel) and `serverEventStream.ts` (event streams); `betaClient.ts` registers every entry of the newer client's map with a schema | A handler that acts on the live connection first checks that the message comes from the current client, as the Claude channel handler does. A new kind of server message gets its handler in one of those modules (or a new one) and one entry in each of the two functions in `serverNotifications.ts`; `index.ts` and `betaClient.ts` stay as they are. `__tests__/mcp/serverNotifications.test.ts` sends every kind to a fake client. | Maturity |
 | MCP demand/teardown | `mcpLeasePool.ts`, `connection.ts`, `ownerScope.ts` | Fold concurrent connect/teardown; keep leases/pins live until release. Await graceful close and verified descendant teardown. Server name alone is not an identity across workspaces. Derive Bash owner scope from the run. | Production for shutdown/recovery; Security for execution capabilities |
 
 The process-global maps exist because Next.js can load multiple module graphs in
@@ -147,7 +147,8 @@ client and transport registries.
 | `serverConfigSave.ts` | What a config save writes: encrypted secrets, the managed root folder | Masked values keep the stored secret; bindings stay references. |
 | `serverConfigUpdate.ts` | Saving, renaming and deleting a config; aligning the live connection | A rename migrates flow references and tears down everything under the old name before connecting the new one. |
 | `serviceSkills.ts` | MCP Skills through the service | Loading a skill needs an approval for the exact manifest digest. |
-| `serviceEvents.ts` | MCP server events: list, subscribe, stream, poll, Claude channel | Each call takes a lease, and a lease refuses a disabled server; subscribe, stream, poll and channel say "disabled" before trying. Handlers for what servers send are in the "MCP server notifications" row above. |
+| `serviceEvents.ts` | MCP server events: list, subscribe, stream, poll, Claude channel | Each call takes a lease, and a lease refuses a disabled server; subscribe, stream, poll and channel say "disabled" before trying. Handlers for what servers send are in `serverNotifications.ts`. |
+| `serverNotifications.ts` | Setting up the handlers for messages a server sends on its own (resource and tool list changes, resource updates, Claude channel, event streams) on classic and newer-protocol clients | The service passes a host with `onResourceListChanged`, `onResourceUpdated`, `getClient` and the client map; `index.ts` makes one call per new client. Messages from a replaced client change nothing. A new kind of message is added here, not in `index.ts`. |
 | `headerAuthScopes.ts` | Static Authorization headers; removing stale inferred OAuth scopes | Removes only the exact legacy marker. |
 | `transportInspection.ts` | The innermost transport; stdout lines that are not MCP messages | Pure. |
 
@@ -158,10 +159,11 @@ three-line addition to a big file fails `npm run check:hotspots`. Put the new
 behaviour in the module that owns it (the tables above) and keep the call in
 the big file to one line. When the big file has to grow anyway, move a nearby
 block of the same kind out into its module in the same change, so the file
-stays at or under its ceiling. Example: a handler for a new kind of MCP server
-notification goes into `resourceNotifications.ts` (or a new module), but it is
-registered inside `connectServer` next to the others, and newer-protocol
-clients also need it in `betaClient.ts`.
+stays at or under its ceiling. Example: handlers for MCP server notifications
+used to be set up inside `connectServer`, so every new kind of message made
+`index.ts` grow. That block moved to `serverNotifications.ts`, and a new kind
+of message is now added there for both kinds of client without touching
+`index.ts`.
 
 ### Checks that hold the split
 
@@ -298,6 +300,7 @@ they cover every required installed scenario:
 | Actual dispatch/archive | `flow/modelTurnArchive.test.ts`, `model/completionCancellation.test.ts`, `model/codexAdapter.test.ts` |
 | MCP multiple-instance/connect/teardown | `mcp/crossInstancePoisonedClient.test.ts`, `mcp/mcpConnectionLifecycle.test.ts` |
 | MCP close and error callbacks, workspaces, retries | `mcp/mcpRestartLoop.test.ts` |
+| MCP server messages reaching their handlers | `mcp/serverNotifications.test.ts` |
 | Pre-run checks on a new turn versus a resume | `flow/runPreflight.test.ts` |
 | Tool result order | `flow/processToolCallsConcurrency.test.ts` |
 
@@ -309,7 +312,8 @@ behavior and one MCP behavior using only this page. The owner decided that
 nobody does this by hand, so on November 28, 2026 a maintainer who did not
 write the split (an AI agent) did it with this page and the code, on throwaway
 branches. It ran the two tasks of #661 with the seeds below plus four more
-everyday tasks. The [report](./maintenance-exercise-661.md) records each task:
+everyday tasks; one of them, a new kind of MCP server message (task E), has
+seeds below too. The [report](./maintenance-exercise-661.md) records each task:
 the files opened, what this page got right and wrong, the time, and which
 mistakes the tests caught. Everything it found is fixed on this page, in the
 tests or in `npm run check:hotspots`.
@@ -321,7 +325,7 @@ Start from a clean checkout of the commit you want to check.
 1. Run the focused tests and the import check. All must pass:
 
    ```sh
-   node scripts/run-local-jest.cjs --selectProjects node --runInBand --runTestsByPath __tests__/flow/invocationSource.test.ts __tests__/flow/unattendedDriveForward.test.ts __tests__/flow/runPreflight.test.ts __tests__/mcp/mcpRestartLoop.test.ts
+   node scripts/run-local-jest.cjs --selectProjects node --runInBand --runTestsByPath __tests__/flow/invocationSource.test.ts __tests__/flow/unattendedDriveForward.test.ts __tests__/flow/runPreflight.test.ts __tests__/mcp/mcpRestartLoop.test.ts __tests__/mcp/serverNotifications.test.ts
    node scripts/check-import-boundaries.cjs
    ```
 
@@ -355,13 +359,29 @@ from the row "MCP connection ownership".
 | Make the same change in `transport.onerror` | "ignores a late error event from a replaced (zombie) transport" |
 | Assign `transport.onclose` without `bindToCurrentWorkspace` | "a close in one workspace reconnects that workspace …" |
 
+Task E, a new kind of MCP server message. Task: "Show a server's own log
+messages (`notifications/message`)." Start from the row "MCP server
+notifications". The handler goes into one of the modules that row names (or a
+new one) and gets one entry in `registerServerNotifications` and one in
+`newerClientNotifications` (both in `serverNotifications.ts`). `index.ts` does
+not change, so `npm run check:hotspots` passes.
+
+| Seed | Caught by |
+| --- | --- |
+| In `registerServerNotifications`, drop the `registerMcpEventStreamHandlers` call | "gives every kind of server message exactly one handler" and the classic client's "routes every MCP events message to the stream that asked" in `__tests__/mcp/serverNotifications.test.ts` |
+| In `newerClientNotifications`, let `onResourcesChanged` call `onResourceListChanged` without checking that the client is current | "reports resource changes only while the client is current" |
+| In `registerServerNotifications`, drop only the notified client's tool lists, not those of the client in the client map | the classic client's "drops the reused tool lists of the notified client and of the registered one" |
+
 What a correct explanation covers: only `chat` and `api` are attended; a
 conversation keeps its first source but every run works out `unattended` from
 its own source; unattended changes only what happens when a step ends on plain
 text. For MCP: a close or error acts only when it comes from the transport
 currently registered for that server in that workspace; FLUJO's own closes
 remove the transport first and so never reconnect; an unexpected close of the
-current transport reconnects if the server is still enabled.
+current transport reconnects if the server is still enabled. For a server
+message: every new client gets its handlers once, from `serverNotifications.ts`,
+for both kinds of client; a handler that acts on the connection first checks
+that the message comes from the current client.
 
 ## Size inventory and evidence limits
 

@@ -48,7 +48,7 @@
     },
     {
       "file": "src/backend/services/mcp/index.ts",
-      "maxLines": 2503,
+      "maxLines": 2442,
       "modules": [
         "src/backend/services/mcp/serviceRegistries.ts",
         "src/backend/services/mcp/serverConfigSave.ts",
@@ -59,7 +59,8 @@
         "src/backend/services/mcp/connectionTest.ts",
         "src/backend/services/mcp/serviceEvents.ts",
         "src/backend/services/mcp/connectionScheduling.ts",
-        "src/backend/services/mcp/serverConfigUpdate.ts"
+        "src/backend/services/mcp/serverConfigUpdate.ts",
+        "src/backend/services/mcp/serverNotifications.ts"
       ]
     }
   ]
