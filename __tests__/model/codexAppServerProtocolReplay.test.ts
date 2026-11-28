@@ -6,7 +6,7 @@
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { createCodexAppServerThread } from '@/backend/services/model/adapters/codexAppServerThread';
+import { createCodexAppServerThread, CODEX_CONTINUE_AFTER_DROP } from '@/backend/services/model/adapters/codexAppServerThread';
 import { startOwnedCodexAppServer, CodexAppServerRpcError } from '@/backend/services/model/adapters/codexAppServerProcess';
 import { MIN_ORDINARY_CODEX_CLI, codexServerVersion } from '@/backend/services/model/adapters/codexProtocol';
 import { recordCodexRateLimitUpdate, normalizeCodexAllowance } from '@/backend/services/model/allowance/codex';
@@ -33,49 +33,65 @@ const threadId = result('start', 'thread/start').thread as { id: string; session
 const firstTurnId = (result('start', 'turn/start').turn as { id: string }).id;
 const options = { model: 'flujo-fixture-model', workingDirectory: '<WORKSPACE>', modelReasoningEffort: 'low' as const };
 
-/** A fake app-server process that answers FLUJO from the recording, in order. */
-function replay(...names: (string | Frame[])[]) {
-  const frames = names.flatMap(name => typeof name === 'string' ? session(name) : name);
+/** Ends a process in the recording: the recorder stopped Codex there. */
+const KILLED: Frame[] = [{ direction: 'in', message: { method: '<killed>' } }];
+const unavailable = () => new Error('Owned Codex app-server transport is unavailable.');
+/** Fake app-server processes that answer FLUJO from the recording, in order:
+ * one entry per process FLUJO starts. Recorded client ids are mapped to the
+ * ids FLUJO actually sends, so FLUJO finds its own inputs after a reconnect. */
+function replayProcesses(...processes: (string | Frame[])[][]) {
   const sent: Message[] = [];
-  let cursor = 0, emit!: (message: Message) => void, closed!: () => void;
-  const close = new Promise<void>(resolve => { closed = resolve; });
-  const isRequest = (frame: Frame) => frame.direction === 'out' && frame.message.id !== undefined && frame.message.method;
-  const flush = () => {
-    for (; cursor < frames.length && !isRequest(frames[cursor]); cursor++) {
-      const { direction, message } = frames[cursor];
-      if (direction === 'in' && message.method && message.id === undefined) emit(message);
-    }
+  const ids = new Map<string, string>();
+  const mapped = <T,>(value: T): T => {
+    let text = JSON.stringify(value);
+    for (const [recorded, actual] of ids) text = text.split(recorded).join(actual);
+    return JSON.parse(text) as T;
   };
-  const stop = jest.fn(async () => { flush(); closed(); });
+  const stops: jest.Mock[] = [];
+  let started = 0;
   jest.mocked(startOwnedCodexAppServer).mockReset().mockImplementation(async input => {
-    emit = message => input.onNotification(message as Parameters<typeof input.onNotification>[0]);
+    const frames = (processes[started++] ?? []).flatMap(name => typeof name === 'string' ? session(name) : name);
+    let cursor = 0, ended = false, finish!: () => void;
+    const close = new Promise<void>(resolve => { finish = () => { ended = true; resolve(); }; });
+    const isRequest = (frame: Frame) => frame.direction === 'out' && frame.message.id !== undefined && frame.message.method;
+    const deliver = ({ direction, message }: Frame) => {
+      if (message.method === '<killed>') finish();
+      else if (!ended && direction === 'in' && message.method && message.id === undefined) input.onNotification(mapped(message) as Parameters<typeof input.onNotification>[0]);
+    };
+    const flush = () => { for (; cursor < frames.length && !isRequest(frames[cursor]); cursor++) deliver(frames[cursor]); };
+    const stop = jest.fn(async () => { flush(); finish(); });
+    stops.push(stop);
     return {
-      stop, notify: jest.fn(), registration: { close },
+      stop, notify: jest.fn(), registration: { close, requestStop: finish },
       request: async (method: string, params: Record<string, unknown>) => {
+        if (ended) throw unavailable();
         sent.push({ method, params });
         flush();
         const frame = frames[cursor];
         if (!frame || frame.message.method !== method) throw new Error(`Unrecorded request ${method}`);
+        const recordedId = frame.message.params?.clientUserMessageId;
+        if (typeof recordedId === 'string' && typeof params?.clientUserMessageId === 'string') ids.set(recordedId, params.clientUserMessageId);
         const id = frame.message.id;
         let answer: Message | undefined;
         for (cursor++; cursor < frames.length && !isRequest(frames[cursor]); cursor++) {
           const { direction, message } = frames[cursor];
-          if (direction !== 'in') continue;
-          if (message.id === id && !message.method) { answer = message; cursor++; break; }
-          if (message.method && message.id === undefined) emit(message);
+          if (direction === 'in' && message.id === id && !message.method) { answer = message; cursor++; break; }
+          deliver(frames[cursor]);
+          if (ended) throw unavailable();
         }
         setImmediate(flush);
         if (!answer) throw new Error(`No recorded answer to ${method}`);
         if (answer.error) throw new CodexAppServerRpcError(answer.error.code);
-        return answer.result;
+        return mapped(answer.result);
       },
     } as unknown as Awaited<ReturnType<typeof startOwnedCodexAppServer>>;
   });
-  return { sent, stop };
+  return { sent, stops, processes: () => started };
 }
+const replay = (...names: (string | Frame[])[]) => replayProcesses(names);
 const make = (extra: Partial<Parameters<typeof createCodexAppServerThread>[0]> = {}) => createCodexAppServerThread({
   executable: 'bundled-codex', env: { NODE_ENV: 'test' }, config: { features: { shell_tool: false } }, options,
-  developerInstructions: 'You are the FLUJO protocol recording fixture.', onUsage: jest.fn(), ...extra,
+  developerInstructions: 'You are the FLUJO protocol recording fixture.', serviceTier: 'default', onUsage: jest.fn(), ...extra,
 });
 async function drain(thread: ReturnType<typeof make>, prompt: string) {
   const { events } = await thread.runStreamed(prompt, {});
@@ -95,7 +111,7 @@ it('was recorded with the Codex CLI and SDK this checkout installs', () => {
 });
 
 it('runs a new conversation on the recorded stream: true deltas, final answer, usage and plan limits', async () => {
-  const { sent, stop } = replay('start');
+  const { sent, stops } = replay('start');
   const onUsage = jest.fn(), onRateLimits = jest.fn();
   const thread = make({ onUsage, onRateLimits });
   const events = await drain(thread, 'Say the fixture reply.');
@@ -110,12 +126,15 @@ it('runs a new conversation on the recorded stream: true deltas, final answer, u
   expect(thread.runtimeVersion()).toBe(recording.recordedWith.cliVersion);
   expect(thread.completedTurnId()).toBe(firstTurnId);
   // The recording exercised exactly the request shapes FLUJO sends, and the CLI accepted them.
+  expect(sent.find(message => message.method === 'thread/start')!.params).toMatchObject({ serviceTier: 'default' });
+  expect(result('start', 'thread/start')).toMatchObject({ serviceTier: 'default' });
   for (const method of ['thread/start', 'turn/start']) {
     expect(Object.keys(sent.find(message => message.method === method)!.params!).sort())
       .toEqual(Object.keys(outbound('start', method).params!).sort());
   }
   await thread.close();
-  expect(stop).toHaveBeenCalledTimes(1);
+  expect(stops).toHaveLength(1);
+  expect(stops[0]).toHaveBeenCalledTimes(1);
 });
 
 it('resumes after a restart without counting the earlier turn, then explains a used-up plan in plain words', async () => {
@@ -128,8 +147,13 @@ it('resumes after a restart without counting the earlier turn, then explains a u
   // The resumed turn's totals arrive again before turn/start; only the new turn reports.
   expect(onUsage).toHaveBeenCalledTimes(1);
   expect(onUsage.mock.calls[0][0]).toMatchObject({ input_tokens: 360, output_tokens: 36 });
-  expect(Object.keys(sent.find(message => message.method === 'thread/resume')!.params!).sort())
-    .toEqual(Object.keys(outbound('resume', 'thread/resume').params!).sort());
+  // Resume asks for no inline history and reads the newest turns page instead.
+  for (const method of ['thread/resume', 'thread/turns/list']) {
+    expect(Object.keys(sent.find(message => message.method === method)!.params!).sort())
+      .toEqual(Object.keys(outbound('resume', method).params!).sort());
+  }
+  expect(sent.find(message => message.method === 'thread/resume')!.params).toMatchObject({ excludeTurns: true });
+  expect((result('resume', 'thread/resume').thread as { turns: unknown[] }).turns).toEqual([]);
 
   const { events: limited } = await thread.runStreamed('FLUJO_FIXTURE_USAGE_LIMIT', {});
   const seen: string[] = [];
@@ -142,15 +166,79 @@ it('resumes after a restart without counting the earlier turn, then explains a u
 
 it('accepts the recorded fork of a completed turn with lineage, policy and workspace intact', async () => {
   // The fork ran in the resumed process; a fresh FLUJO process first initializes.
-  const handshake = session('start').slice(0, session('start').findIndex(frame => frame.message.method === 'thread/start'));
-  replay(handshake, 'fork');
+  replay(handshake(), 'fork');
   const thread = make({ fork: { threadId: threadId.id, lastTurnId: firstTurnId, sessionId: threadId.sessionId } });
   const { events } = await thread.runStreamed('After the fork.', {});
   expect((await events.next()).value).toMatchObject({ type: 'thread.started' });
-  const forked = result('fork', 'thread/fork').thread as { id: string; sessionId: string };
+  const forked = result('fork', 'thread/fork').thread as { id: string; sessionId: string; turns: unknown[] };
   expect(thread.nativeSessionId()).toBe(forked.sessionId);
+  // The boundary check reads the paged turn list, not deprecated inline history.
+  expect(forked.turns).toEqual([]);
   // Only the fork itself was recorded; FLUJO goes on to its own turn.
   await expect(events.next()).rejects.toThrow('Unrecorded request turn/start');
+  await thread.close();
+});
+
+const handshake = () => session('start').slice(0, session('start').findIndex(frame => frame.message.method === 'thread/start'));
+const turnStarts = (sent: Message[]) => sent.filter(message => message.method === 'turn/start');
+const finalText = (events: Awaited<ReturnType<typeof drain>>) => events.filter(event => event.type === 'item.completed')
+  .map(event => (event as { item: { text?: string } }).item.text).at(-1);
+
+it('passes FLUJO\'s output schema with the turn; the recording proves Codex hands it to the model', async () => {
+  const { sent } = replay('structured');
+  const schema = (outbound('structured', 'turn/start').params as { outputSchema: Record<string, unknown> }).outputSchema;
+  const thread = make({ resumeThreadId: threadId.id, outputSchema: schema });
+  const events = await drain(thread, 'Answer as JSON.');
+  expect(turnStarts(sent)[0].params).toMatchObject({ outputSchema: schema });
+  expect(JSON.parse(finalText(events)!)).toEqual({ answer: expect.stringMatching(/^Fixture reply \d+\.$/) });
+  await thread.close();
+});
+
+it('after a connection lost before Codex saved the input, confirms it is missing, then sends it exactly once more', async () => {
+  const { sent, stops, processes } = replayProcesses(['drop-before-record', KILLED], ['drop-before-record-reconnect']);
+  const thread = make({ resumeThreadId: threadId.id });
+  const events = await drain(thread, 'Input lost with the connection.');
+  expect(processes()).toBe(2);
+  // Same input, same client id: Codex was asked first and had no such turn.
+  const starts = turnStarts(sent);
+  expect(starts).toHaveLength(2);
+  expect(starts[1].params).toEqual(starts[0].params);
+  expect(sent.filter(message => message.method === 'thread/turns/list').at(-1)!.params).toMatchObject({ itemsView: 'full' });
+  expect(events.at(-1)?.type).toBe('turn.completed');
+  expect(finalText(events)).toMatch(/^Fixture reply \d+\.$/);
+  expect(thread.usageUnknown()).toBe(false);
+  expect(stops[0]).toHaveBeenCalled();
+  await thread.close();
+});
+
+it('after a connection lost mid-answer, finds the saved turn by its client id and continues it without resending the input', async () => {
+  const { sent, processes } = replayProcesses(['drop-mid-answer', KILLED], ['drop-mid-answer-reconnect']);
+  const thread = make({ resumeThreadId: threadId.id });
+  const events = await drain(thread, 'FLUJO_FIXTURE_HANG');
+  expect(processes()).toBe(2);
+  const starts = turnStarts(sent);
+  expect(starts.map(message => (message.params!.input as { text: string }[])[0].text))
+    .toEqual(['FLUJO_FIXTURE_HANG', CODEX_CONTINUE_AFTER_DROP]);
+  expect(starts[1].params!.clientUserMessageId).not.toBe(starts[0].params!.clientUserMessageId);
+  expect(events.at(-1)?.type).toBe('turn.completed');
+  expect(finalText(events)).toMatch(/^Fixture reply \d+\.$/);
+  await thread.close();
+});
+
+it('re-sends FLUJO\'s standing instructions and receipts when Codex compacts on its own, and Codex takes them', async () => {
+  const { sent } = replay('compaction');
+  const carry = '[FLUJO context kept after compaction]\nNever delete files.';
+  const onCompactionCarryLost = jest.fn();
+  const compactionCarry = jest.fn(() => carry);
+  const thread = make({ compactionCarry, onCompactionCarryLost });
+  expect((await drain(thread, 'Never delete files.')).at(-1)?.type).toBe('turn.completed');
+  expect(compactionCarry).not.toHaveBeenCalled();
+  const events = await drain(thread, 'Keep going.');
+  expect(events.at(-1)?.type).toBe('turn.completed');
+  expect(sent.find(message => message.method === 'turn/steer')!.params).toMatchObject({ input: [{ type: 'text', text: carry }] });
+  expect(compactionCarry).toHaveBeenCalledTimes(1);
+  // Codex recorded the carry as a user message in the same turn: it was kept.
+  expect(onCompactionCarryLost).not.toHaveBeenCalled();
   await thread.close();
 });
 

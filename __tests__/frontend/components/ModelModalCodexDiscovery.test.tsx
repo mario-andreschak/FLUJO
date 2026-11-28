@@ -55,6 +55,21 @@ it('shows a newly returned model and its reasoning options without a static sugg
   expect(save.mock.calls[0][0]).toMatchObject({ name: 'future-7.9', reasoningEffort: 'ultra', ApiKey: '' });
 });
 
+it.each([
+  [['priority'], true],
+  [[], false],
+])('offers the Fast speed tier only when Codex lists it for the chosen model (%j)', async (tiers, offered) => {
+  mockDiscover.mockResolvedValue([{ id: 'tiered-model', name: 'Tiered', serviceTiers: tiers }]);
+  const save = jest.fn(async (_model: Model) => ({ success: true }));
+  render(<ThemeProvider theme={createTheme()}><ModelModal open model={{ ...model, name: 'tiered-model', serviceTier: 'priority' }}
+    onSave={save} onClose={jest.fn()} /></ThemeProvider>);
+  await waitFor(() => expect(mockDiscover).toHaveBeenCalled());
+  await waitFor(() => expect(Boolean(screen.queryByRole('combobox', { name: 'Priority' }))).toBe(offered));
+  fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+  await waitFor(() => expect(save).toHaveBeenCalled());
+  expect(save.mock.calls[0][0].serviceTier).toBe(offered ? 'priority' : undefined);
+});
+
 it('preserves the saved ID during discovery failure and does not replace it with an old hardcoded model', async () => {
   mockDiscover.mockRejectedValue(new Error('offline'));
   render(<ThemeProvider theme={createTheme()}><ModelModal open model={model} onSave={jest.fn()} onClose={jest.fn()} /></ThemeProvider>);

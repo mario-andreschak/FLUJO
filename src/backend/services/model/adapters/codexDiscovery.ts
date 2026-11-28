@@ -24,6 +24,10 @@ export function normalizeCodexModels(rows: unknown[], runtimeRows: unknown[] = [
       const effort = record(value)?.reasoningEffort;
       return typeof effort === 'string' && ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(effort) ? [effort] : [];
     }) : [];
+    const tiers = Array.isArray(row.serviceTiers) ? row.serviceTiers.flatMap(value => {
+      const tier = record(value)?.id;
+      return typeof tier === 'string' && /^[a-z][a-z0-9_-]{0,63}$/.test(tier) ? [tier] : [];
+    }) : undefined;
     const modalities = Array.isArray(row.inputModalities) ? row.inputModalities.filter((item): item is string => typeof item === 'string') : undefined;
     const runtime = metadata.get(row.model);
     const window = row.contextWindow ?? runtime?.context_window;
@@ -34,6 +38,7 @@ export function normalizeCodexModels(rows: unknown[], runtimeRows: unknown[] = [
       id: row.model, name: typeof row.displayName === 'string' ? row.displayName.slice(0, 256) : row.model,
       ...(typeof row.description === 'string' ? { description: row.description.slice(0, 4096) } : {}),
       ...(efforts.length ? { reasoningEfforts: [...new Set(efforts)] } : {}),
+      ...(tiers ? { serviceTiers: [...new Set(tiers)] } : {}),
       ...(contextWindow ? { contextWindow } : {}),
       ...(modalities ? { inputModalities: modalities, visionInputCapability: modalities.includes('image') ? 'supported' : 'unsupported' } : {}),
     });

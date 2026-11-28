@@ -242,6 +242,27 @@ export function assertPackagedAcceptance(workflows, { mainIntegration = false } 
 }
 
 /**
+ * The Codex a shipped FLUJO runs is checked where it is installed: the Windows
+ * installer's fresh install runs one conversation, a restart and a cancel with
+ * its own Codex, and release safety runs the same checks on both systems.
+ */
+export function assertPackagedCodexAcceptance(workflows) {
+  const installer = workflows['installer.yml']?.jobs?.['installer-acceptance']?.steps ?? [];
+  const acceptance = installer.findIndex(step => step.run?.includes(PACKAGED_ACCEPTANCE));
+  const codex = installer.findIndex(step => step.run?.includes('node scripts/packaged-codex-acceptance.mjs --app-root $appRoot --report '));
+  const upload = installer.findIndex(step => step.uses?.startsWith('actions/upload-artifact@'));
+  if (codex < 0 || codex < acceptance || codex > upload || installer[codex].if !== undefined || installer[codex]['continue-on-error']
+      || !installer[codex].run.includes("'FLUJO fresh install'")) {
+    throw new Error('installer.yml/installer-acceptance must run the Codex checks on the fresh install after it is installed and before its evidence is kept.');
+  }
+  const safety = workflows['verify.yml']?.jobs?.['release-safety']?.steps ?? [];
+  const unit = safety.find(step => step.run === 'node --test scripts/packaged-codex-acceptance.test.mjs');
+  if (!unit || unit.if !== undefined || unit['continue-on-error']) {
+    throw new Error('Release safety must run the shipped Codex checks on both operating systems.');
+  }
+}
+
+/**
  * The release sweep only reports (docs/release-sweep.md): its jobs may file issues but never push code,
  * open pull requests or publish, and the job that can file issues never installs or runs FLUJO.
  */
@@ -266,6 +287,7 @@ export function assertFullWorkflowContract(workflows, { mainIntegration = false 
   assertReleaseSweepReportsOnly(workflows['release-sweep.yml']);
   assertReleaseVerificationGates(workflows);
   assertPackagedAcceptance(workflows, { mainIntegration });
+  assertPackagedCodexAcceptance(workflows);
   const releaseSteps = workflows['verify.yml']?.jobs?.['release-safety']?.steps ?? [];
   const installerDecisions = releaseSteps.find(step => step.name === 'Verify Windows installer decisions before publication');
   if (releaseSteps.find(step => step.uses?.startsWith('actions/checkout@'))?.with?.['fetch-depth'] !== 0

@@ -219,6 +219,19 @@ function journeyGitFixture(t) {
   return { ancestor, workflowSha, unmerged, git, execute };
 }
 
+for (const [label, change] of [
+  ['omitted installed Codex checks', files => { const job = files['installer.yml'].jobs['installer-acceptance']; job.steps = job.steps.filter(step => !step.run?.includes('packaged-codex-acceptance.mjs')); }],
+  ['tolerated installed Codex checks', files => { files['installer.yml'].jobs['installer-acceptance'].steps.find(step => step.run?.includes('packaged-codex-acceptance.mjs'))['continue-on-error'] = true; }],
+  ['installed Codex checks after the evidence upload', files => { const steps = files['installer.yml'].jobs['installer-acceptance'].steps; const index = steps.findIndex(step => step.run?.includes('packaged-codex-acceptance.mjs')); steps.push(...steps.splice(index, 1)); }],
+  ['omitted shipped Codex tests', files => { const job = files['verify.yml'].jobs['release-safety']; job.steps = job.steps.filter(step => step.run !== 'node --test scripts/packaged-codex-acceptance.test.mjs'); }],
+]) {
+  test(`workflow validation refuses ${label}`, () => {
+    const files = readWorkflows();
+    change(files);
+    assert.throws(() => assertFullWorkflowContract(files), /Codex checks/);
+  });
+}
+
 test('real selected-source guard accepts trusted workflow and ancestor checkouts', (t) => {
   const f = journeyGitFixture(t);
   for (const selected of [f.workflowSha, f.ancestor]) {

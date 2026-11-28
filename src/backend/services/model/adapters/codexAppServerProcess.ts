@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { killProcessTree } from '@/utils/process/killProcessTree';
 import { assertHostAccess } from '@/backend/services/accounts/hostAccess';
 import { captureRuntimeChildIdentity, probeRuntimeProcessIdentity, type RuntimeProcessIdentity } from '@/backend/services/enduringAgents/runtimeLock';
 
@@ -42,7 +43,7 @@ export class CodexAppServerRequestError extends Error {
 export type CodexAppServerRequest = Readonly<{ id: number | string; method: string; params: unknown }>;
 const MAX_FRAME_BYTES = 8 * 1024 * 1024;
 const MAX_PENDING = 32;
-const METHODS = new Set(['initialize', 'account/read', 'account/rateLimits/read', 'model/list', 'thread/start', 'thread/resume', 'thread/read', 'thread/fork', 'thread/compact/start', 'turn/start', 'turn/steer', 'turn/interrupt']);
+const METHODS = new Set(['initialize', 'account/read', 'account/rateLimits/read', 'model/list', 'thread/start', 'thread/resume', 'thread/read', 'thread/fork', 'thread/turns/list', 'thread/compact/start', 'turn/start', 'turn/steer', 'turn/interrupt']);
 
 /** Own the public app-server child at birth. Registration precedes all wire input.
  * This transport does not by itself qualify a model, tool inventory, or Original.
@@ -58,8 +59,10 @@ export async function startOwnedCodexAppServer(input: {
   await assertHostAccess('command-line-model');
   const admissionTimeoutMs=input.admissionTimeoutMs ?? 30000;
   if(!Number.isInteger(admissionTimeoutMs) || admissionTimeoutMs<1 || admissionTimeoutMs>30000)throw new Error('Invalid Codex admission timeout.');
+  // Codex starts helpers of its own (git, tool servers). On POSIX it leads its
+  // own process group so a forced stop reaches them; Windows stops the tree.
   const child = spawn(input.executable, input.args ?? ['app-server', '--stdio'], {
-    env: input.env, cwd: input.cwd, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
+    env: input.env, cwd: input.cwd, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32',
   });
   let exited = false, closed = false, stopping = false, registered = false, sequence = 0;
   let frame = Buffer.alloc(0);
@@ -77,12 +80,18 @@ export async function startOwnedCodexAppServer(input: {
   const exit = new Promise<Readonly<{code: number | null; signal: NodeJS.Signals | null}>>(resolve => {
     child.once('exit', (code, signal) => {exited=true;resolve(Object.freeze({code,signal}));});
   });
+  let cancelEscalation: (() => void) | undefined;
   const close = new Promise<void>(resolve => child.once('close', () => {
-    closed=true;clearIncoming();rejectPending(unavailable());input.signal?.removeEventListener('abort', abort);resolve();
+    closed=true;clearIncoming();rejectPending(unavailable());input.signal?.removeEventListener('abort', abort);cancelEscalation?.();resolve();
   }));
   const requestStop = () => {
     stopping=true;clearIncoming();
-    if (!exited && !closed) child.kill();
+    if (exited || closed || cancelEscalation) return;
+    const cancelTree = killProcessTree(child);
+    // Stop Codex itself even when the tree stop cannot run (no taskkill).
+    const fallback = setTimeout(() => { if (!exited) child.kill('SIGKILL'); }, 2000);
+    fallback.unref();
+    cancelEscalation = () => { cancelTree(); clearTimeout(fallback); };
   };
   const abort = () => {rejectPending(unavailable());requestStop();};
   input.signal?.addEventListener('abort',abort,{once:true});

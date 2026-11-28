@@ -417,9 +417,14 @@ export const ModelModal = ({ open, model, onSave, onClose, onReload }: ModelModa
   );
   // A Creativity value this connection already saved (a draft has no name yet).
   const savedCreativity = model.name ? String(model.temperature ?? '').trim() : '';
-  const discoveredEfforts = openRouterModels.find(candidate => candidate.id === formState.name)?.reasoningEfforts;
+  const discoveredModel = openRouterModels.find(candidate => candidate.id === formState.name);
+  const discoveredEfforts = discoveredModel?.reasoningEfforts;
   if (currentProfile.id === 'codex' && discoveredEfforts?.length) {
     configurationCapabilities.effortLevels = discoveredEfforts as NonNullable<typeof configurationCapabilities.effortLevels>;
+  }
+  // Codex lists each model's speed tiers; offer Fast exactly where it does.
+  if (currentProfile.id === 'codex' && discoveredModel?.serviceTiers) {
+    configurationCapabilities.priority = discoveredModel.serviceTiers.includes('priority');
   }
   const visibleProviderModels = useMemo(
     () => settings?.experimental?.showModelsWithoutToolCapabilities

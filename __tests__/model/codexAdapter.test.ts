@@ -88,7 +88,7 @@ const resumeThreadMock = jest.fn();
 const runStreamedMock = jest.fn();
 const appServerThreadMock = jest.fn();
 jest.mock('@/backend/services/model/adapters/codexAppServerThread', () => ({
-  createCodexAppServerThread: (...args: unknown[]) => appServerThreadMock(...args),
+  createCodexAppServerThread: (...args: unknown[]) => ({ usageUnknown: () => false, ...appServerThreadMock(...args) }),
 }));
 const readTokenSnapshotMock = jest.fn();
 jest.mock('@/backend/services/model/adapters/codexContextUsage', () => ({
@@ -312,6 +312,27 @@ describe('CodexAdapter — catalog snapshot lifetime', () => {
       }) },
     }));
     expect(onCodexSessionChange).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it('passes the speed tier and compaction carry to the thread, and leaves usage out when a recovered turn never reported it', async () => {
+    process.env.FLUJO_CODEX_APP_SERVER = '1';
+    let carry: string | undefined;
+    appServerThreadMock.mockImplementationOnce(options => ({
+      runStreamed: async () => ({ events: (async function* () {
+        yield { type: 'thread.started', thread_id: 'recovered-thread' };
+        carry = options.compactionCarry();
+        yield agentMessage('Recovered answer.');
+        yield turnCompleted({ input_tokens: 100, output_tokens: 20 });
+      })() }), close: jest.fn(async () => {}), canSteer: () => false, usage: () => ({ input_tokens: 100, output_tokens: 20 }),
+      usageUnknown: () => true,
+    }));
+    const result = await new CodexAdapter().createCompletion(baseInput({ apiKey: '',
+      model: { id: 'm1', name: 'gpt-5.5', provider: 'codex', adapter: 'codex-cli', serviceTier: 'priority', ApiKey: '' },
+      messages: [{ role: 'user', content: 'Never push to main.' }] as OpenAI.ChatCompletionMessageParam[] }));
+    expect(appServerThreadMock.mock.calls.at(-1)![0]).toMatchObject({ serviceTier: 'priority' });
+    expect(carry).toContain('1. Never push to main.');
+    expect(result.completion.choices[0].message.content).toBe('Recovered answer.');
+    expect(result.completion.usage).toBeUndefined();
   });
 
   it('retains executable and snapshot until a failed ordinary close receives actual close proof', async () => {

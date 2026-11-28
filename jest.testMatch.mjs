@@ -85,6 +85,8 @@ export const ISOLATED_TEST_FILES = [
   '__tests__/mcp/browserCaptureRecording.test.ts',
   '__tests__/packages/workspaceMcpTransfer.test.ts',
   '__tests__/snapshot/ShadowRepoService.test.ts',
+  // Real bundled Codex processes; the cancellation checks count processes.
+  '__tests__/model/codexStandIn.test.ts',
 ];
 
 // Environment switch consulted by jest.config.mjs. scripts/run-local-jest.cjs
