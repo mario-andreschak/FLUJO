@@ -48,8 +48,10 @@
     },
     {
       "file": "src/backend/services/mcp/index.ts",
-      "maxLines": 4294,
-      "modules": []
+      "maxLines": 4180,
+      "modules": [
+        "src/backend/services/mcp/serviceRegistries.ts"
+      ]
     }
   ],
   "backImportDebt": [
