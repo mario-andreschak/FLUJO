@@ -87,11 +87,6 @@ import { decodeToolName, isToolOfferedInStep } from '@/backend/execution/flow/ha
 import { GRACEFUL_CAP_SUMMARY_INSTRUCTION, GRACEFUL_CAP_TOOL_RESULT } from '@/backend/execution/flow/handlers/gracefulCap';
 import { isMeetingTurnSilent } from '@/backend/execution/flow/handlers/meetingTools';
 import { DEFAULT_AGENTIC_MAX_TURNS } from '@/shared/types/model/model';
-import {
-  classifyStatisticsError,
-  createStatisticsEvent,
-  recordStatisticsEvent,
-} from '@/backend/services/statistics';
 import { statisticsRevisionId } from '@/backend/services/statistics/metadata';
 import {
   classifyRecoveryFailure,
@@ -102,7 +97,7 @@ import {
   markDanglingToolEffectsUnknown,
   setRecoveryTransition,
 } from '@/backend/execution/flow/recoveryCheckpoint';
-import { acknowledgeSubflowContinuation, queueSubflowRunOutcome } from '@/backend/execution/flow/subflowRecovery';
+import { acknowledgeSubflowContinuation } from '@/backend/execution/flow/subflowRecovery';
 import { withSubflowOutputConsumption } from '@/backend/execution/flow/subflowOutputBudget';
 import { normalizeSessionKey } from '@/backend/execution/flow/sessionManagement';
 import { hydrateLazyToolPayloads } from '@/backend/execution/flow/lazyToolPayloads';
@@ -118,6 +113,7 @@ import { installPersonaActivitySnapshot } from './personaActivityState';
 import { decisionsOfThisRun, describeRunError, runSuccessOutput } from './runFlowResult';
 import { validateFlowRunInput } from './runInputValidation';
 import { assertLoadedStateMayRun, loadRunState } from './runStateLoading';
+import { createRunStatistics } from './runStatistics';
 import {
   ATTACH_BREAKPOINT,
   matchToolBreakpoint,
@@ -578,90 +574,9 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   initializeRecovery(sharedState, logicalRunId);
   if (input.lane) sharedState.subflowLane = input.lane;
   if (sharedState.subflowLane) sharedState.recovery!.lane = sharedState.subflowLane;
-  const flowSnapshot = () => ({
-    id: sharedState.flowId || input.flowId || input.flowDefinition?.id || input.modelName || 'unknown',
-    name: sharedState.statisticsFlowName ?? sharedState.flowSnapshot?.name ?? input.flowDefinition?.name,
+  const { ensureRunStarted, finalizeRun } = createRunStatistics({
+    state: () => sharedState, input, logicalRunId, effectiveConvId, startTime,
   });
-  const plannedExecution = sharedState.plannedExecutionId
-    ? {
-        id: sharedState.plannedExecutionId,
-        name: sharedState.statisticsPlannedExecutionName,
-      }
-    : undefined;
-  const runPersonaAttribution = sharedState.personaAttribution
-    ? { ...sharedState.personaAttribution }
-    : undefined;
-  // Lineage: the spawning run's logical id travels with every lifecycle record
-  // so a child run can be rolled up under its parent without in-memory state.
-  const runRevisions = () => (sharedState.statisticsFlowRevisionId
-    ? { flowRevisionId: sharedState.statisticsFlowRevisionId }
-    : undefined);
-  const ensureRunStarted = () => {
-    if (sharedState.statisticsRunStarted) return;
-    recordStatisticsEvent(createStatisticsEvent({
-      type: 'run.started',
-      runId: logicalRunId,
-      source: input.source,
-      flow: flowSnapshot(),
-      plannedExecution,
-      conversationId: effectiveConvId,
-      parentRunId: sharedState.parentRunId,
-      revisions: runRevisions(),
-      ...(runPersonaAttribution ? { personaAttribution: runPersonaAttribution } : {}),
-    }));
-    sharedState.statisticsRunStarted = true;
-  };
-
-  const finalizeRun = (result: Omit<FlowRunResult, 'runId'>): FlowRunResult => {
-    ensureRunStarted();
-    const durationMs = Math.max(0, Date.now() - (sharedState.statisticsRunStartedAt ?? startTime));
-    if (result.status === 'awaiting_tool_approval' || result.status === 'paused_debug') {
-      recordStatisticsEvent(createStatisticsEvent({
-        type: 'run.paused',
-        runId: logicalRunId,
-        source: input.source,
-        flow: flowSnapshot(),
-        plannedExecution,
-        pauseKind: result.status === 'paused_debug' ? 'debug' : 'approval',
-        durationMs,
-        parentRunId: sharedState.parentRunId,
-        revisions: runRevisions(),
-        ...(runPersonaAttribution ? { personaAttribution: runPersonaAttribution } : {}),
-      }));
-    } else if (!sharedState.statisticsRunFinished) {
-      const outcome = sharedState.isCancelled
-        ? 'cancelled' as const
-        : result.status === 'error'
-          ? 'error' as const
-          : result.status === 'capped' || sharedState.capped
-            ? 'capped' as const
-            : 'completed' as const;
-      recordStatisticsEvent(createStatisticsEvent({
-        type: 'run.finished',
-        runId: logicalRunId,
-        source: input.source,
-        flow: flowSnapshot(),
-        plannedExecution,
-        outcome,
-        durationMs,
-        parentRunId: sharedState.parentRunId,
-        revisions: runRevisions(),
-        ...(runPersonaAttribution ? { personaAttribution: runPersonaAttribution } : {}),
-        errorClass: outcome === 'error' ? classifyStatisticsError(result.error) : undefined,
-        usage: result.usage ? {
-          inputTokens: result.usage.promptTokens,
-          outputTokens: result.usage.completionTokens,
-          totalTokens: result.usage.totalTokens,
-          cachedInputTokens: result.usage.cacheReadTokens,
-          cacheWriteTokens: result.usage.cacheWriteTokens,
-        } : undefined,
-      }));
-      sharedState.statisticsRunFinished = true;
-    }
-    const finalized = { ...result, runId: logicalRunId };
-    queueSubflowRunOutcome(finalized);
-    return finalized;
-  };
 
   if (sharedState.runDepth > MAX_SUBFLOW_DEPTH) {
     log.error(`runFlow aborted: subflow depth ${sharedState.runDepth} exceeds max ${MAX_SUBFLOW_DEPTH}`);
