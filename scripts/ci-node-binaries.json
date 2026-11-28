@@ -54,14 +54,19 @@
   },
   "shipped": {
     "installer": "24.22.1",
-    "container": "22.23.4",
-    "containerBehind": "Moving the image to Node 24 needs the registry metadata of node:24.22.1-bookworm-slim recorded as archived evidence in a commit on main, and a container build and acceptance run (docs/operations/ci-node-runtime-verification.md, section Shipped runtimes)."
+    "container": "24.22.1"
   },
   "containerBase": {
-    "reference": "mirror.gcr.io/library/node:22.23.4-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d",
-    "metadataUrl": "https://hub.docker.com/v2/repositories/library/node/tags/22.23.4-bookworm-slim",
-    "metadataFile": "docs/audits/evidence/node-security-2026-10-21/docker-official-node-22.23.4-bookworm-slim.json",
-    "metadataSha256": "37c7919be2dfdc560838709849d773231d6978c41754c33dea8c7394bef7ac60",
+    "reference": "mirror.gcr.io/library/node:24.22.1-bookworm-slim@sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c",
+    "metadataUrl": "https://hub.docker.com/v2/repositories/library/node/tags/24.22.1-bookworm-slim",
+    "observedAt": "2026-11-28T01:41:00Z",
+    "observed": {
+      "name": "24.22.1-bookworm-slim",
+      "digest": "sha256:be8204d4bd327363357f532187b752ff62759c31bedf98e9e18fc08c9cbd605c",
+      "mediaType": "application/vnd.oci.image.index.v1+json",
+      "lastPushed": "2026-10-28T05:40:27.911652Z",
+      "linuxAmd64": "sha256:e1582112fb9f152ed38eefcd712efc93fee1becb519fdfa57574d5e07eaa5e7d"
+    },
     "qualification": "registry digest observed; contained Node executable must independently match the signed official binary before build and runtime packaging"
   },
   "archivedSourceRevision": "03e6639812191f018e485f090761a0a6c3421fe8"

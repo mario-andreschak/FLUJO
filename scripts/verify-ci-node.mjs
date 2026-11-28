@@ -36,10 +36,46 @@ export function shippedNodeRuntimes(binaries = manifest) {
   if (sameLine && shipped.containerBehind !== undefined) {
     throw new Error('Remove "containerBehind": the container and the installers ship the same Node line.');
   }
-  if (!binaries.containerBase?.reference?.includes(`/node:${shipped.container}-bookworm-slim@sha256:`)) {
-    throw new Error('The pinned container base must be the shipped container Node.');
-  }
+  containerBaseRecord(binaries, shipped.container);
   return { installer: shipped.installer, container: shipped.container };
+}
+
+const DIGEST = /^sha256:[a-f0-9]{64}$/;
+
+/**
+ * The container base as Docker Hub's official `library/node` repository
+ * published it: the tag, the multi-platform index digest the Dockerfile pins
+ * and the linux/amd64 image inside it. A base moved without a new observation
+ * (or an observation of another tag) fails here; the CI image build then pulls
+ * exactly this digest, and each stage checks its Node binary against the
+ * signed release.
+ */
+export function containerBaseRecord(binaries = manifest, container = binaries.shipped?.container) {
+  const base = binaries.containerBase ?? {};
+  const observed = base.observed ?? {};
+  const tag = `${container}-bookworm-slim`;
+  if (observed.name !== tag || !DIGEST.test(observed.digest ?? '') || !DIGEST.test(observed.linuxAmd64 ?? '')
+      || observed.mediaType !== 'application/vnd.oci.image.index.v1+json'
+      || base.reference !== `mirror.gcr.io/library/node:${tag}@${observed.digest}`
+      || base.metadataUrl !== `https://hub.docker.com/v2/repositories/library/node/tags/${tag}`
+      || !(Date.parse(observed.lastPushed) <= Date.parse(base.observedAt))) {
+    throw new Error(`The pinned container base must be the observed official node:${tag} index: record its tag, index digest, linux/amd64 digest and push time from https://hub.docker.com/v2/repositories/library/node/tags/${tag} in "containerBase".`);
+  }
+  return { reference: base.reference, ...observed };
+}
+
+/**
+ * Check raw registry bytes of the pinned index: they must hash to the pinned
+ * digest and name the recorded linux/amd64 image.
+ */
+export function assertContainerBaseIndex(bytes, record = containerBaseRecord()) {
+  if (`sha256:${sha256(bytes)}` !== record.digest) throw new Error('The registry index differs from the pinned container base digest.');
+  const index = JSON.parse(Buffer.from(bytes).toString('utf8'));
+  const amd64 = (index.manifests ?? []).filter(entry => entry.platform?.os === 'linux' && entry.platform?.architecture === 'amd64');
+  if (index.mediaType !== record.mediaType || amd64.length !== 1 || amd64[0].digest !== record.linuxAmd64) {
+    throw new Error('The pinned container base index does not name the recorded linux/amd64 image.');
+  }
+  return amd64[0].digest;
 }
 
 /**
