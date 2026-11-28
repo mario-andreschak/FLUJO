@@ -9,7 +9,7 @@ const isApplicationSelection = (file, id, condition) => file === 'verify.yml' &&
 const VERIFICATION_MATRIX_RUNNER = "${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}";
 
 /** Jobs only the manual broad qualification runs; its verification gate needs them too. */
-const BROAD_ONLY_JOB_IDS = Object.freeze(['antigravity-cli', 'installed-windows-acceptance', 'image-acceptance']);
+const BROAD_ONLY_JOB_IDS = Object.freeze(['antigravity-cli', 'installed-windows-acceptance', 'image-acceptance', 'system-key-store', 'system-key-store-linux']);
 const ANTIGRAVITY_INSTALL = "node -e \"require('./bin/antigravity-runtime.cjs').resolveBinary().then(binary => console.log(binary))\"";
 const ANTIGRAVITY_SUITE = 'node scripts/run-local-jest.cjs --ci --selectProjects node --runInBand --runTestsByPath __tests__/model/antigravityCliIntegration.test.ts';
 
@@ -39,10 +39,53 @@ const NON_LINUX_VERIFICATION_JOBS = Object.freeze({
   'installed-windows-acceptance': ['windows-latest', 'Installs this revision with the real flujo-setup.exe, which only runs on Windows (#570).'],
 });
 
+const SYSTEM_KEY_CHECK = 'node scripts/check-system-key-store.mjs';
+const LINUX_KEYRING_INSTALL = 'sudo apt-get update\nsudo apt-get install -y --no-install-recommends gnome-keyring libsecret-tools dbus\n';
+
+/**
+ * FLUJO's system key (#1443) is proven against the real key store of every
+ * system by CI, never by a person: Windows data protection and the macOS
+ * Keychain, and on Linux a throwaway keyring with the locked, no-service and
+ * no-session fallbacks. The check script picks the situations itself; the
+ * jobs only install what it needs and run it, with nothing optional.
+ */
+export function assertSystemKeyStoreJobs(workflow) {
+  const fail = () => {
+    throw new Error('The broad qualification must prove the system key against the real key store on macOS, Windows and Linux: '
+      + `run "${SYSTEM_KEY_CHECK}" after npm ci (on Linux after installing the keyring), with no conditions, `
+      + 'no tolerated failures and no environment that changes what it checks.');
+  };
+  const runsInOrder = (steps, ...matchers) => {
+    let previous = -1;
+    for (const matches of matchers) {
+      const index = steps.findIndex(matches);
+      if (index <= previous) return false;
+      previous = index;
+    }
+    return true;
+  };
+  const desktop = workflow?.jobs?.['system-key-store'];
+  const linux = workflow?.jobs?.['system-key-store-linux'];
+  for (const job of [desktop, linux]) {
+    const steps = job?.steps ?? [];
+    const checks = steps.filter(step => step.run === SYSTEM_KEY_CHECK);
+    if (!job || job.if !== undefined || job['continue-on-error'] || job.env !== undefined
+        || steps.some(step => step.if !== undefined || step['continue-on-error'])
+        || checks.length !== 1 || checks[0].env !== undefined
+        || !runsInOrder(steps, step => step.run === 'npm ci --include=dev', step => step.run === SYSTEM_KEY_CHECK)) fail();
+  }
+  const matrix = desktop.strategy?.matrix;
+  if (desktop.name !== 'System key store (${{ matrix.os }})' || desktop['runs-on'] !== '${{ matrix.os }}'
+      || desktop.strategy['fail-fast'] !== false || Object.keys(matrix ?? {}).join() !== 'os'
+      || JSON.stringify(matrix.os) !== JSON.stringify(['macos-latest', 'windows-latest'])) fail();
+  if (linux.name !== 'System key store (Linux keyring)' || linux['runs-on'] !== 'ubuntu-24.04' || linux.strategy !== undefined
+      || !runsInOrder(linux.steps, step => step.run === LINUX_KEYRING_INSTALL, step => step.run === SYSTEM_KEY_CHECK)) fail();
+}
+
 function assertVerificationRunners(workflow) {
   for (const [id, job] of Object.entries(workflow?.jobs ?? {})) {
-    // Its macOS and Windows matrix is checked by assertAntigravityPlatformJob.
-    if (id === 'antigravity-cli') continue;
+    // Their macOS, Windows and Linux runners are checked by assertAntigravityPlatformJob and assertSystemKeyStoreJobs.
+    if (['antigravity-cli', 'system-key-store', 'system-key-store-linux'].includes(id)) continue;
     if (Object.hasOwn(NON_LINUX_VERIFICATION_JOBS, id)) {
       if (job['runs-on'] !== NON_LINUX_VERIFICATION_JOBS[id][0]) throw new Error(`${id} must run on ${NON_LINUX_VERIFICATION_JOBS[id][0]}: ${NON_LINUX_VERIFICATION_JOBS[id][1]}`);
     } else if (['production-build', 'release-safety'].includes(id)) {
@@ -545,7 +588,10 @@ export function assertFullWorkflowContract(workflows, { mainIntegration = false 
       || !preparation.includes('[[ "$image" =~ ^sha256:[a-f0-9]{64}$ ]]')) {
     throw new Error('Isolation pulls must retry bounded identical-digest mirrors and fail closed before publishing the inspected image identity.');
   }
-  if (!mainIntegration) assertAntigravityPlatformJob(workflow);
+  if (!mainIntegration) {
+    assertAntigravityPlatformJob(workflow);
+    assertSystemKeyStoreJobs(workflow);
+  }
   const gate = workflow.jobs.verification;
   if (gate?.name !== 'verification' || gate.if !== 'always()'
       || JSON.stringify(gate.needs) !== JSON.stringify(mainIntegration ? REQUIRED_JOB_IDS : [...REQUIRED_JOB_IDS, ...BROAD_ONLY_JOB_IDS])
