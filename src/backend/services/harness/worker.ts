@@ -65,14 +65,15 @@ export async function observeHarnessConversation(state: SharedState, admission: 
     : state.flowId && { kind: 'flow' as const, flowId: state.flowId };
   if (!owner) return;
   const profiles = (await harnessProfilesForTarget(owner)).filter(profile => profile.policy.automatic);
+  let queuedEvidence = false;
   for (const profile of profiles) {
     if (await hasSeenHarnessTask(input)) continue;
     const sourceRunId = state.logicalRunId ?? `${state.conversationId}:${messages[userIndex].id}`;
     const id = harnessDigest({ profile: profile.id, task: normalizeHarnessTask(input) });
-    await withWorkspaceRuntimeLock(harnessDigest({ lock: 'queue', id: profile.id }), async () => {
-      if (await loadCollectionItem(observations(profile.id), id, null)) return;
+    const queued = await withWorkspaceRuntimeLock(harnessDigest({ lock: 'queue', id: profile.id }), async () => {
+      if (await loadCollectionItem(observations(profile.id), id, null)) return false;
       const queue = await getQueue(profile.id);
-      if (queue.pending.length >= 128) return;
+      if (queue.pending.length >= 128) return false;
       const output = [...messages].reverse().find(message => message.role === 'assistant' && typeof message.content === 'string')?.content;
       const observation: HarnessObservation = { id, profileId: profile.id, sourceRunId, createdAt: Date.now(), input,
         output: typeof output === 'string' ? output.slice(0, 32000) : '', tools, messages: structuredClone(history), executionInputs,
@@ -86,9 +87,12 @@ export async function observeHarnessConversation(state: SharedState, admission: 
       // Leave the same post-conversation quiet period for Persona memory maintenance.
       if (queue.pending.length === 4 && !queue.job) queue.nextRunAt = Math.max(queue.nextRunAt ?? 0, Date.now() + profile.policy.cooldownMinutes * 60000);
       await saveCollectionItem(queues, profile.id, queue);
+      return true;
     });
+    queuedEvidence ||= queued;
   }
-  startHarnessWorker();
+  // Startup and profile changes start the worker; a turn wakes it only with new evidence to drain.
+  if (queuedEvidence) startHarnessWorker();
 }
 
 export async function drainHarnessProfile(profile: HarnessProfile) {

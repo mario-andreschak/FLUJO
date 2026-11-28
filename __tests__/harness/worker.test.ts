@@ -110,3 +110,17 @@ it('honors disablement and retains a stopped-job event when a dispatch cannot co
   expect(promoteHarnessRun).not.toHaveBeenCalled();
   expect(mockProfile.events.at(-1)?.action).toBe('generation_stopped');
 });
+
+it('wakes the background worker only when a turn queues new evidence', async () => {
+  const workers = (globalThis as typeof globalThis & { __flujoHarnessWorkers: Map<string, unknown> }).__flujoHarnessWorkers;
+  workers.clear();
+  mockProfile.policy.automatic = false;
+  await observeHarnessConversation(turn('no automatic profile'), { source: 'chat' });
+  expect(workers.has('test')).toBe(false);
+  mockProfile.policy.automatic = true;
+  await observeHarnessConversation(turn('fresh'), { source: 'chat' });
+  expect(workers.has('test')).toBe(true);
+  workers.clear();
+  await observeHarnessConversation(turn('fresh'), { source: 'chat' });
+  expect(workers.has('test')).toBe(false);
+});
