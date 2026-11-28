@@ -57,6 +57,8 @@ declare global {
   var __flujo_retention_cron: Cron | undefined;
   // Every-minute Human step sweep (#1095): deadlines and saved answers to pick up.
   var __flujo_human_task_cron: Cron | undefined;
+  // Every-minute chat goal sweep (#1225): goals to pick up after a restart or a wait.
+  var __flujo_chat_goal_cron: Cron | undefined;
   var __flujo_subflow_task_retention_cron: Cron | undefined;
   // Hourly retention/expiry sweep for durable REMOTE MCP task records (#404).
   var __flujo_mcp_remote_task_retention_cron: Cron | undefined;
@@ -225,6 +227,17 @@ function armRetentionSweep(): void {
     global.__flujo_human_task_cron = new Cron('* * * * *', { unref: true }, () => { void sweepHumanSteps(false); });
     void sweepHumanSteps(true);
     log.info('Armed Human step sweep (every minute)');
+  }
+  // Chat goals (#1225): a goal goes on after a restart, after a failed turn's wait, and
+  // when FLUJO was too busy to start its next turn. Once now, then every minute.
+  if (!global.__flujo_chat_goal_cron) {
+    const sweepGoals = () => sweepEveryWorkspace('chat goal', async () => {
+      const { sweepChatGoals } = await import('@/backend/services/chatGoals/chatGoalRuntime');
+      return sweepChatGoals();
+    });
+    global.__flujo_chat_goal_cron = new Cron('* * * * *', { unref: true }, () => { void sweepGoals(); });
+    void sweepGoals();
+    log.info('Armed chat goal sweep (every minute)');
   }
   if (!global.__flujo_retention_cron) {
     global.__flujo_retention_cron = new Cron('0 * * * *', { unref: true }, () => {

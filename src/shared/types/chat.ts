@@ -232,6 +232,16 @@ export type FlujoChatMessage = OpenAI.ChatCompletionMessageParam & {
     source: 'events' | 'claude-channel';
   };
 
+  /**
+   * FLUJO wrote this message to keep the agent working on the chat's goal
+   * (#1225). The user role is a transport detail, not the person. Shown in the
+   * transcript; stripped from provider wire messages like agentMessage.
+   */
+  goalTurn?: {
+    goalId: string;
+    round: number;
+  };
+
   /** Token usage for the call/run that produced this message; may cover multiple model requests. */
   usage?: {
     promptTokens: number;

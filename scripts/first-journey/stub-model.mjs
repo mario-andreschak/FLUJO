@@ -10,6 +10,13 @@ import { fileURLToPath } from 'node:url';
 export const STUB_MODEL_ID = 'journey-stub';
 export const STUB_TEST_REPLY = 'Hello from the local stub model.';
 export const STUB_FINAL_PREFIX = 'The tool answered:';
+/** Goal turns (#1225) the stub works through before it says the goal is met. */
+export const STUB_GOAL_ROUNDS = 2;
+export const STUB_GOAL_DONE = 'GOAL ACHIEVED';
+/** The stub's words in goal round `round`, before any verdict line. */
+export function stubGoalReply(round) {
+  return round >= STUB_GOAL_ROUNDS ? `Round ${round}: checked the result again.` : `Round ${round}: made progress.`;
+}
 const MAX_BODY = 4 * 1024 * 1024;
 
 function text(content) {
@@ -22,6 +29,8 @@ function text(content) {
  * Decide the next assistant message. With tools on offer and no tool result since the last user
  * message, it calls the tool the user named (`use <tool>`), or the first tool whose name ends with
  * a preferred suffix. Once a tool result is in, it answers in words and quotes that result.
+ * A FLUJO goal turn ("Goal (round N): …") gets one tool call per round, and from round
+ * STUB_GOAL_ROUNDS on the reply ends with the line GOAL ACHIEVED.
  */
 export function planCompletion(body, { preferredTools = ['get_allowed_directories', 'list_allowed_directories'] } = {}) {
   const messages = Array.isArray(body?.messages) ? body.messages : [];
@@ -30,6 +39,21 @@ export function planCompletion(body, { preferredTools = ['get_allowed_directorie
   const userText = lastUser ? text(lastUser.message.content) : '';
   const since = lastUser ? messages.slice(lastUser.index + 1) : [];
   const toolResult = since.filter((message) => message.role === 'tool').at(-1);
+  const goalRound = Number(/^Goal \(round (\d+)\):/.exec(userText)?.[1] ?? 0);
+  if (goalRound) {
+    const preferred = tools.find((candidate) => preferredTools.some((suffix) => candidate.name === suffix || candidate.name.endsWith(suffix)));
+    if (preferred && !toolResult) {
+      return {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{ id: `call_${randomUUID().replaceAll('-', '')}`, type: 'function', function: { name: preferred.name, arguments: '{}' } }],
+      };
+    }
+    return {
+      role: 'assistant',
+      content: goalRound >= STUB_GOAL_ROUNDS ? `${stubGoalReply(goalRound)}\n${STUB_GOAL_DONE}` : stubGoalReply(goalRound),
+    };
+  }
   if (toolResult) {
     const excerpt = text(toolResult.content).replace(/\s+/g, ' ').trim().slice(0, 300);
     return { role: 'assistant', content: `${STUB_FINAL_PREFIX} ${excerpt}` };

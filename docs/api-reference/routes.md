@@ -4,7 +4,7 @@ Generated from the App Router source by `node scripts/generate-api-inventory.mjs
 
 This inventory lists explicit handler exports, not a public stability guarantee or complete request schema. Next.js may supply implicit HEAD/OPTIONS behavior. Internal administration routes can execute code or disclose secrets; obey their workspace, unlock, exposure, and worker-auth requirements. See the [integration guide](README.md) and the curated in-app `/docs` reference.
 
-Route files: 250.
+Route files: 251.
 
 | Path | Explicit methods | Handler |
 | --- | --- | --- |
@@ -189,6 +189,7 @@ Route files: 250.
 | `/v1/chat/conversations/{conversationId}/debug/step` | POST | [source](../../src/app/v1/chat/conversations/[conversationId]/debug/step/route.ts) |
 | `/v1/chat/conversations/{conversationId}/edit-state` | PATCH | [source](../../src/app/v1/chat/conversations/[conversationId]/edit-state/route.ts) |
 | `/v1/chat/conversations/{conversationId}/events` | GET | [source](../../src/app/v1/chat/conversations/[conversationId]/events/route.ts) |
+| `/v1/chat/conversations/{conversationId}/goal` | DELETE, GET, PATCH, POST | [source](../../src/app/v1/chat/conversations/[conversationId]/goal/route.ts) |
 | `/v1/chat/conversations/{conversationId}/inject` | POST | [source](../../src/app/v1/chat/conversations/[conversationId]/inject/route.ts) |
 | `/v1/chat/conversations/{conversationId}/model-turns` | GET | [source](../../src/app/v1/chat/conversations/[conversationId]/model-turns/route.ts) |
 | `/v1/chat/conversations/{conversationId}/model-turns/{dispatchId}` | GET | [source](../../src/app/v1/chat/conversations/[conversationId]/model-turns/[dispatchId]/route.ts) |

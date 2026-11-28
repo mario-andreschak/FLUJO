@@ -1259,14 +1259,18 @@ const MessageBubble = React.memo<MessageBubbleProps>(function MessageBubble({
   const depth = message.depth ?? 0;
   const agentMessage = message.agentMessage;
   const triggerEvent = message.triggerEvent;
-  const isHumanMessage = message.role === 'user' && !agentMessage && !triggerEvent;
-  const hasNeutralBubble = Boolean(agentMessage) || Boolean(triggerEvent) || message.role === 'assistant' || message.role === 'tool';
+  const goalTurn = message.goalTurn;
+  const isHumanMessage = message.role === 'user' && !agentMessage && !triggerEvent && !goalTurn;
+  const hasNeutralBubble = Boolean(agentMessage) || Boolean(triggerEvent) || Boolean(goalTurn)
+    || message.role === 'assistant' || message.role === 'tool';
   const senderLabel = agentMessage
     ? t(agentMessage.kind === 'completion' ? 'chat.messages.agentCompletion' : 'chat.messages.agentMessage', {
         sender: agentMessage.senderName?.trim() || agentMessage.senderConversationId,
       })
     : triggerEvent
       ? t('chat.messages.triggerEvent', { server: triggerEvent.serverName })
+    : goalTurn
+      ? t('chat.messages.goalTurn', { round: goalTurn.round })
     : message.role === 'user'
       ? t('chat.messages.you')
       : message.role === 'assistant'

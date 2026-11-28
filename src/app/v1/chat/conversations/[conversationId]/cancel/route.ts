@@ -20,6 +20,7 @@ import { commitRecoveryTransition } from '@/backend/execution/flow/recoveryCheck
 import { cancelPersonaFlowDispatch } from '@/backend/services/enduringAgents/personaDispatcher';
 import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
 import { syncHumanTaskEntry, updateHumanTaskEntry } from '@/backend/services/humanTasks/humanTaskIndex';
+import { pauseChatGoal } from '@/backend/services/chatGoals/chatGoalStore';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/cancel/route');
 
@@ -143,6 +144,11 @@ async function POST_handler(
         owner_stopped: true,
       }, { status: 202 });
     }
+
+    // Stop also holds the chat's goal (#1225), so FLUJO starts no new goal turn.
+    // The person's next message lets it go on.
+    await pauseChatGoal(conversationId, 'stopped').catch((error) =>
+      log.warn('Could not pause the chat goal on Stop', { requestId, conversationId, error }));
 
     // 3. Durably record the cancellation request BEFORE signalling the live
     // state. The legacy isCancelled flag remains the cooperative abort signal;

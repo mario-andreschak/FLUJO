@@ -12,6 +12,7 @@ import type { Flow } from '@/shared/types/flow';
 import type { ConversationChainsResponse } from '@/shared/types/conversationChain';
 import type { WirePreviewResponse } from '@/shared/types/execution/modelInput';
 import type { ManualCompactionResponse } from '@/shared/types/contextCompaction';
+import type { ChatGoal, ChatGoalAction, ChatGoalResponse, ChatGoalUpdate } from '@/shared/types/chatGoal';
 import type { ModelTurnSnapshot, ModelTurnTimelineResponse } from '@/shared/types/modelTurn';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import type { HumanAnswer } from '@/utils/shared/humanStep';
@@ -290,6 +291,38 @@ class ChatService {
       { method: 'POST', headers: { 'Content-Type': 'application/json' }, cache: 'no-store', body: '{}' },
     );
     return parse<ManualCompactionResponse>(response);
+  }
+
+  /** The goal of a chat with an agent, or null ("/goal"). */
+  async getChatGoal(conversationId: string, options: { signal?: AbortSignal } = {}): Promise<ChatGoal | null> {
+    const response = await getWithPressureRetry(
+      withWorkspaceUrl(`${BASE}/${encodeURIComponent(conversationId)}/goal`), options.signal,
+    );
+    return (await parse<ChatGoalResponse>(response)).goal;
+  }
+
+  /** Give a chat with an agent a goal it keeps working on ("/goal <text>"). */
+  async setChatGoal(conversationId: string, text: string): Promise<ChatGoalUpdate> {
+    const response = await fetch(withWorkspaceUrl(`${BASE}/${encodeURIComponent(conversationId)}/goal`), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, cache: 'no-store', body: JSON.stringify({ text }),
+    });
+    return parse<ChatGoalUpdate>(response);
+  }
+
+  /** Pause or resume a chat's goal ("/goal pause", "/goal resume"). */
+  async updateChatGoal(conversationId: string, action: ChatGoalAction): Promise<ChatGoalUpdate> {
+    const response = await fetch(withWorkspaceUrl(`${BASE}/${encodeURIComponent(conversationId)}/goal`), {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, cache: 'no-store', body: JSON.stringify({ action }),
+    });
+    return parse<ChatGoalUpdate>(response);
+  }
+
+  /** Remove a chat's goal ("/goal clear"). Returns the removed goal, or null. */
+  async clearChatGoal(conversationId: string): Promise<ChatGoal | null> {
+    const response = await fetch(withWorkspaceUrl(`${BASE}/${encodeURIComponent(conversationId)}/goal`), {
+      method: 'DELETE', cache: 'no-store',
+    });
+    return (await parse<ChatGoalResponse>(response)).goal;
   }
 
   /** Durable, exact SDK-dispatch markers for the Chat model-turn timeline. */

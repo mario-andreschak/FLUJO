@@ -1232,8 +1232,9 @@ view of that step (node, model, tools) is known:
 - Later calls keep reusing that summary with its boundary pinned, so no new
   summarizer call runs below the threshold. Newer messages stay word for word
   until the automatic threshold takes over and extends the summary as usual.
-- A switched-off setting (Settings or a node's `compactionMode: 'off'`) still
-  wins. The route answers `disabled` when summaries are off in Settings.
+- A node's `compactionMode: 'off'` still wins for that node's calls. The
+  Settings switch that turned summaries off is gone (#1449), so the route
+  always records the request.
 - While a reply is running, the route hands the request to the live state, and
   the running reply switches to the summary at its next model call.
 - Persona chats, anonymized archives and owner-protected chats answer 409: their

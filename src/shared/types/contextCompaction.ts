@@ -35,7 +35,5 @@ export interface ManualCompactionPreview {
   earlierUserMessagesFit: boolean;
 }
 
-/** Answer of POST /v1/chat/conversations/{id}/compact. */
-export type ManualCompactionResponse =
-  | { status: 'requested'; running: boolean; preview: ManualCompactionPreview }
-  | { status: 'disabled'; preview: ManualCompactionPreview };
+/** Answer of POST /v1/chat/conversations/{id}/compact. Summaries cannot be switched off (#1449). */
+export type ManualCompactionResponse = { status: 'requested'; running: boolean; preview: ManualCompactionPreview };

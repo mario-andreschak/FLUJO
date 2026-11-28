@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { STUB_FINAL_PREFIX, STUB_MODEL_ID, STUB_TEST_REPLY, planCompletion, startStubModel } from './stub-model.mjs';
+import {
+  STUB_FINAL_PREFIX, STUB_GOAL_DONE, STUB_GOAL_ROUNDS, STUB_MODEL_ID, STUB_TEST_REPLY, planCompletion, startStubModel,
+} from './stub-model.mjs';
 
 const tool = (name) => ({ type: 'function', function: { name, parameters: { type: 'object', properties: {} } } });
 
@@ -30,6 +32,18 @@ test('falls back to the preferred harmless tool, and answers with the tool resul
     ],
   });
   assert.equal(second.content, `${STUB_FINAL_PREFIX} Allowed directories: C:\\data`);
+});
+
+test('works through a FLUJO goal turn by turn: one tool call per round, then the goal is met', () => {
+  const tools = [tool('filesystem__list_allowed_directories')];
+  const turn = (round) => ({ role: 'user', content: `Goal (round ${round}): Tell me the folders\n\nKeep going.` });
+  const call = planCompletion({ tools, messages: [turn(1)] });
+  assert.equal(call.tool_calls[0].function.name, 'filesystem__list_allowed_directories');
+  const result = { role: 'tool', tool_call_id: call.tool_calls[0].id, content: 'Allowed directories:\nC:\\data' };
+  assert.deepEqual(planCompletion({ tools, messages: [turn(1), call, result] }), { role: 'assistant', content: 'Round 1: made progress.' });
+  const last = planCompletion({ tools, messages: [turn(STUB_GOAL_ROUNDS), call, result] });
+  assert.ok(last.content.endsWith(`\n${STUB_GOAL_DONE}`));
+  assert.ok(planCompletion({ messages: [turn(STUB_GOAL_ROUNDS)] }).content.endsWith(STUB_GOAL_DONE));
 });
 
 test('passes the AI Setup tool round-trip check by calling its diagnostic tool and returning the receipt', () => {
