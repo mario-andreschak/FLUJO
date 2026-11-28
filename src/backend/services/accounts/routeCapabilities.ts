@@ -203,6 +203,7 @@ export const ROUTE_CAPABILITIES = Object.freeze({
   '/v1/chat/conversations/[conversationId]/debug/step': 'workspace',
   '/v1/chat/conversations/[conversationId]/edit-state': 'workspace',
   '/v1/chat/conversations/[conversationId]/events': 'workspace',
+  '/v1/chat/conversations/[conversationId]/goal': 'workspace',
   '/v1/chat/conversations/[conversationId]/inject': 'workspace',
   '/v1/chat/conversations/[conversationId]/model-turns': 'workspace',
   '/v1/chat/conversations/[conversationId]/model-turns/[dispatchId]': 'workspace',

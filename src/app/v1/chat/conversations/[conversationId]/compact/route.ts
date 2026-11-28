@@ -69,9 +69,6 @@ async function POST_handler(
     if (denied) return NextResponse.json(denied, { status: 409 });
     const eff = await effectiveCompaction(state);
     const preview = previewManualCompaction(state.messages ?? [], eff.keepTokens, eff.contextWindow);
-    if (!eff.enabled) {
-      return NextResponse.json({ status: 'disabled', preview } satisfies ManualCompactionResponse);
-    }
     await apply();
     log.info('Recorded a manual compaction request', { conversationId, running });
     return NextResponse.json({ status: 'requested', running, preview } satisfies ManualCompactionResponse);

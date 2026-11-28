@@ -18,6 +18,10 @@ const services: ChatSlashServices = {
   getGoal: (personaId, workItemId) => personasService.getWorkItem(personaId, workItemId),
   listGoals: (personaId) => personasService.listWorkItems(personaId),
   requestCompaction: (conversationId) => chatService.requestCompaction(conversationId),
+  getChatGoal: (conversationId) => chatService.getChatGoal(conversationId),
+  setChatGoal: (conversationId, text) => chatService.setChatGoal(conversationId, text),
+  updateChatGoal: (conversationId, action) => chatService.updateChatGoal(conversationId, action),
+  clearChatGoal: (conversationId) => chatService.clearChatGoal(conversationId),
   newId: () => uuidv4(),
 };
 

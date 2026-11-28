@@ -1,8 +1,10 @@
 import type { TranslationValues } from '@/frontend/i18n/core';
 import type { PluralTranslationKey, TranslationKey } from '@/frontend/i18n/messages';
 import type { ManualCompactionResponse } from '@/shared/types/contextCompaction';
+import { CHAT_GOAL_TEXT_LIMIT, type ChatGoal, type ChatGoalAction, type ChatGoalUpdate } from '@/shared/types/chatGoal';
 import type { CreatePersonaWorkItemInput, PersonaGoalLifecycleState, PersonaWorkItem } from '@/shared/types/enduringAgent';
 import type { ConversationContextInfo } from '@/shared/types/model/contextUsage';
+import { chatGoalLines, shortGoalText } from './chatGoalText';
 import {
   SLASH_COMMANDS,
   type SlashCommandAvailability,
@@ -39,6 +41,8 @@ export interface ChatSlashActions {
   startNewConversation: () => Promise<void> | void;
   /** Copy the whole chat into a new one, like "Split here" on the last message. Returns the new chat's id. */
   forkConversation: () => Promise<string | null> | string | null;
+  /** The chat's goal changed, so the goal bar shows it right away. */
+  goalChanged?: () => void;
 }
 
 /** Existing APIs, with their own permission checks. */
@@ -47,6 +51,10 @@ export interface ChatSlashServices {
   getGoal: (personaId: string, workItemId: string) => Promise<PersonaWorkItem>;
   listGoals: (personaId: string) => Promise<PersonaWorkItem[]>;
   requestCompaction: (conversationId: string) => Promise<ManualCompactionResponse>;
+  getChatGoal: (conversationId: string) => Promise<ChatGoal | null>;
+  setChatGoal: (conversationId: string, text: string) => Promise<ChatGoalUpdate>;
+  updateChatGoal: (conversationId: string, action: ChatGoalAction) => Promise<ChatGoalUpdate>;
+  clearChatGoal: (conversationId: string) => Promise<ChatGoal | null>;
   newId: () => string;
 }
 
@@ -61,6 +69,9 @@ const GOALS_SHOWN = 5;
 /** Same pace the Persona page proposes for a new ongoing goal. */
 const GOAL_INTERVAL_MS = 60_000;
 const OPEN_GOAL_STATES: ReadonlySet<PersonaGoalLifecycleState> = new Set(['active', 'paused', 'needs_input']);
+/** Words after "/goal" that remove the chat's goal, like Claude Code's `/goal clear`. */
+const GOAL_CLEAR_WORDS: ReadonlySet<string> = new Set(['clear', 'stop', 'off', 'reset', 'none', 'cancel']);
+const GOAL_CONTROL_WORDS: ReadonlySet<string> = new Set([...GOAL_CLEAR_WORDS, 'pause', 'resume']);
 
 function errorText(error: unknown): string {
   return error instanceof Error && error.message ? error.message : String(error);
@@ -104,7 +115,7 @@ export function createChatSlashCommands(
         if (context.readOnly) return unavailable('chat.slash.unavailable.readOnly');
         return context.messageCount > 0 ? ok : unavailable('chat.slash.unavailable.forkEmpty');
       case 'goal':
-        if (!context.personaId) return unavailable('chat.slash.unavailable.goalNeedsPersona');
+        if (!context.personaId && !context.conversationId) return unavailable('chat.slash.unavailable.noConversation');
         return context.readOnly ? unavailable('chat.slash.unavailable.readOnly') : ok;
       case 'compact':
         if (!context.conversationId) return unavailable('chat.slash.unavailable.noConversation');
@@ -211,6 +222,56 @@ export function createChatSlashCommands(
     };
   };
 
+  const chatGoalStatus = (goal: ChatGoal | null): SlashCommandNotice => goal
+    ? { tone: 'info', title: t('chat.slash.goal.statusTitle'), lines: chatGoalLines(goal, t) }
+    : { tone: 'info', title: t('chat.slash.goal.statusTitle'), lines: [t('chat.slash.goal.noneChat')] };
+
+  /** "/goal" in a chat with an agent: set, show, pause, resume or clear the chat's one goal. */
+  const chatGoal = async (conversationId: string, args: string): Promise<SlashCommandNotice> => {
+    const word = args.toLowerCase();
+    try {
+      if (!args) return chatGoalStatus(await services.getChatGoal(conversationId));
+      if (word === 'pause' || word === 'resume') {
+        const { goal, running } = await services.updateChatGoal(conversationId, word);
+        actions.goalChanged?.();
+        if (!goal) return chatGoalStatus(null);
+        if (word === 'pause') {
+          return goal.state === 'paused' && goal.pause?.reason === 'person'
+            ? { tone: 'info', title: '/goal', lines: [t('chat.slash.goal.paused')] }
+            : chatGoalStatus(goal);
+        }
+        return goal.state === 'active'
+          ? { tone: 'success', title: '/goal', lines: [t(running ? 'chat.slash.goal.resumedAfterReply' : 'chat.slash.goal.resumed')] }
+          : chatGoalStatus(goal);
+      }
+      if (GOAL_CLEAR_WORDS.has(word)) {
+        const removed = await services.clearChatGoal(conversationId);
+        actions.goalChanged?.();
+        return removed
+          ? { tone: 'success', title: t('chat.slash.goal.cleared', { text: shortGoalText(removed.text) }) }
+          : chatGoalStatus(null);
+      }
+      if (args.length > CHAT_GOAL_TEXT_LIMIT) {
+        return { tone: 'warning', title: '/goal', lines: [t('chat.slash.goal.tooLong', { limit: formatNumber(CHAT_GOAL_TEXT_LIMIT) })] };
+      }
+      const { goal, running } = await services.setChatGoal(conversationId, args);
+      actions.goalChanged?.();
+      return {
+        tone: 'success',
+        title: t('chat.slash.goal.set', { text: shortGoalText(goal?.text ?? args) }),
+        lines: [t(running ? 'chat.slash.goal.afterReply' : 'chat.slash.goal.startsNow'), t('chat.slash.goal.howTo')],
+      };
+    } catch (error) {
+      const reason = errorReason(error);
+      if (reason === 'no_goal') return chatGoalStatus(null);
+      if (reason === 'not_found') return { tone: 'warning', title: '/goal', lines: [t('chat.slash.goal.notSaved')] };
+      if (reason === 'read_only' || reason === 'protected') {
+        return { tone: 'warning', title: '/goal', lines: [t('chat.slash.unavailable.readOnly')] };
+      }
+      throw error;
+    }
+  };
+
   const compact = async (conversationId: string): Promise<SlashCommandNotice> => {
     let answer: ManualCompactionResponse;
     try {
@@ -224,9 +285,6 @@ export function createChatSlashCommands(
       throw error;
     }
     const { preview } = answer;
-    if (answer.status === 'disabled') {
-      return { tone: 'warning', title: '/compact', lines: [t('chat.slash.compact.disabled')] };
-    }
     if (preview.summarizedMessages === 0) {
       return {
         tone: 'info',
@@ -280,7 +338,10 @@ export function createChatSlashCommands(
         case 'status':
           return statusNotice();
         case 'goal':
-          return args ? await createGoal(context.personaId!, args) : await listGoals(context.personaId!);
+          if (!context.personaId) return await chatGoal(context.conversationId!, args);
+          // A Persona's goals are managed on its page; control words never become a goal.
+          if (GOAL_CONTROL_WORDS.has(args.toLowerCase())) return { tone: 'info', title: '/goal', lines: [t('chat.slash.goal.manage')] };
+          return args ? await createGoal(context.personaId, args) : await listGoals(context.personaId);
         case 'compact':
           return await compact(context.conversationId!);
       }

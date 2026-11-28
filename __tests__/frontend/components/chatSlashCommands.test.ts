@@ -7,6 +7,7 @@ import {
 import { formatNumber, translate, translatePlural } from '@/frontend/i18n/core';
 import type { ManualCompactionResponse } from '@/shared/types/contextCompaction';
 import type { PersonaWorkItem } from '@/shared/types/enduringAgent';
+import type { ChatGoal } from '@/shared/types/chatGoal';
 
 const i18n = {
   t: (key: Parameters<typeof translate>[1], values?: Parameters<typeof translate>[2]) => translate('en', key, values),
@@ -61,16 +62,30 @@ function goal(overrides: Partial<PersonaWorkItem> & { state?: NonNullable<Person
   } as PersonaWorkItem;
 }
 
+function chatGoal(overrides: Partial<ChatGoal> = {}): ChatGoal {
+  return {
+    id: 'goal_1', conversationId: 'conv-1', text: 'Ship the release notes', state: 'active', createdAt: 1, updatedAt: 1,
+    rounds: 0, quietRounds: 0, failedRounds: 0, ...overrides,
+  };
+}
+
 function setup(context: ChatSlashContext, overrides: Partial<ChatSlashServices> = {}) {
   const actions: jest.Mocked<ChatSlashActions> = {
     startNewConversation: jest.fn(async () => undefined),
     forkConversation: jest.fn(async () => 'copy-1'),
+    goalChanged: jest.fn(),
   };
   const services: jest.Mocked<ChatSlashServices> = {
     createGoal: jest.fn(async (_personaId, input) => goal({ id: input.id!, title: input.title })),
     getGoal: jest.fn(async () => { throw new Error('missing'); }),
     listGoals: jest.fn(async () => []),
     requestCompaction: jest.fn(async (): Promise<ManualCompactionResponse> => ({ status: 'requested', running: false, preview })),
+    getChatGoal: jest.fn(async () => null),
+    setChatGoal: jest.fn(async (_id: string, text: string) => ({ goal: chatGoal({ text }), running: false })),
+    updateChatGoal: jest.fn(async (_id: string, action: string) => ({
+      goal: chatGoal(action === 'pause' ? { state: 'paused', pause: { reason: 'person', at: 2 } } : {}), running: false,
+    })),
+    clearChatGoal: jest.fn(async () => chatGoal()),
     newId: jest.fn(() => '1234-abcd'),
     ...overrides,
   } as jest.Mocked<ChatSlashServices>;
@@ -78,12 +93,10 @@ function setup(context: ChatSlashContext, overrides: Partial<ChatSlashServices> 
 }
 
 describe('chat slash commands (#1225)', () => {
-  it('offers goals only to Personas and compaction only to agent chats, and says why', () => {
+  it('offers goals in every chat and compaction only to agent chats, and says why', () => {
     const flow = setup(flowChat).host;
     expect(flow.availability('compact')).toEqual({ available: true });
-    expect(flow.availability('goal')).toEqual({
-      available: false, reason: expect.stringContaining('Goals belong to Personas'),
-    });
+    expect(flow.availability('goal')).toEqual({ available: true });
 
     const persona = setup(personaChat).host;
     expect(persona.availability('goal')).toEqual({ available: true });
@@ -101,6 +114,7 @@ describe('chat slash commands (#1225)', () => {
 
     const none = setup({ ...flowChat, conversationId: null }).host;
     expect(none.availability('status').available).toBe(false);
+    expect(none.availability('goal')).toEqual({ available: false, reason: 'Open or start a chat first.' });
     expect(none.availability('help').available).toBe(true);
     expect(none.availability('new').available).toBe(true);
   });
@@ -181,20 +195,13 @@ describe('chat slash commands (#1225)', () => {
     expect(lines.some(line => line.startsWith('Your 3 earlier'))).toBe(false);
   });
 
-  it('/compact explains when there is nothing to summarize, when it is switched off and when a Persona owns the chat', async () => {
+  it('/compact explains when there is nothing to summarize and when a Persona owns the chat', async () => {
     const nothing = setup(flowChat, {
       requestCompaction: jest.fn(async (): Promise<ManualCompactionResponse> => ({
         status: 'requested', running: false, preview: { ...preview, summarizedMessages: 0, estimatedTokens: 1200 },
       })),
     });
     expect(await nothing.host.run('compact', '')).toMatchObject({ tone: 'info', title: 'Nothing to summarize yet' });
-
-    const off = setup(flowChat, {
-      requestCompaction: jest.fn(async (): Promise<ManualCompactionResponse> => ({ status: 'disabled', preview })),
-    });
-    expect(await off.host.run('compact', '')).toMatchObject({
-      tone: 'warning', lines: ['Summaries are turned off in Settings, so nothing changed.'],
-    });
 
     const owned = Object.assign(new Error('A Persona manages the memory'), { status: 409, body: { reason: 'persona_owned' } });
     const persona = setup(flowChat, { requestCompaction: jest.fn(async () => { throw owned; }) });
@@ -233,13 +240,114 @@ describe('chat slash commands (#1225)', () => {
   it('/help lists only the commands that work in this chat', async () => {
     const lines = (await setup(flowChat).host.run('help', ''))?.lines ?? [];
     expect(lines.some(line => line.startsWith('/compact — '))).toBe(true);
-    expect(lines.some(line => line.startsWith('/goal'))).toBe(false);
+    expect(lines.some(line => line.startsWith('/goal <what to achieve> — '))).toBe(true);
     expect(lines.at(-1)).toContain('//goal');
+    const personaLines = (await setup(personaChat).host.run('help', ''))?.lines ?? [];
+    expect(personaLines.some(line => line.startsWith('/compact'))).toBe(false);
   });
 
   it('answers an unavailable command with its reason instead of running it', async () => {
-    const { host, services } = setup(flowChat);
+    const { host, services } = setup({ ...flowChat, conversationId: null });
     expect(await host.run('goal', 'anything')).toMatchObject({ tone: 'warning', title: '/goal' });
     expect(services.createGoal).not.toHaveBeenCalled();
+    expect(services.setChatGoal).not.toHaveBeenCalled();
+  });
+
+  describe('/goal in a chat with an agent', () => {
+    it('sets the chat goal, says the agent starts now, and refreshes the goal bar', async () => {
+      const { host, services, actions } = setup(flowChat);
+      const notice = await host.run('goal', 'Ship the release notes');
+      expect(services.setChatGoal).toHaveBeenCalledWith('conv-1', 'Ship the release notes');
+      expect(services.createGoal).not.toHaveBeenCalled();
+      expect(actions.goalChanged).toHaveBeenCalledTimes(1);
+      expect(notice).toEqual({
+        tone: 'success',
+        title: 'Goal set: Ship the release notes',
+        lines: [
+          'The agent starts now and keeps going until it says the goal is met.',
+          'Type /goal to see how it goes, /goal pause to hold it or /goal clear to drop it.',
+        ],
+      });
+    });
+
+    it('says the agent starts after the reply in progress', async () => {
+      const { host } = setup({ ...flowChat, runState: 'running' }, {
+        setChatGoal: jest.fn(async () => ({ goal: chatGoal(), running: true })),
+      });
+      expect((await host.run('goal', 'Ship the release notes'))?.lines?.[0])
+        .toBe('The agent starts on it once the current reply is done, and keeps going until it says the goal is met.');
+    });
+
+    it('shows the goal, where it stands and what to do next', async () => {
+      const none = setup(flowChat);
+      expect(await none.host.run('goal', '')).toEqual({
+        tone: 'info', title: 'Goal of this chat',
+        lines: ['This chat has no goal. Type /goal and what the agent should achieve.'],
+      });
+
+      const working = setup(flowChat, {
+        getChatGoal: jest.fn(async () => chatGoal({ rounds: 3, lastNote: 'Wrote the summary.' })),
+      });
+      expect((await working.host.run('goal', ''))?.lines).toEqual([
+        'Ship the release notes',
+        'Working on it, round 3',
+        'Last update: Wrote the summary.',
+        'Type /goal pause to hold it or /goal clear to drop it.',
+      ]);
+
+      const blocked = setup(flowChat, {
+        getChatGoal: jest.fn(async () => chatGoal({ state: 'paused', pause: { reason: 'blocked', detail: 'I need the key', at: 2 } })),
+      });
+      expect((await blocked.host.run('goal', ''))?.lines?.slice(1)).toEqual([
+        'Waiting for you: I need the key',
+        'Send a message and the agent goes on.',
+      ]);
+
+      const reached = setup(flowChat, { getChatGoal: jest.fn(async () => chatGoal({ state: 'achieved', rounds: 2 })) });
+      expect((await reached.host.run('goal', ''))?.lines?.slice(1)).toEqual([
+        'Reached',
+        'Type /goal and a new goal to start another.',
+      ]);
+    });
+
+    it('pauses, resumes and clears with words after /goal, including the clear aliases', async () => {
+      const { host, services, actions } = setup(flowChat);
+      expect(await host.run('goal', 'PAUSE')).toEqual({ tone: 'info', title: '/goal', lines: ['Goal paused. Type /goal resume to go on.'] });
+      expect(services.updateChatGoal).toHaveBeenLastCalledWith('conv-1', 'pause');
+      expect(await host.run('goal', 'resume')).toEqual({ tone: 'success', title: '/goal', lines: ['Goal resumed. The agent goes on now.'] });
+      for (const word of ['clear', 'stop', 'off', 'reset', 'none', 'cancel']) {
+        expect(await host.run('goal', word)).toEqual({ tone: 'success', title: 'Goal cleared: Ship the release notes' });
+      }
+      expect(services.clearChatGoal).toHaveBeenCalledTimes(6);
+      expect(services.setChatGoal).not.toHaveBeenCalled();
+      expect(actions.goalChanged).toHaveBeenCalledTimes(8);
+
+      const empty = setup(flowChat, { clearChatGoal: jest.fn(async () => null) });
+      expect((await empty.host.run('goal', 'clear'))?.lines).toEqual(['This chat has no goal. Type /goal and what the agent should achieve.']);
+    });
+
+    it('explains a goal that is too long, a chat that is not saved yet and a chat without a goal', async () => {
+      const { host, services } = setup(flowChat);
+      expect(await host.run('goal', 'x'.repeat(4_001))).toEqual({
+        tone: 'warning', title: '/goal', lines: ['A goal can be at most 4,000 characters long.'],
+      });
+      expect(services.setChatGoal).not.toHaveBeenCalled();
+
+      const missing = Object.assign(new Error('Conversation not found.'), { status: 404, body: { reason: 'not_found' } });
+      const unsaved = setup(flowChat, { setChatGoal: jest.fn(async () => { throw missing; }) });
+      expect((await unsaved.host.run('goal', 'Anything'))?.lines)
+        .toEqual(['This chat is not saved yet. Send a first message, then set the goal.']);
+
+      const noGoal = Object.assign(new Error('This chat has no goal.'), { status: 404, body: { reason: 'no_goal' } });
+      const resume = setup(flowChat, { updateChatGoal: jest.fn(async () => { throw noGoal; }) });
+      expect((await resume.host.run('goal', 'resume'))?.title).toBe('Goal of this chat');
+    });
+
+    it('never turns a control word into a Persona goal', async () => {
+      const { host, services } = setup(personaChat);
+      expect((await host.run('goal', 'clear'))?.lines).toEqual(["Pause, change or stop goals on the Persona's page."]);
+      expect(services.createGoal).not.toHaveBeenCalled();
+      expect(services.clearChatGoal).not.toHaveBeenCalled();
+    });
   });
 });

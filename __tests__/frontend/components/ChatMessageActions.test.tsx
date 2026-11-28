@@ -188,4 +188,19 @@ describe('inter-agent message provenance', () => {
     expect(screen.getByText('Subflow step')).toBeInTheDocument();
     expect(screen.getByTestId('subflow-lane-chip')).toHaveTextContent('Check migrations (1/2)');
   });
+
+  it('labels the turns FLUJO sends for the chat goal instead of showing them as the person', () => {
+    renderChat([{
+      id: 'goal-turn',
+      timestamp: 1,
+      role: 'user',
+      content: 'Goal (round 3): Make every test pass',
+      goalTurn: { goalId: 'goal_1', round: 3 },
+    }]);
+
+    const sender = screen.getByText(/^Goal, round 3 •/);
+    const bubble = sender.closest('[data-ask-flujo-message-id]') as HTMLElement;
+    expect(within(bubble).getByText('Goal (round 3): Make every test pass')).toBeInTheDocument();
+    expect(screen.queryByText(/^You •/)).not.toBeInTheDocument();
+  });
 });

@@ -73,6 +73,7 @@ import LiveRunIndicator, { LiveRunStats, toolProgressStatus } from './LiveRunInd
 import TodoDock from './TodoDock';
 import ConversationStats from './ConversationStats';
 import { useChatSlashCommands } from './useChatSlashCommands';
+import ChatGoalBar from './ChatGoalBar';
 import type { ChatSlashContext } from './chatSlashCommands';
 import ChatTargetSelector from './ChatTargetSelector';
 import { personaChatRoutingMetadata } from './personaChatTarget';
@@ -5133,10 +5134,21 @@ const Chat: React.FC = () => {
     const last = source.messages.at(-1);
     return last ? splitConversationAtMessage(last.id, 'head', source) : null;
   });
+  // Bumped by "/goal" so the goal bar reads the chat's goal again at once (#1225).
+  const [goalVersion, setGoalVersion] = useState(0);
+  const slashGoalChanged = useCallback(() => setGoalVersion(version => version + 1), []);
+  // FLUJO starts goal turns itself, so a short one can finish before this page
+  // notices it ran: read the chat again whenever the goal moves on.
+  const refreshAfterGoalProgress = useStableCallback(() => {
+    void fetchConversations(undefined, { silent: true });
+    const viewed = currentConversationIdRef.current;
+    if (viewed) void fetchDetailedConversation(viewed);
+  });
   const slashActions = useMemo(() => ({
     startNewConversation: slashStartNewConversation,
     forkConversation: slashForkConversation,
-  }), [slashStartNewConversation, slashForkConversation]);
+    goalChanged: slashGoalChanged,
+  }), [slashStartNewConversation, slashForkConversation, slashGoalChanged]);
   const slashPersonaId = detailedConversation?.personaId ?? currentConversationSummary?.personaId;
   const slashFlowId = detailedConversation?.flowId ?? currentConversationSummary?.flowId ?? null;
   const slashContext = useMemo<ChatSlashContext>(() => ({
@@ -6248,6 +6260,14 @@ const Chat: React.FC = () => {
                 />
               ))}
             </Box>
+          )}
+
+          {currentConversationId && !slashPersonaId && (
+            <ChatGoalBar
+              conversationId={currentConversationId}
+              refreshKey={`${currentConversationSummary?.status ?? ''}|${viewedConversationRunning}|${goalVersion}`}
+              onProgress={refreshAfterGoalProgress}
+            />
           )}
 
           {currentConversationId && (

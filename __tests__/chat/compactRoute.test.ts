@@ -92,11 +92,13 @@ describe('POST /v1/chat/conversations/:id/compact', () => {
     await running;
   });
 
-  it('changes nothing when summaries are switched off', async () => {
+  it('ignores the retired switch that turned summaries off (#1449)', async () => {
     loadItemMock.mockImplementation(settings({ compactionEnabled: false }));
     const response = await compact();
-    expect(await response.json()).toMatchObject({ status: 'disabled' });
-    expect(saveItemMock).not.toHaveBeenCalled();
+    expect(await response.json()).toMatchObject({ status: 'requested', running: false });
+    expect(saveItemMock).toHaveBeenCalledWith(`conversations/${ID}`, expect.objectContaining({
+      compactionRequest: { requestedAt: expect.any(Number) },
+    }));
   });
 
   it('leaves Persona chats, archives and protected chats to their owners', async () => {
