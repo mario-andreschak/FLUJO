@@ -64,12 +64,19 @@ export function useChatScrollNav(options: UseChatScrollNavOptions = {}): UseChat
     ...(idleMs === undefined ? {} : { idleMs }),
   });
 
-  const nav = useScrollNav<HTMLDivElement>({
+  const {
+    ref: scrollRef,
+    atTop,
+    atBottom,
+    scrollable,
+    measure,
+    onScroll,
+    scrollToPreviousAnchor,
+  } = useScrollNav<HTMLDivElement>({
     bottomThreshold: CHAT_BOTTOM_TOLERANCE,
     anchorSelector: CHAT_MESSAGE_ANCHOR_SELECTOR,
     deps: [conversationId, messages],
   });
-  const scrollRef = nav.ref;
   const stickToBottomRef = useRef(true);
 
   const scrollMessagesToBottom = useCallback(
@@ -77,9 +84,9 @@ export function useChatScrollNav(options: UseChatScrollNavOptions = {}): UseChat
       const el = scrollRef.current;
       if (!el) return;
       el.scrollTo({ top: el.scrollHeight, behavior: resolveScrollBehavior(behavior) });
-      nav.measure();
+      measure();
     },
-    [scrollRef, nav],
+    [scrollRef, measure],
   );
 
   const handleScroll = useCallback(() => {
@@ -88,9 +95,9 @@ export function useChatScrollNav(options: UseChatScrollNavOptions = {}): UseChat
       const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
       stickToBottomRef.current = distanceFromBottom < CHAT_BOTTOM_TOLERANCE;
     }
-    nav.onScroll();
+    onScroll();
     autoHide.poke();
-  }, [scrollRef, nav, autoHide]);
+  }, [scrollRef, onScroll, autoHide]);
 
   const handlePointerDown = useCallback(() => {
     autoHide.poke();
@@ -100,13 +107,13 @@ export function useChatScrollNav(options: UseChatScrollNavOptions = {}): UseChat
     stickToBottomRef.current = false;
     const el = scrollRef.current;
     if (el) el.scrollTo({ top: 0, behavior: resolveScrollBehavior('smooth') });
-    nav.measure();
-  }, [scrollRef, nav]);
+    measure();
+  }, [scrollRef, measure]);
 
   const scrollToLastMessageStart = useCallback(() => {
     stickToBottomRef.current = false;
-    nav.scrollToPreviousAnchor();
-  }, [nav]);
+    scrollToPreviousAnchor();
+  }, [scrollToPreviousAnchor]);
 
   const jumpToLatest = useCallback(() => {
     stickToBottomRef.current = true;
@@ -138,8 +145,8 @@ export function useChatScrollNav(options: UseChatScrollNavOptions = {}): UseChat
   }, [messages]);
 
   const disabled = useMemo<Partial<Record<ScrollNavAction, boolean>>>(
-    () => ({ top: nav.atTop, up: nav.atTop, bottom: nav.atBottom }),
-    [nav.atTop, nav.atBottom],
+    () => ({ top: atTop, up: atTop, bottom: atBottom }),
+    [atTop, atBottom],
   );
 
   return {
@@ -147,7 +154,7 @@ export function useChatScrollNav(options: UseChatScrollNavOptions = {}): UseChat
     scrollRef,
     // Visible whenever the transcript can scroll at all: from the default
     // bottom position the user must still be able to reach "scroll to top".
-    show: nav.scrollable && autoHide.visible,
+    show: scrollable && autoHide.visible,
     actions: CHAT_SCROLL_NAV_ACTIONS,
     disabled,
     onAction,

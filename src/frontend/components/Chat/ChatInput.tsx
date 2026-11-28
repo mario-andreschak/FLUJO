@@ -254,6 +254,12 @@ const ChatInput: React.FC<ChatInputProps> = ({
   const recordingStreamRef = useRef<MediaStream | null>(null);
   const transcriptionAbortRef = useRef<AbortController | null>(null);
   const pendingAudioBlobRef = useRef<Blob | null>(null);
+  // Whether a recording can be sent for transcription again; the blob itself stays out of render.
+  const [hasPendingAudio, setHasPendingAudio] = useState(false);
+  const rememberPendingAudio = (blob: Blob | null) => {
+    pendingAudioBlobRef.current = blob;
+    setHasPendingAudio(blob !== null);
+  };
   const recordingAttemptRef = useRef(0);
   const mountedRef = useRef(true);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -774,7 +780,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
 
       log.debug('Audio stream obtained successfully');
       recordingStreamRef.current = stream;
-      pendingAudioBlobRef.current = null;
+      rememberPendingAudio(null);
       audioChunksRef.current = [];
 
       // Prefer formats accepted directly by OpenAI-compatible transcription
@@ -877,7 +883,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
         setDialogOpen(true);
 
         if (audioBlob.size === 0) {
-          pendingAudioBlobRef.current = null;
+          rememberPendingAudio(null);
           setPendingAudioMimeType(undefined);
           setTranscriptionStatus(t('chat.input.noAudioData'));
           setTranscriptionState('error');
@@ -885,7 +891,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
           return;
         }
 
-        pendingAudioBlobRef.current = audioBlob;
+        rememberPendingAudio(audioBlob);
 
         try {
           const audioDataUrl = await readFileAsDataUrl(audioBlob);
@@ -975,7 +981,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
       recordingAttemptRef.current += 1;
       transcriptionAbortRef.current?.abort();
       transcriptionAbortRef.current = null;
-      pendingAudioBlobRef.current = null;
+      rememberPendingAudio(null);
       stopRecordingResources();
       setIsProcessing(false);
       setTranscriptionState('cancelled');
@@ -1007,7 +1013,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
     setAttachments(prev => [...prev, newAttachment]);
     transcriptionAbortRef.current?.abort();
     transcriptionAbortRef.current = null;
-    pendingAudioBlobRef.current = null;
+    rememberPendingAudio(null);
     setPendingAudioDataUrl(null);
     setPendingAudioMimeType(undefined);
     setTranscriptionState('idle');
@@ -1599,7 +1605,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
           {dialogType === 'audio' &&
             !isProcessing &&
             (transcriptionState === 'empty' || transcriptionState === 'error') &&
-            pendingAudioBlobRef.current !== null && (
+            hasPendingAudio && (
               <Button onClick={handleRetryTranscription}>
                 {t('chat.input.retryTranscription')}
               </Button>

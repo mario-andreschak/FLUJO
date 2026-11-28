@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Box, Typography, Button, Collapse, CircularProgress, Alert, Tooltip, useTheme } from '@mui/material';
 import WidgetsIcon from '@mui/icons-material/Widgets';
 import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined';
@@ -903,10 +903,12 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   );
   const [consentSaving, setConsentSaving] = useState(false);
   const [consentError, setConsentError] = useKeyedState<string | null>(consentKey, null);
-  const reloadAllowedRef = useRef(false);
-  reloadAllowedRef.current = consentPolicyReady
+  const reloadAllowed = consentPolicyReady
     && (consentStatus === 'internal' || consentStatus === 'granted')
     && (docked || expanded);
+  // Async continuations read the latest answer; it is copied after each commit, never while rendering.
+  const reloadAllowedRef = useRef(reloadAllowed);
+  useLayoutEffect(() => { reloadAllowedRef.current = reloadAllowed; });
   // #375: mirrors `error` without triggering re-renders, so async continuations
   // (handshake handoff) can cheaply check "did this frame already fail?".
   const errorRef = useRef<string | null>(null);
@@ -999,7 +1001,7 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   const previousToolNameRef = useRef(toolName);
   const ownerScopeRef = useRef(ownerScope);
   const previousOwnerScopeRef = useRef(ownerScope);
-  ownerScopeRef.current = ownerScope;
+  useLayoutEffect(() => { ownerScopeRef.current = ownerScope; });
   const toolDeliveryChainRef = useRef<Promise<void>>(Promise.resolve());
   const lastDeliveryRef = useRef<string | number | undefined>(undefined);
   const latestToolDeliveryRef = useRef({
@@ -1085,15 +1087,18 @@ const McpAppFrame: React.FC<McpAppFrameProps> = ({
   // lands exactly where the pointer is.
   const fixedOffset = useFixedOriginOffset(frameRootRef, displayMode === 'fullscreen' && !docked);
 
-  latestToolDeliveryRef.current = {
-    toolName,
-    args: toolArgs,
-    resultContent: toolResultContent,
-    cancelledReason: toolCancelledReason,
-    isError: toolIsError,
-    updateId: toolUpdateId,
-  };
-  toolNameRef.current = toolName;
+  // The bridge reads the newest tool delivery after its handshake settles.
+  useLayoutEffect(() => {
+    latestToolDeliveryRef.current = {
+      toolName,
+      args: toolArgs,
+      resultContent: toolResultContent,
+      cancelledReason: toolCancelledReason,
+      isError: toolIsError,
+      updateId: toolUpdateId,
+    };
+    toolNameRef.current = toolName;
+  });
   // Always call the latest callback without remounting the bridge on prop change.
   const onAppMessageRef = useRef(onAppMessage);
   useEffect(() => { onAppMessageRef.current = onAppMessage; }, [onAppMessage]);

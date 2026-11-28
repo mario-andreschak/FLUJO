@@ -1,7 +1,7 @@
 "use client";
 import { cancelPendingElicitation, clearPendingQuestion, shouldHydratePendingInputs } from './elicitationState';
 
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'; // Added useCallback
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { useRouter } from 'next/navigation';
 import { Box, Paper, Typography, Divider, CircularProgress, Alert, Button, Chip, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, Drawer, IconButton, Tooltip, TextField, ToggleButton, ToggleButtonGroup, useMediaQuery } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
@@ -24,6 +24,7 @@ import ChatBubbleOutlineRoundedIcon from '@mui/icons-material/ChatBubbleOutlineR
 import DataObjectRoundedIcon from '@mui/icons-material/DataObjectRounded';
 import { useLocalStorage, StorageKey } from '@/utils/storage';
 import ChatHistory from './ChatHistory';
+import { LocalOnlyConversationIds } from './localOnlyConversations';
 import { useKeyChange, useKeyedState } from './hooks/useKeyedState';
 import { readWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
 import { CONVERSATION_PINS_PREFERENCE } from '@/utils/shared/conversationPins';
@@ -176,7 +177,7 @@ function useStableCallback<Args extends unknown[], Result>(
   callback: (...args: Args) => Result,
 ): (...args: Args) => Result {
   const callbackRef = useRef(callback);
-  callbackRef.current = callback;
+  useLayoutEffect(() => { callbackRef.current = callback; });
   return useCallback((...args: Args) => callbackRef.current(...args), []);
 }
 
@@ -929,7 +930,17 @@ const Chat: React.FC = () => {
   // Conversations that exist only in this client (a split that hasn't been sent
   // yet): the periodic list refresh must not wipe them, and detail fetches for
   // them would 404. Ids drop out as soon as the backend starts returning them.
-  const localOnlyConversationIdsRef = useRef<Set<string>>(new Set());
+  const localOnlyConversationIdsRef = useRef(new LocalOnlyConversationIds());
+  const subscribeLocalOnlyConversations = useCallback(
+    (listener: () => void) => localOnlyConversationIdsRef.current.subscribe(listener),
+    [],
+  );
+  const readLocalOnlyConversationCount = useCallback(() => localOnlyConversationIdsRef.current.size, []);
+  const localOnlyConversationCount = useSyncExternalStore(
+    subscribeLocalOnlyConversations,
+    readLocalOnlyConversationCount,
+    readLocalOnlyConversationCount,
+  );
   // Silent sidebar refreshes share one request. If an event arrives while that
   // request is in flight, coalesce all such events into one trailing refresh
   // rather than overlapping list scans or losing the latest state.
@@ -2187,7 +2198,7 @@ const Chat: React.FC = () => {
       lastEventAt: Date.now(),
     }));
   }, []);
-  flushModelDeltasRef.current = flushModelDeltas;
+  useLayoutEffect(() => { flushModelDeltasRef.current = flushModelDeltas; }, [flushModelDeltas]);
 
   const enqueueModelDelta = useCallback((event: ModelDeltaEvent) => {
     pendingModelDeltasRef.current.push(event);
@@ -3870,7 +3881,7 @@ const Chat: React.FC = () => {
   // follow-up user turn. ui/update-model-context is deliberately separate: it
   // only replaces that app's wire context for a future turn.
   const handleSendMessageRef = useRef(handleSendMessage);
-  handleSendMessageRef.current = handleSendMessage;
+  useLayoutEffect(() => { handleSendMessageRef.current = handleSendMessage; });
   useEffect(() => {
     const listener = (event: Event) => {
       if (!isBigTutorialEvent(event) || event.detail.type !== 'send-example') return;
@@ -4862,13 +4873,6 @@ const Chat: React.FC = () => {
     currentConversationSummary?.status,
   ]);
 
-  // --- Add logging for Edit button prop ---
-  log.debug('Rendering Chat component', {
-    currentConversationId,
-    isHandleEditMessageDefined: typeof handleEditMessage === 'function'
-  });
-  // --- End logging ---
-
   // The debugger panel stays open for the whole debug session (not just while
   // paused), so it doesn't flicker shut while a step/continue is executing.
   // It ALSO opens the instant the user presses the Debugger button — before any
@@ -5273,7 +5277,7 @@ const Chat: React.FC = () => {
   ) : (
     <ChatHistory
       conversations={conversationList}
-      totalConversations={conversationPagination.total + localOnlyConversationIdsRef.current.size}
+      totalConversations={conversationPagination.total + localOnlyConversationCount}
       hasMoreConversations={conversationPagination.hasMore}
       isLoadingMore={isLoadingMoreHistory}
       onLoadMore={loadMoreConversations}

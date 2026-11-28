@@ -441,9 +441,6 @@
   "src/frontend/components/Chat/ChatInput.tsx": {
     "flujo/no-raw-timers": {
       "count": 1
-    },
-    "react-hooks/refs": {
-      "count": 5
     }
   },
   "src/frontend/components/Chat/ChatMessages.tsx": {
@@ -477,9 +474,6 @@
   "src/frontend/components/Chat/McpAppFrame.tsx": {
     "flujo/no-raw-timers": {
       "count": 7
-    },
-    "react-hooks/refs": {
-      "count": 4
     }
   },
   "src/frontend/components/Chat/ModelTurnInspector.tsx": {
@@ -492,11 +486,6 @@
       "count": 1
     }
   },
-  "src/frontend/components/Chat/hooks/useChatScrollNav.ts": {
-    "react-hooks/refs": {
-      "count": 10
-    }
-  },
   "src/frontend/components/Chat/index.tsx": {
     "flujo/no-raw-timers": {
       "count": 10
@@ -506,9 +495,6 @@
     },
     "react-hooks/purity": {
       "count": 3
-    },
-    "react-hooks/refs": {
-      "count": 5
     }
   },
   "src/frontend/components/Chat/mcpAppClient.ts": {
