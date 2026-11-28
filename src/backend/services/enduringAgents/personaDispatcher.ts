@@ -72,7 +72,6 @@ import type {
 } from '@/backend/execution/flow/types';
 import type { FlujoChatMessage } from '@/shared/types/chat';
 import type { Flow } from '@/shared/types/flow';
-import { FEATURES } from '@/config/features';
 import {
   PERSONA_MEMORY_GATEWAY_SERVER,
   PERSONA_MEMORY_MAINTENANCE_COMMIT_TOOL,
@@ -2332,7 +2331,6 @@ export class PersonaFlowDispatcher {
   private async ensurePostActivityMaintenance(
     source: PersonaFlowDispatchRecord,
   ): Promise<PersonaFlowDispatchRecord | null> {
-    if (!FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION) return null;
     if (
       source.state !== 'completed'
       || source.admission.kind === 'maintenance'

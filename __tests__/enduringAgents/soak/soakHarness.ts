@@ -52,9 +52,9 @@ import {
 import { behaviorOutcomeMetricId } from '@/backend/services/enduringAgents/behaviorOutcome';
 import { resolvePersonaCoreRevision } from '@/backend/services/enduringAgents/personaCoreResolver';
 import { createBehaviorCallPin, completeBehaviorCallPin } from '@/backend/services/enduringAgents/behaviorCallPins';
+import * as personaRuntimeRetentionControl from '@/backend/services/enduringAgents/personaRuntimeRetentionControl';
 import { readPersonaRuntimeRetentionState } from '@/backend/services/enduringAgents/personaRuntimeRetentionControl';
 import { runPersonaRuntimeRetentionSweep } from '@/backend/services/enduringAgents/personaRuntimeRetentionRollout';
-import { FEATURES } from '@/config/features';
 import {
   ENDURING_AGENT_SCHEMA_VERSION,
   MemoryItemSchema,
@@ -147,14 +147,6 @@ export interface PersonaSoakSummary {
   metrics: DailySoakMetric[];
 }
 
-interface MutableFeatureSnapshot {
-  leasePruning: boolean;
-  maintenanceAdmission: boolean;
-  maintenanceDiagnosis: boolean;
-  outcomeMetrics: boolean;
-  outcomeAutoRollback: boolean;
-}
-
 interface ProcessPersona {
   persona: { id: string };
 }
@@ -241,24 +233,6 @@ function debugActivity(message: string): void {
   if (process.env.PERSONA_SOAK_DEBUG === 'verbose') {
     process.stderr.write(`[persona-soak] ${message}\n`);
   }
-}
-
-function featureSnapshot(): MutableFeatureSnapshot {
-  return {
-    leasePruning: FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING,
-    maintenanceAdmission: FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION,
-    maintenanceDiagnosis: FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS,
-    outcomeMetrics: FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS,
-    outcomeAutoRollback: FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK,
-  };
-}
-
-function restoreFeatures(snapshot: MutableFeatureSnapshot): void {
-  FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING = snapshot.leasePruning;
-  FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = snapshot.maintenanceAdmission;
-  FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = snapshot.maintenanceDiagnosis;
-  FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS = snapshot.outcomeMetrics;
-  FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK = snapshot.outcomeAutoRollback;
 }
 
 function fenceForClaim(claim: PersonaActivityClaim) {
@@ -734,16 +708,18 @@ async function compactRuntime(personaId: string, now: number) {
     .update(stableJsonStringify(proofRecords))
     .digest('hex');
 
-  const previousLeasePruning = FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING;
+  // Pruning deletes only once measured Persona cleanup is active (#481); the
+  // soak exercises that state directly instead of waiting a simulated week.
+  const activeCleanup = jest.spyOn(personaRuntimeRetentionControl, 'getPersonaRuntimeRetentionMode')
+    .mockResolvedValue('active');
   let pruning: Awaited<ReturnType<typeof prunePersonaLeaseHistory>>;
   try {
-    FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING = true;
     pruning = await prunePersonaLeaseHistory(personaId, {
       retainedCount: LEASE_HISTORY_SOAK_CAP,
       maxDeletesPerSweep: 10_000,
     });
   } finally {
-    FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING = previousLeasePruning;
+    activeCleanup.mockRestore();
   }
   const after = await listPersonaLeaseRecords(personaId);
   if (pruning.retainedUnverifiable > 0) {
@@ -1077,11 +1053,6 @@ function terminalLearningActivity(input: {
 }
 
 async function exerciseLearningRollback(seed: number): Promise<LearningRollbackEvidence> {
-  FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS = true;
-  FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK = true;
-  FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = true;
-  FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = false;
-
   const setup = await createPersonaFromRole({
     name: 'Soak learning Persona',
     autonomyLevel: 'propose_overrides',
@@ -1344,7 +1315,6 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
   const faults = defaultFaultSchedule(options.days);
   const expectedFaultIds = faults.map(fault => `day-${fault.day}:${fault.kind}`);
   const metrics: DailySoakMetric[] = [];
-  const features = featureSnapshot();
   const previousClock = _setPersonaRuntimeClockForTests(clock);
   const previousEventConfig = _setPersonaRuntimeEventLogConfigForTests({
     maxSegmentBytes: 1_048_576,
@@ -1392,12 +1362,6 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
     }
     summary = await runWithWorkspace(workspaceId, async () => {
       // The harness executes one explicit, evidence-captured sweep per simulated day.
-      FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING = false;
-      FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = false;
-      FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_DIAGNOSIS = false;
-      FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS = false;
-      FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK = false;
-
       const bundle = await createPersonaFromRole({
         name: 'Runtime-backed soak Persona',
         autonomyLevel: 'propose_overrides',
@@ -2223,7 +2187,6 @@ export async function runPersonaSoak(options: PersonaSoakOptions): Promise<Perso
   } finally {
     _setPersonaRuntimeClockForTests(previousClock);
     _setPersonaRuntimeEventLogConfigForTests(previousEventConfig);
-    restoreFeatures(features);
   }
 
   if (options.outputDirectory) {

@@ -1,7 +1,6 @@
 jest.mock('@/backend/services/mcp/tasksExtensionSession', () => ({ getTasksExtensionSession: (client: { taskSession?: unknown }) => client.taskSession, wasModernTasksExtensionClient: () => false }));
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { z } from 'zod';
-jest.mock('@/config/features', () => ({ FEATURES: { ENABLE_MCP_TASKS_CLIENT: true } }));
 jest.mock('@/backend/services/mcp/remoteTaskStore', () => ({ getMcpRemoteTaskSettings: async () => ({ requestedTtlMs: 60000 }) }));
 import { MCP_TASKS_EXTENSION_ID, classifyToolCallResult, parseCreateTaskResult, parseTaskStatusResult, computeTaskExpiresAt } from '@/shared/types/mcp/tasks';
 import { buildTaskAugmentation, decideTaskAugmentation, discoverTaskNegotiation, fetchTaskStatus,

@@ -8,13 +8,11 @@ import type { HarnessProfile, HarnessRuntimeSnapshot } from '@/shared/types/harn
 
 const mockRecords = new Map<string, unknown>();
 const mockFlows = new Map<string, unknown>();
-let mockEnabled = true;
 let mockWorkspace = 'one';
 const mockModel = { id: 'luna', name: 'gpt-6-luna', ApiKey: '', provider: 'codex', adapter: 'codex-cli' };
 
 jest.mock('@/utils/storage/backend', () => ({
   assertSafeCollectionId: jest.fn(),
-  loadItem: jest.fn(async () => ({ experimental: { harnessLabEnabled: mockEnabled } })),
   loadCollectionItem: jest.fn(async (collection, id, fallback) => structuredClone(mockRecords.get(`${mockWorkspace}/${collection}/${id}`) ?? fallback)),
   saveCollectionItem: jest.fn(async (collection, id, value) => { mockRecords.set(`${mockWorkspace}/${collection}/${id}`, structuredClone(value)); }),
   listCollectionItemEntriesStrict: jest.fn(async collection => [...mockRecords.entries()].filter(([key]) => key.startsWith(`${mockWorkspace}/${collection}/`))
@@ -47,16 +45,9 @@ const input: HarnessInput = { name: 'Test', domain: 'Support', modelId: 'luna', 
   ] };
 
 beforeEach(() => {
-  mockRecords.clear(); mockFlows.clear(); mockEnabled = true; mockWorkspace = 'one'; jest.clearAllMocks();
+  mockRecords.clear(); mockFlows.clear(); mockWorkspace = 'one'; jest.clearAllMocks();
   jest.mocked(completeHarnessOperation).mockResolvedValue({ output: 'yes', durationMs: 1, tokens: 3 });
   jest.mocked(getHarnessModel).mockResolvedValue({ model: mockModel as never, route: 'codex-subscription' });
-});
-
-it('defaults off at the server boundary and dispatches nothing', async () => {
-  mockEnabled = false;
-  await expect(createHarnessRun({ id, input })).rejects.toMatchObject({ status: 403 });
-  expect(completeHarnessOperation).not.toHaveBeenCalled();
-  expect(mockRecords.size).toBe(0);
 });
 
 it('reuses a creation ID but rejects known held-out inputs in a new experiment', async () => {
@@ -111,13 +102,11 @@ it('retains completed evidence when a later call fails without retry', async () 
   expect(completeHarnessOperation).toHaveBeenCalledTimes(2);
 });
 
-it('stops if the pinned model changes and checks the opt-in on every advance', async () => {
+it('stops if the pinned model changes', async () => {
   await createHarnessRun({ id, input });
   jest.mocked(getHarnessModel).mockRejectedValueOnce(new Error('Model changed'));
   await expect(advanceHarnessRun(id, new AbortController().signal)).rejects.toThrow('Model changed');
   expect(completeHarnessOperation).not.toHaveBeenCalled();
-  mockEnabled = false;
-  await expect(advanceHarnessRun(id, new AbortController().signal)).rejects.toMatchObject({ status: 403 });
 });
 
 it('creates one exact, tool-free agent copy and refuses to overwrite later edits', async () => {

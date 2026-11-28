@@ -18,7 +18,6 @@ import {
   getMemorySettings,
   setMemorySettings,
 } from '@/backend/services/enduringAgents/memorySettings';
-import { FEATURES } from '@/config/features';
 import type { CreateMemoryItemInput } from '@/shared/types/enduringAgent';
 import { runWithWorkspace } from '@/utils/workspace';
 
@@ -259,14 +258,11 @@ describe('memory candidate lifecycle', () => {
   });
 
   describe('auto-promotion gate', () => {
-    it('is inert while the ENABLE_MEMORY_AUTO_PROMOTION feature is off', async () => {
-      // Guards the shipped default: promotion must be unreachable until the
-      // feature is deliberately enabled, whatever the per-workspace settings say.
-      expect(FEATURES.ENABLE_MEMORY_AUTO_PROMOTION).toBe(false);
-
+    it('is inert while the memory setting keeps auto-promotion off', async () => {
+      // The memory setting is the only switch (#1449).
       await inFreshWorkspace(async (personaId) => {
         await setMemorySettings({
-          autoPromoteEnabled: true,
+          autoPromoteEnabled: false,
           autoPromoteMinAgeHours: 0,
           autoPromoteMinCorroborations: 1,
         });

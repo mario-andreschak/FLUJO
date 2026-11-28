@@ -18,14 +18,13 @@ Personas are long-lived AI teammates. Each one is built from a Role, remembers c
 
 ## How to get to it (user POV)
 
-- Turn on "Enable experimental features" in Settings → "Experimental features" first; otherwise the menu entry is hidden.
 - On a wide window, choose "More" in the top navigation, then the "Experimental" tab in the row below, then "Personas" (`data-tour="nav-personas"`).
 - On a window 1535 px wide or narrower, choose "Open navigation menu", then "Personas" under the "Experimental" heading.
 - Open `http://127.0.0.1:<port>/personas`, or `/personas/<id>?area=tasks` to land on one desk tab (`area` is one of `overview`, `setup`, `behaviors`, `apps`, `memory`, `conversations`, `tasks`, `history`, `improvements`, `settings`).
 
 ## Driving it with flujo-drive
 
-Preconditions: a throwaway instance from the verify-flujo skill with a working model under AI Setup, at least one Role (see roles.md) and, for the menu path only, experimental features on.
+Preconditions: a throwaway instance from the verify-flujo skill with a working model under AI Setup, at least one Role (see roles.md).
 
 - **Open the gallery**: `node scripts/flujo-drive.mjs open /personas` → heading "Persona desks"; on a fresh instance "No Personas yet".
 - **Start the wizard**: `node scripts/flujo-drive.mjs click /personas --role button --name "Create Persona" --then-shot personas-wizard.png` → the "Create a Persona" dialog on step "About".
@@ -35,7 +34,6 @@ Preconditions: a throwaway instance from the verify-flujo skill with a working m
 
 ## Gotchas
 
-- The page itself opens even with experimental features off; only the menu entry is hidden.
 - On the "Role" step, "Next" stays disabled until the Role's setup check passes. Without a working model it shows "Finish setup before creating this Persona" and a "Configure models" link.
 - With no Roles the picker is empty. "Create a simple Role" opens `/roles/new` in a new tab, which the driver does not follow; create the Role first, then use "Refresh Roles".
 - The page button and the wizard's final button are both called "Create Persona"; the driver clicks the first match.

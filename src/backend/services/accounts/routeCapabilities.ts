@@ -63,7 +63,6 @@ export const ROUTE_CAPABILITIES = Object.freeze({
   '/api/flow/compile': 'workspace',
   '/api/flow/generate': 'workspace',
   '/api/flow/generate/visual': 'workspace',
-  '/api/flow/generator': 'workspace',
   '/api/flow/improve': 'workspace',
   '/api/flow/model-agent': 'workspace',
   '/api/flow/prompt-renderer': 'workspace',

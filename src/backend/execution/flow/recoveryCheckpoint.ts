@@ -157,7 +157,7 @@ export function fingerprintRecoveryInput(state: SharedState, nodeId?: string): s
  *
  * - `durable` (default): the event log is flushed and the conversation saved
  *   before the commit returns.
- * - `untilNextSave`: with low-latency saves on (see lowLatencySaves.ts) the
+ * - `untilNextSave`: for a run that may defer saves (see lowLatencySaves.ts) the
  *   record stays in memory and in the not yet flushed event log, and the next
  *   full save of the run writes it. Only a safe step boundary without tool
  *   effects and a successful end of a run accept it, because the run's final
@@ -236,7 +236,7 @@ export async function commitRecoveryCheckpoint(
   state.recovery = recovery;
   const untilNextSave = input.durability === 'untilNextSave' && checkpoint.safe
     && checkpoint.effectStatus === 'none' && !checkpoint.tools?.length
-    && await mayDeferConversationSave(state);
+    && mayDeferConversationSave(state);
   await persistRecoveryEvent(storageKey, state, { type: 'recovery:checkpoint', checkpoint }, emit, undefined, untilNextSave);
   return checkpoint;
 }
@@ -324,7 +324,7 @@ export async function commitRecoveryTransition(
   const untilNextSave = options.durability === 'untilNextSave'
     && (classification === 'completed' || classification === 'capped')
     && !recovery.manualActionRequired
-    && await mayDeferConversationSave(state);
+    && mayDeferConversationSave(state);
   await persistRecoveryEvent(storageKey, state, { type: 'recovery:transition', recovery: { ...recovery } }, emit, publication, untilNextSave);
   return recovery;
 }

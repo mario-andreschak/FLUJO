@@ -173,23 +173,16 @@ Stored under `StorageKey.MCP_REMOTE_TASK_SETTINGS` (no secrets), defaults in
 Exceeding a concurrency cap refuses the task (`task-poll-limit`) rather than
 creating a poll storm. An hourly cron sweeps expiry and retention per workspace.
 
-## Feature flags
+## Always on
 
-`src/config/features.ts`:
-
-- `ENABLE_MCP_TASKS_CLIENT` (default `true`; `FLUJO_MCP_TASKS_CLIENT=false`
-  turns it off) — governs negotiation **and** durable record creation, so FLUJO
-  never claims partial support. With the flag off FLUJO never requests task
-  augmentation; if a server returns a schema-valid task handle anyway it is
-  still handled correctly (never misread as a tool result), just without
-  durable-compliance claims.
-- `ENABLE_MCP_TASKS_SERVER` (default `true`; `FLUJO_MCP_TASKS_SERVER=false`
-  turns it off) — see below.
+The Tasks client and the Tasks server are always on. There is no switch, so
+FLUJO never claims partial support: negotiation and durable record creation go
+together.
 
 ## Server-side status
 
 The modern `/mcp-flows` handler supports caller/workspace-bound durable Tasks
-for saved flows unless `FLUJO_MCP_TASKS_SERVER=false`. It requires the configured
+for saved flows. It requires the configured
 owner policy and an explicit authorized bearer, rechecks authority before
 execution and each lifecycle operation, and retains encrypted results across
 restart without replaying interrupted work. Task IDs alone grant no access.

@@ -184,9 +184,7 @@ describe('workspace migration progress renderer', () => {
     expect(shouldUseInteractiveMigrationUI(tty, {})).toBe(true);
     expect(shouldUseInteractiveMigrationUI(tty, { CI: 'true' })).toBe(false);
     expect(shouldUseInteractiveMigrationUI(tty, { TERM: 'dumb' })).toBe(false);
-    expect(shouldUseInteractiveMigrationUI(tty, { FLUJO_MIGRATION_UI: 'plain' })).toBe(false);
     expect(shouldUseInteractiveMigrationUI(pipe, {})).toBe(false);
-    expect(shouldUseInteractiveMigrationUI(pipe, { FLUJO_MIGRATION_UI: 'tty' })).toBe(true);
   });
 
   it('selects the landscape from local time and bounds telemetry-driven motion', () => {
@@ -219,11 +217,9 @@ describe('workspace migration progress renderer', () => {
     terminal.hasColors = () => true;
 
     expect(shouldUseFullscreenMigrationUI(terminal, {})).toBe(true);
-    expect(shouldUseFullscreenMigrationUI(terminal, { FLUJO_MIGRATION_UI: 'landscape' })).toBe(true);
     expect(shouldUseFullscreenMigrationUI(terminal, { NO_COLOR: '1' })).toBe(false);
-    expect(shouldUseFullscreenMigrationUI(terminal, { FLUJO_MIGRATION_UI: 'compact' })).toBe(false);
     terminal.rows = 17;
-    expect(shouldUseFullscreenMigrationUI(terminal, { FLUJO_MIGRATION_UI: 'landscape' })).toBe(false);
+    expect(shouldUseFullscreenMigrationUI(terminal, {})).toBe(false);
   });
 
   it('renders actual migration telemetry in the fullscreen landscape and restores the terminal', () => {

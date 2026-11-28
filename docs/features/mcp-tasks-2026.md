@@ -12,14 +12,12 @@ task creation results before an application schema can validate them. The host
 therefore owns extension request IDs, response correlation and session retirement,
 while ordinary SDK requests continue on the same connection.
 
-## Enable
+## Availability
 
-Both switches are on by default. `FLUJO_MCP_TASKS_CLIENT=false` turns off
-outbound task calls and `FLUJO_MCP_TASKS_SERVER=false` turns off inbound Tasks
-at `/mcp-flows`. FLUJO only asks for a task when the server advertises Tasks.
-Modern negotiation follows the **Modern MCP protocol** setting (on by default;
-saved as `experimental.mcpBetaProtocol` for compatibility) and
-`FLUJO_MCP_PROTOCOL_NEGOTIATION=legacy`. HTTP and stdio connections negotiate
+Outbound task calls and inbound Tasks at `/mcp-flows` are always on. There is
+no switch. FLUJO only asks for a task when the server advertises Tasks.
+The modern protocol is always used, and FLUJO falls back to the classic
+handshake by itself for a server that needs it. HTTP and stdio connections negotiate
 automatically; stdio asks `server/discover` on the server's own process, never
 on an extra probe process. Evidence: [Tasks](mcp-scoreboard/tasks.md) and
 [stateless spec](mcp-scoreboard/stateless-spec.md).

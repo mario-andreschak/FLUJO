@@ -207,7 +207,7 @@ Bring multiple agents into a shared conversation around a topic. Choose particip
 
 ### Personas and Roles — experimental
 
-A Persona is an ongoing helper with a name, a Role, memories, conversations and goals. Review its work and memories, adjust its setup, and pause or stop ongoing goals. Enable experimental features in **Settings** to explore Personas.
+A Persona is an ongoing helper with a name, a Role, memories, conversations and goals. Review its work and memories, adjust its setup, and pause or stop ongoing goals. Find Personas under **More → Experimental**.
 
 [![Maya's Persona desk shows memory, conversations, tasks, activity history and recently finished work](githubpages/film/media/walkthrough/act5-maya-desk.png)](githubpages/film/media/walkthrough/act5-maya-desk.png)
 

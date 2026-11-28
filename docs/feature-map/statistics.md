@@ -15,16 +15,14 @@ Statistics shows how the user's agents have been behaving: how many runs there w
 
 ## How to get to it (user POV)
 
-- Turn on experimental features first: Settings, "Experimental features", switch "Enable experimental features".
 - From any page in the More group (Automations, Meetings, Settings), choose the `Experimental` section tab, then `Activity` in that menu (`data-tour="nav-statistics"`).
 - On a window 1535 px wide or narrower, choose "Open navigation menu", then `Activity` under the "Experimental" heading.
-- Open `http://127.0.0.1:<port>/statistics` directly (only works once experimental features are on).
+- Open `http://127.0.0.1:<port>/statistics` directly.
 
 ## Driving it with flujo-drive
 
-Preconditions: a throwaway instance from the verify-flujo skill with experimental features turned on. Numbers only appear after some flows have run while experimental features were on; a fresh instance shows "No telemetry for this selection".
+Preconditions: a throwaway instance from the verify-flujo skill. Numbers only appear after some flows have run; a fresh instance shows "No telemetry for this selection".
 
-- **Turn on experimental features**: use `steps` on `/settings`: click button "Experimental features", click switch "Enable experimental features". The setting is saved right away.
 - **Open the page**: `node scripts/flujo-drive.mjs open /statistics` → heading "Statistics" with "Shared filters" (or, with no data, "No telemetry for this selection").
 - **Read the numbers**: `node scripts/flujo-drive.mjs text /statistics` → the summary cards and the "Overview" tab when there is data.
 - **Look at one view**: `node scripts/flujo-drive.mjs click /statistics --role tab --name "Flows" --then-shot statistics-flows.png` → the flow ranking table.
@@ -33,8 +31,6 @@ Preconditions: a throwaway instance from the verify-flujo skill with experimenta
 
 ## Gotchas
 
-- With experimental features off, `/statistics` shows a spinner and then sends the user to `/settings`. A run that lands on Settings has not failed to load; the switch is off.
-- Runs from before experimental features were turned on are never counted, so make some runs after turning it on.
 - The default range is the last 7 days in UTC, not local time. Runs from late in the local evening may fall on the next UTC day.
 - The tabs and detail buttons only appear when there is data for the chosen range.
 - Clearing either date shows "Choose both UTC dates." and disables "Refresh".

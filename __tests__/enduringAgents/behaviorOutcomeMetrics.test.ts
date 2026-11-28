@@ -31,7 +31,6 @@ import {
   savePersonaActivity,
   updatePersona,
 } from '@/backend/services/enduringAgents/store';
-import { FEATURES } from '@/config/features';
 import {
   BEHAVIOR_REVISION_SCHEMA_VERSION,
   PERSONA_ACTIVITY_OUTCOME_SCHEMA_VERSION,
@@ -216,21 +215,6 @@ function metricFor(proposal: BehaviorProposal) {
 }
 
 describe('Behavior outcome metrics and automatic rollback', () => {
-  const originalMetrics = FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS;
-  const originalAutoRollback = FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK;
-  const originalMaintenanceAdmission = FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION;
-
-  beforeEach(() => {
-    FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS = true;
-    FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK = false;
-  });
-
-  afterEach(() => {
-    FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS = originalMetrics;
-    FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK = originalAutoRollback;
-    FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = originalMaintenanceAdmission;
-  });
-
   it('freezes the baseline of the previous revision when a proposal is activated', async () => {
     await inFreshWorkspace(async () => {
       const setup = await setupPersona();
@@ -304,7 +288,6 @@ describe('Behavior outcome metrics and automatic rollback', () => {
 
   it('takes no action below the minimum sample size, however bad the results are', async () => {
     await inFreshWorkspace(async () => {
-      FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK = true;
       const setup = await setupPersona();
       await seedBaseline(setup, { succeeded: 10, failed: 0 });
       const activated = await activatedProposal(setup);
@@ -326,8 +309,6 @@ describe('Behavior outcome metrics and automatic rollback', () => {
 
   it('reverts a regressed proposal automatically and records why', async () => {
     await inFreshWorkspace(async () => {
-      FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK = true;
-      FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION = true;
       const setup = await setupPersona();
       await seedBaseline(setup, { succeeded: 10, failed: 0 });
       const activated = await activatedProposal(setup);
@@ -388,27 +369,8 @@ describe('Behavior outcome metrics and automatic rollback', () => {
     });
   });
 
-  it('records a regression without acting while the rollback flag is off', async () => {
-    await inFreshWorkspace(async () => {
-      const setup = await setupPersona();
-      await seedBaseline(setup, { succeeded: 10, failed: 0 });
-      const activated = await activatedProposal(setup);
-
-      await observeSamples(setup, activated.activatedRevisionId!, { succeeded: 0, failed: 10 });
-
-      expect(await metricFor(activated)).toMatchObject({
-        verdict: 'regressed',
-        observed: { samples: 10, succeeded: 0, successRate: 0 },
-      });
-      expect((await getBehaviorBinding(setup.binding.id))?.activeRevisionId)
-        .toBe(activated.activatedRevisionId);
-      expect((await getBehaviorProposal(activated.id))?.status).toBe('activated');
-    });
-  });
-
   it('keeps a genuine improvement in place with visible before and after numbers', async () => {
     await inFreshWorkspace(async () => {
-      FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK = true;
       const setup = await setupPersona();
       await seedBaseline(setup, { succeeded: 5, failed: 5 });
       const activated = await activatedProposal(setup);
@@ -428,7 +390,6 @@ describe('Behavior outcome metrics and automatic rollback', () => {
 
   it('never reverts automatically for a Persona whose review setting forbids it', async () => {
     await inFreshWorkspace(async () => {
-      FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK = true;
       const setup = await setupPersona();
       await seedBaseline(setup, { succeeded: 10, failed: 0 });
       const activated = await activatedProposal(setup);
@@ -459,7 +420,6 @@ describe('Behavior outcome metrics and automatic rollback', () => {
 
   it('fails closed when the Behavior moved out from under the detector', async () => {
     await inFreshWorkspace(async () => {
-      FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK = true;
       const setup = await setupPersona();
       await seedBaseline(setup, { succeeded: 10, failed: 0 });
       const activated = await activatedProposal(setup);
@@ -524,21 +484,6 @@ describe('Behavior outcome metrics and automatic rollback', () => {
 
     await runWithWorkspace(freshWorkspaceId(), async () => {
       expect(await listBehaviorOutcomeMetrics(personaId)).toEqual([]);
-    });
-  });
-
-  it('records nothing at all while the recording flag is off', async () => {
-    await inFreshWorkspace(async () => {
-      FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS = false;
-      const setup = await setupPersona();
-      await seedBaseline(setup, { succeeded: 10, failed: 0 });
-      const activated = await activatedProposal(setup);
-
-      await observeSamples(setup, activated.activatedRevisionId!, { succeeded: 0, failed: 10 });
-
-      expect(await listBehaviorOutcomeMetrics(setup.bundle.persona.id)).toEqual([]);
-      expect((await getBehaviorBinding(setup.binding.id))?.activeRevisionId)
-        .toBe(activated.activatedRevisionId);
     });
   });
 });

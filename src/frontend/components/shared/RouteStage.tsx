@@ -3,7 +3,6 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { usePathname } from 'next/navigation';
 
-import { useStorage } from '@/frontend/contexts/StorageContext';
 import { useTheme } from '@/frontend/contexts/ThemeContext';
 import { resolveRiverScene } from '../AmbientWorld/sceneMap';
 
@@ -40,14 +39,10 @@ function getEntranceOffset(previousPathname: string | null, pathname: string) {
  */
 export default function RouteStage({ children }: RouteStageProps) {
   const pathname = usePathname();
-  const { settings, settingsHydrated } = useStorage();
   const { visualStyle } = useTheme();
   const previousPathnameRef = useRef<string | null>(null);
 
-  const isEnabled =
-    settingsHydrated &&
-    settings.experimental?.enabled === true &&
-    visualStyle === 'modern';
+  const isEnabled = visualStyle === 'modern';
 
   useEffect(() => {
     const previousPathname = previousPathnameRef.current;

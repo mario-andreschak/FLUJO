@@ -2,7 +2,7 @@ jest.mock('@/utils/logger', () => ({ createLogger: () => ({ info: jest.fn(), war
 jest.mock('@/backend/utils/sleep', () => ({ sleep: jest.fn(async () => {}) }));
 jest.mock('@/backend/services/mcp', () => ({ mcpService: { loadServerConfigs: jest.fn(), getClient: jest.fn() } }));
 jest.mock('@/backend/services/mcp/remoteTaskStore', () => ({ acquirePollSlot: jest.fn(), getMcpRemoteTaskSettings: jest.fn(), listResumableRemoteTaskRecords: jest.fn(), patchRemoteTaskRecord: jest.fn(), serverIdentityFingerprint: jest.fn(() => 'identity') }));
-jest.mock('@/backend/services/mcp/tasksProtocol', () => ({ cancelRemoteTask: jest.fn(), discoverTaskNegotiation: jest.fn(), fetchTaskStatus: jest.fn(), getTaskNegotiation: jest.fn(), mcpTasksClientEnabled: () => true }));
+jest.mock('@/backend/services/mcp/tasksProtocol', () => ({ cancelRemoteTask: jest.fn(), discoverTaskNegotiation: jest.fn(), fetchTaskStatus: jest.fn(), getTaskNegotiation: jest.fn() }));
 
 import { mcpService } from '@/backend/services/mcp';
 import { resumeRemoteMcpTasks } from '@/backend/services/mcp/remoteTaskResume';

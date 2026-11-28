@@ -3,9 +3,7 @@
 /**
  * Chat-shaped Flow Generator.
  *
- * Production mode is deliberately a UI layer over the proven deterministic
- * endpoints. An explicit Settings > Experimental toggle swaps in the editable,
- * multi-stage system Flow for the whole conversation.
+ * A UI layer over the proven deterministic generate and improve endpoints.
  */
 import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import {
@@ -21,16 +19,13 @@ import {
   FormControl,
   FormControlLabel,
   InputLabel,
-  IconButton,
   MenuItem,
   Select,
   Slider,
   Stack,
-  Tooltip,
   Typography,
 } from '@mui/material';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
-import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import AskFlujoButton from '@/frontend/components/AskFlujo/AskFlujoButton';
 import BugReportButton from '@/frontend/components/BugReport/BugReportButton';
 import { v4 as uuidv4 } from 'uuid';
@@ -39,11 +34,9 @@ import type { Model } from '@/shared/types/model';
 import type { ChatMessage } from '@/frontend/components/Chat';
 import ChatInput from '@/frontend/components/Chat/ChatInput';
 import ChatMessages from '@/frontend/components/Chat/ChatMessages';
-import { chatService } from '@/frontend/services/chat';
 import { flowService } from '@/frontend/services/flow';
 import { modelService } from '@/frontend/services/model';
 import { startVisualGeneration } from '@/frontend/services/flow/visualGeneration';
-import { useStorage } from '@/frontend/contexts/StorageContext';
 import { createLogger } from '@/utils/logger';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { Translator } from '@/frontend/i18n/core';
@@ -92,51 +85,6 @@ function message(role: 'user' | 'assistant', content: string): Record<string, un
   };
 }
 
-function parseJson(value: unknown): unknown {
-  if (typeof value !== 'string') return value;
-  try {
-    return JSON.parse(value);
-  } catch {
-    return value;
-  }
-}
-
-/** Find the newest complete generated-draft tool result in a Flow conversation. */
-export function extractFlowDraft(messages: Array<Record<string, unknown>>): {
-  flow: Flow;
-  flows: Flow[];
-  rootFlowId: string;
-  validation?: { errorCount?: number; warningCount?: number };
-} | null {
-  const inspect = (input: unknown, depth = 0): ReturnType<typeof extractFlowDraft> => {
-    if (depth > 6) return null;
-    const parsed = parseJson(input);
-    if (!parsed || typeof parsed !== 'object') return null;
-    const record = parsed as Record<string, unknown>;
-    if (record.flow && Array.isArray(record.flows) && typeof record.rootFlowId === 'string') {
-      return record as ReturnType<typeof extractFlowDraft>;
-    }
-    if (Array.isArray(record.content)) {
-      for (let index = record.content.length - 1; index >= 0; index--) {
-        const found = inspect(record.content[index], depth + 1);
-        if (found) return found;
-      }
-    }
-    for (const key of ['text', 'data', 'result']) {
-      if (key in record) {
-        const found = inspect(record[key], depth + 1);
-        if (found) return found;
-      }
-    }
-    return null;
-  };
-  for (let index = messages.length - 1; index >= 0; index--) {
-    const found = inspect(messages[index]?.content);
-    if (found) return found;
-  }
-  return null;
-}
-
 function displayMessages(messages: Array<Record<string, unknown>>): ChatMessage[] {
   return messages
     .filter((entry) => (
@@ -151,53 +99,6 @@ function displayMessages(messages: Array<Record<string, unknown>>): ChatMessage[
       timestamp: typeof entry.timestamp === 'number' ? entry.timestamp : Date.now() + index,
       processNodeId: entry.processNodeId,
     })) as ChatMessage[];
-}
-
-/** Recover successful experimental MCP installs for the normal post-draft summary. */
-function extractInstalledServers(
-  messages: Array<Record<string, unknown>>,
-): InstalledServerInfo[] {
-  const found = new Map<string, InstalledServerInfo>();
-  const inspect = (input: unknown, depth = 0): void => {
-    if (depth > 6) return;
-    const parsed = parseJson(input);
-    if (!parsed || typeof parsed !== 'object') return;
-    const record = parsed as Record<string, unknown>;
-    const plan = record.plan && typeof record.plan === 'object'
-      ? record.plan as Record<string, unknown>
-      : undefined;
-    if (
-      record.installed === true &&
-      typeof record.serverName === 'string' &&
-      Array.isArray(record.tools)
-    ) {
-      found.set(record.serverName, {
-        name: record.serverName,
-        tools: record.tools
-          .map((tool: unknown) => (
-            typeof tool === 'string'
-              ? tool
-              : tool && typeof tool === 'object'
-                ? String((tool as Record<string, unknown>).name ?? '')
-                : ''
-          ))
-          .filter(Boolean),
-        alreadyExisted: record.alreadyExisted === true,
-        ...(typeof plan?.command === 'string'
-          ? { command: plan.command }
-          : {}),
-        ...(Array.isArray(plan?.args)
-          ? { args: plan.args.map(String) }
-          : {}),
-        ...(typeof plan?.verificationStatus === 'string'
-          ? { verificationStatus: plan.verificationStatus }
-          : {}),
-      });
-    }
-    for (const value of Object.values(record)) inspect(value, depth + 1);
-  };
-  for (const entry of messages) inspect(entry.content);
-  return [...found.values()];
 }
 
 function draftSummary(
@@ -219,22 +120,14 @@ function draftSummary(
 }
 
 const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogProps) => {
-  const { settings, settingsHydrated } = useStorage();
   const { t, tp } = useI18n();
-  const flowBasedExperimental = (
-    settingsHydrated &&
-    settings?.experimental?.enabled === true &&
-    settings.experimental.flowBasedGenerator === true
-  );
   const [models, setModels] = useState<Model[]>([]);
   const [modelId, setModelId] = useState('');
-  const [conversationId, setConversationId] = useState<string | null>(null);
   const [wireMessages, setWireMessages] = useState<Array<Record<string, unknown>>>([]);
   const [draft, setDraft] = useState<DraftPayload | null>(null);
   const [allowInstall, setAllowInstall] = useState(false);
   const [maxDepth, setMaxDepth] = useState(DEFAULT_SUBFLOW_DEPTH);
   const [isWorking, setIsWorking] = useState(false);
-  const [isRestoring, setIsRestoring] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [visualState, dispatchVisual] = useReducer(
     visualGenerationReducer,
@@ -264,37 +157,15 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
 
   useEffect(() => {
     if (!open) return;
-    setConversationId(null);
     setWireMessages([]);
     setDraft(null);
     setAllowInstall(false);
     setMaxDepth(DEFAULT_SUBFLOW_DEPTH);
     dispatchVisual({ type: 'reset' });
     setError(null);
-  }, [flowBasedExperimental, open]);
+  }, [open]);
 
   const visibleMessages = useMemo(() => displayMessages(wireMessages), [wireMessages]);
-
-  const startFlowSession = useCallback(async (): Promise<string> => {
-    if (conversationId) return conversationId;
-    const id = uuidv4();
-    const { flow } = await chatService.synthesizeFlowGenerator({
-      conversationId: id,
-      modelId,
-      allowInstall,
-    });
-    const now = Date.now();
-    await chatService.createConversation({
-      id,
-      title: t('flows.generator.conversationTitle'),
-      flowId: flow.id,
-      flowSnapshot: flow,
-      createdAt: now,
-      updatedAt: now,
-    });
-    setConversationId(id);
-    return id;
-  }, [allowInstall, conversationId, modelId, t]);
 
   const handleSend = useCallback(async (content: string) => {
     const trimmed = content.trim();
@@ -307,40 +178,6 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
     setIsWorking(true);
 
     try {
-      if (flowBasedExperimental) {
-        const id = await startFlowSession();
-        const response = await chatService.completeFlowGeneratorTurn({
-          conversationId: id,
-          messages: nextMessages,
-        });
-        const canonical: Array<Record<string, unknown>> = Array.isArray(response?.messages)
-          ? response.messages.map((entry) => ({ ...entry }))
-          : nextMessages;
-        setWireMessages(canonical);
-        const proposed = extractFlowDraft(canonical);
-        if (!proposed) {
-          setError(t('flows.generator.experimentalNoDraft'));
-          return;
-        }
-        const generatedByFlow: DraftPayload = {
-          flow: proposed.flow,
-          flows: proposed.flows,
-          rootFlowId: proposed.rootFlowId,
-          errorCount: proposed.validation?.errorCount ?? 0,
-          warningCount: proposed.validation?.warningCount ?? 0,
-          attempts: canonical.filter((entry) => entry.role === 'user').length,
-          installedServers: extractInstalledServers(canonical),
-        };
-        setDraft(generatedByFlow);
-        log.info('Experimental Generation Flow returned a draft', {
-          flowId: generatedByFlow.rootFlowId,
-          flowCount: generatedByFlow.flows.length,
-          errors: generatedByFlow.errorCount,
-          warnings: generatedByFlow.warningCount,
-        });
-        return;
-      }
-
       if (!draft) {
         const controller = new AbortController();
         generationAbortRef.current = controller;
@@ -429,11 +266,9 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
   }, [
     allowInstall,
     draft,
-    flowBasedExperimental,
     isWorking,
     maxDepth,
     modelId,
-    startFlowSession,
     t,
     tp,
     wireMessages,
@@ -443,26 +278,8 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
     if (draft) onGenerated(draft);
   }, [draft, onGenerated]);
 
-  const handleRestoreExperimentalFlow = useCallback(async () => {
-    if (isWorking || isRestoring) return;
-    setIsRestoring(true);
-    setError(null);
-    try {
-      await chatService.restoreFlowGenerator();
-      setConversationId(null);
-      setWireMessages([]);
-      setDraft(null);
-      dispatchVisual({ type: 'reset' });
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setIsRestoring(false);
-    }
-  }, [isRestoring, isWorking]);
-
   const handleClose = useCallback(() => {
-    if (isWorking || isRestoring) return;
-    setConversationId(null);
+    if (isWorking) return;
     setWireMessages([]);
     setDraft(null);
     setAllowInstall(false);
@@ -470,7 +287,7 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
     dispatchVisual({ type: 'reset' });
     setError(null);
     onClose();
-  }, [isRestoring, isWorking, onClose]);
+  }, [isWorking, onClose]);
 
   const handleCancelGeneration = useCallback(() => {
     generationAbortRef.current?.abort();
@@ -480,7 +297,7 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
     <Dialog
       open={open}
       onClose={handleClose}
-      maxWidth={!flowBasedExperimental && visualState.started ? 'xl' : 'md'}
+      maxWidth={visualState.started ? 'xl' : 'md'}
       fullWidth
       slotProps={{ paper: { sx: { overflow: 'hidden', transition: 'max-width 240ms ease, width 240ms ease' } } }}
     >
@@ -488,34 +305,10 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
         <AutoAwesomeIcon color="primary" />
         <Box sx={{ flex: 1 }}>
           {t('flows.generator.title')}
-          {flowBasedExperimental && (
-            <Chip
-              label={t('flows.generator.experimentalChip')}
-              size="small"
-              color="warning"
-              variant="outlined"
-              sx={{ ml: 1 }}
-            />
-          )}
           <Typography variant="body2" color="text.secondary">
-            {flowBasedExperimental
-              ? t('flows.generator.experimentalDescription')
-              : t('flows.generator.description')}
+            {t('flows.generator.description')}
           </Typography>
         </Box>
-        {flowBasedExperimental && (
-          <Tooltip title={t('flows.generator.restore')}>
-            <span>
-              <IconButton
-                aria-label={t('flows.generator.restore')}
-                onClick={() => { void handleRestoreExperimentalFlow(); }}
-                disabled={isWorking || isRestoring}
-              >
-                <RestartAltIcon />
-              </IconButton>
-            </span>
-          </Tooltip>
-        )}
         <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, flexShrink: 0 }}>
           <AskFlujoButton />
           <BugReportButton variant="icon" />
@@ -528,15 +321,10 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
               {error}
             </Alert>
           )}
-          {flowBasedExperimental && (
-            <Alert severity="warning" sx={{ mb: 1.5 }}>
-              {t('flows.generator.experimentalWarning')}
-            </Alert>
-          )}
           <Box
             component="details"
             sx={{
-              mt: error || flowBasedExperimental ? 1.5 : 0,
+              mt: error ? 1.5 : 0,
               border: 1,
               borderColor: 'divider',
               borderRadius: 2.5,
@@ -560,7 +348,7 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
             <FormControl
               size="small"
               fullWidth
-              disabled={isWorking || (flowBasedExperimental && !!conversationId)}
+              disabled={isWorking}
             >
               <InputLabel id="flow-generator-model-label">{t('flows.generator.model')}</InputLabel>
               <Select
@@ -582,7 +370,7 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
                 <Checkbox
                   checked={allowInstall}
                   onChange={(event) => setAllowInstall(event.target.checked)}
-                  disabled={isWorking || (flowBasedExperimental && !!conversationId)}
+                  disabled={isWorking}
                 />
               }
               label={t('flows.generator.allowTools')}
@@ -590,36 +378,34 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
             <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
               {t('flows.generator.allowToolsHelp')}
             </Typography>
-            {!flowBasedExperimental && (
-              <Box sx={{ mt: 2, px: 0.5 }}>
-                <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center" }}>
-                  <Typography variant="body2" sx={{ fontWeight: 750 }}>
-                    {t('flows.generator.maxDepth')}
-                  </Typography>
-                  <Chip
-                    size="small"
-                    color="primary"
-                    variant="outlined"
-                    label={t('flows.generator.levelCount', { count: maxDepth })}
-                  />
-                </Stack>
-                <Slider
-                  aria-label={t('flows.generator.maxDepth')}
-                  value={maxDepth}
-                  min={1}
-                  max={MAX_VISUAL_GENERATION_DEPTH}
-                  step={1}
-                  marks
-                  valueLabelDisplay="auto"
-                  disabled={isWorking}
-                  onChange={(_event, value) => setMaxDepth(Array.isArray(value) ? value[0] : value)}
-                  sx={{ mt: 0.5 }}
-                />
-                <Typography variant="caption" color="text.secondary">
-                  {t('flows.generator.maxDepthHelp')}
+            <Box sx={{ mt: 2, px: 0.5 }}>
+              <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center" }}>
+                <Typography variant="body2" sx={{ fontWeight: 750 }}>
+                  {t('flows.generator.maxDepth')}
                 </Typography>
-              </Box>
-            )}
+                <Chip
+                  size="small"
+                  color="primary"
+                  variant="outlined"
+                  label={t('flows.generator.levelCount', { count: maxDepth })}
+                />
+              </Stack>
+              <Slider
+                aria-label={t('flows.generator.maxDepth')}
+                value={maxDepth}
+                min={1}
+                max={MAX_VISUAL_GENERATION_DEPTH}
+                step={1}
+                marks
+                valueLabelDisplay="auto"
+                disabled={isWorking}
+                onChange={(_event, value) => setMaxDepth(Array.isArray(value) ? value[0] : value)}
+                sx={{ mt: 0.5 }}
+              />
+              <Typography variant="caption" color="text.secondary">
+                {t('flows.generator.maxDepthHelp')}
+              </Typography>
+            </Box>
             {allowInstall && (
               <Alert severity="warning" sx={{ mt: 1 }}>
                 {t('flows.generator.installWarning')}
@@ -628,7 +414,7 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
           </Box>
         </Box>
 
-        {!flowBasedExperimental && visualState.started ? (
+        {visualState.started ? (
           <VisualGenerationCanvas
             state={visualState}
             working={isWorking}
@@ -672,20 +458,18 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
             <Typography variant="caption" color="text.secondary">
               {draft
                 ? t('flows.generator.applying')
-                : flowBasedExperimental
-                  ? t('flows.generator.runningExperimental')
-                  : t('flows.generator.building')}
+                : t('flows.generator.building')}
             </Typography>
           )}
         </Box>
       </DialogContent>
       <DialogActions>
-        {isWorking && !flowBasedExperimental && (
+        {isWorking && (
           <Button color="warning" onClick={handleCancelGeneration}>
             {t('flows.generator.cancel')}
           </Button>
         )}
-        <Button onClick={handleClose} disabled={isWorking || isRestoring}>{t('flows.generator.close')}</Button>
+        <Button onClick={handleClose} disabled={isWorking}>{t('flows.generator.close')}</Button>
         <Button
           variant="contained"
           onClick={handleOpenDraft}

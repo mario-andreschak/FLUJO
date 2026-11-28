@@ -4,7 +4,6 @@ import { createLogger } from '@/utils/logger';
 import { SharedState, SignalNodeParams } from '../types';
 import { resolveRunVars } from '@/utils/shared/resolveRunVars';
 import { getFlowRunEventBus, FlowRunFiredBy } from '@/backend/services/scheduler/flowRunEventBus';
-import { FEATURES } from '@/config/features';
 import { assertFlowExecutionCurrent } from '../executionAuthority';
 
 const log = createLogger('backend/flow/execution/nodes/SignalNode');
@@ -74,16 +73,6 @@ export class SignalNode extends BaseNode<
     node_params?: SignalNodeParams
   ): Promise<string> {
     log.info('post() started', { nodeId: node_params?.id, topic: prepResult.topic });
-
-    // Tracking (never alters the conversation).
-    if (FEATURES.ENABLE_EXECUTION_TRACKER && Array.isArray(sharedState.trackingInfo?.nodeExecutionTracker)) {
-      sharedState.trackingInfo.nodeExecutionTracker.push({
-        nodeType: 'SignalNode',
-        nodeId: node_params?.id || 'unknown',
-        nodeName: node_params?.properties?.name || 'Signal Node',
-        timestamp: new Date().toISOString(),
-      });
-    }
 
     // Fire-and-forget emit. A missing topic means nothing can match, so skip
     // (still transparent). Any failure is logged, never propagated.

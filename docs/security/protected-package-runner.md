@@ -45,10 +45,9 @@ For isolated runtime-home mode, the working directory is the workspace's
 `userdata/mcp-runtime/<first 24 hex characters of SHA-256(server name)>/cwd`.
 It is outside the source root. HOME, profile, config, cache and temporary roots
 use the sibling private `home` tree. The review proposal includes these effective
-values in its consent commitment. Runtime resolves the installation-wide
-`FLUJO_MCP_RUNTIME_HOME_ISOLATION` override first, then the server setting, then
-the workspace preference, then host mode. A grant for the other effective mode
-is refused before launch; a server setting cannot override the global setting.
+values in its consent commitment. Runtime uses the server's own Runtime home
+setting (isolated or host). There is no process-wide override. A grant for the
+other effective mode is refused before launch.
 
 Review the configured server through
 `GET /api/mcp/servers/<name>/host-consent?runtimeHome=isolated` (or `host`), using

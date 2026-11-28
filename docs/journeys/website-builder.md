@@ -146,7 +146,7 @@ The capture operator performed the browser checks. The narrow view used browser 
 
 ## 6. Explore what comes next
 
-Open **More** to explore other ways to use your agents. Some entries require **Settings → Enable experimental features**.
+Open **More** to explore other ways to use your agents. Some entries are marked experimental.
 
 | Feature | What you can try |
 | --- | --- |

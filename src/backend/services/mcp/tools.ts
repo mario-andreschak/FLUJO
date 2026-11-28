@@ -14,7 +14,6 @@ import { isBetaClient } from "./betaClient";
 import {
   buildTaskAugmentation,
   decideTaskAugmentation,
-  mcpTasksClientEnabled,
   extensionDispatchOptions,
 } from "./tasksProtocol";
 import { getTasksExtensionSession, TasksExtensionRequestTimeoutError } from './tasksExtensionSession';
@@ -334,25 +333,17 @@ export async function callTool(
     }
 
     if (classified.kind === "task") {
-      // Durable records are part of the gated feature. Resolving the server
-      // identity fingerprint is only meaningful (and only worth the config
-      // read) when a record is actually going to be persisted.
-      const persist = mcpTasksClientEnabled();
-      const serverIdentity = persist
-        ? dispatchIdentity ?? await resolveServerIdentity(serverName)
-        : "unnegotiated";
+      const serverIdentity = dispatchIdentity ?? await resolveServerIdentity(serverName);
       const assertCurrent = async (current: Client) => {
         await assertMcpIsolationDispatch(current, serverName);
         await assertBundledFlujoWorkloadEffectCurrent();
-        if (persist) {
-          const { mcpService } = await import('@/backend/services/mcp');
-          if (serverIdentity === 'unknown' || mcpService.getClient(serverName) !== current || await resolveServerIdentity(serverName) !== serverIdentity) throw new Error('MCP task server connection identity changed');
-        }
+        const { mcpService } = await import('@/backend/services/mcp');
+        if (serverIdentity === 'unknown' || mcpService.getClient(serverName) !== current || await resolveServerIdentity(serverName) !== serverIdentity) throw new Error('MCP task server connection identity changed');
         if (originatingInputContext && getElicitationContext(serverName) !== originatingInputContext) throw new Error('MCP task originating run is no longer current');
       };
       // Only a durably recorded task with a known server identity may be
       // followed onto a replacement connection of that same server.
-      const reacquireClient = persist && serverIdentity !== 'unknown' ? async () => {
+      const reacquireClient = serverIdentity !== 'unknown' ? async () => {
         const { mcpService } = await import('@/backend/services/mcp');
         const current = mcpService.getClient(serverName);
         return current && await resolveServerIdentity(serverName) === serverIdentity ? current : undefined;
@@ -377,9 +368,6 @@ export async function callTool(
           source,
         },
         ...(originatingInputContext ? { originatingInputContext } : {}),
-        // Without the flag the lifecycle still runs (a server may answer with
-        // a task regardless) — it just does not claim durable compliance.
-        persist,
         // With no negotiated capability information, cancellation stays
         // best-effort exactly as it was before this change.
         supportsCancel:

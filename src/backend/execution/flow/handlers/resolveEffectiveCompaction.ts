@@ -3,17 +3,12 @@
  * model call (issue #248).
  *
  * Precedence mirrors `resolveEffectiveMaxTokens`:
- *   enabled       : global `compactionEnabled` (default ON) AND the node is not
- *                   explicitly `compactionMode:'off'`.
+ *   enabled       : on unless the node is explicitly `compactionMode:'off'`.
  *   keepTokens    : per-node override → global `compactionKeepTokens` → default.
  *   bufferTokens  : global `compactionBufferTokens` → default.
  *   threshold     : per-model `compactionThreshold` override (absolute prompt-token
  *                   figure at/above which pre-flight compaction triggers); when
  *                   unset the trigger is derived from contextWindow − buffer.
- *
- * The feature is a backend behavioural change to context management, so it is
- * ON by default for new installations — a node's `compactionMode`
- * cannot turn it on by itself, only opt a node OUT.
  */
 
 // Target 30-60% context usage: bufferTokens = 40% of context window (e.g., 50k for 128k window)
@@ -32,7 +27,6 @@ export interface EffectiveCompaction {
 }
 
 export interface CompactionGlobalSettings {
-  compactionEnabled?: boolean;
   compactionBufferTokens?: number;
   compactionKeepTokens?: number;
   compactionThresholdPercent?: number;
@@ -49,12 +43,6 @@ export interface CompactionModelSettings {
   contextWindow?: number;
 }
 
-export interface VisualCompactionGlobalSettings {
-  visualCompactionEnabled?: boolean;
-  visualCompactionToolResultsOnly?: boolean;
-  visualCompactionEvaluationMode?: boolean;
-}
-
 export interface EffectiveVisualCompactionSettings {
   enabled: boolean;
   toolResultsOnly: boolean;
@@ -62,19 +50,12 @@ export interface EffectiveVisualCompactionSettings {
 }
 
 /**
- * Visual compaction is independently and globally gated. There is no Process
- * node visual override in the current schema/UI, so nodes cannot silently turn
- * the experimental feature on. Missing persisted values migrate to the safe
- * defaults: disabled and tool-results-only.
+ * Visual compaction is retired (#1449): it cannot tell when a model misreads
+ * the pictures, so it cannot be on by default. ModelHandler.ts still calls
+ * this until the second #1449 pass deletes visualCompaction.ts.
  */
-export function resolveEffectiveVisualCompaction(
-  global?: VisualCompactionGlobalSettings,
-): EffectiveVisualCompactionSettings {
-  return {
-    enabled: Boolean(global?.visualCompactionEnabled),
-    toolResultsOnly: global?.visualCompactionToolResultsOnly !== false,
-    evaluationOnly: Boolean(global?.visualCompactionEvaluationMode),
-  };
+export function resolveEffectiveVisualCompaction(_global?: unknown): EffectiveVisualCompactionSettings {
+  return { enabled: false, toolResultsOnly: true, evaluationOnly: false };
 }
 
 function posInt(value: unknown): number | undefined {
@@ -93,10 +74,7 @@ export function resolveEffectiveCompaction(
   model?: CompactionModelSettings,
   global?: CompactionGlobalSettings,
 ): EffectiveCompaction {
-  // Default to ENABLED for new installations (missing value = true)
-  const globalEnabled = global?.compactionEnabled !== false;
-  const nodeOptedOut = node?.compactionMode === 'off';
-  const enabled = globalEnabled && !nodeOptedOut;
+  const enabled = node?.compactionMode !== 'off';
 
   const window = posInt(model?.contextWindow);
   const requestedKeepTokens =

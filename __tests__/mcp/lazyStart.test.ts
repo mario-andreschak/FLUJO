@@ -24,19 +24,10 @@ describe('resolveLazyStart', () => {
     await expect(resolveLazyStart()).resolves.toBe(true);
   });
 
-  it.each(['1', 'true', 'YES'])('lets %s in the environment turn it on', async value => {
-    process.env.FLUJO_MCP_LAZY_START = value;
-    await expect(resolveLazyStart()).resolves.toBe(true);
-  });
-
-  it('lets the environment turn it off against the setting', async () => {
-    process.env.FLUJO_MCP_LAZY_START = '0';
-    settings = { mcp: { lazyStart: true } };
+  it('ignores the retired environment variable (#1449)', async () => {
+    process.env.FLUJO_MCP_LAZY_START = '1';
     await expect(resolveLazyStart()).resolves.toBe(false);
-  });
-
-  it('treats a blank variable as not set', async () => {
-    process.env.FLUJO_MCP_LAZY_START = '  ';
+    process.env.FLUJO_MCP_LAZY_START = '0';
     settings = { mcp: { lazyStart: true } };
     await expect(resolveLazyStart()).resolves.toBe(true);
   });

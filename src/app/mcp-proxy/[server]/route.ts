@@ -48,7 +48,6 @@ import {
 import { handleStatelessMcpRequest } from '@/backend/services/mcp/statelessHttpTransport';
 import { handleModernProxyMcpRequest } from '@/backend/services/mcp/proxyModernServer';
 import { classifyMcpHttpRequest } from '@/backend/services/mcp/mcpEraRouting';
-import { isMcpBetaProtocolEnabled } from '@/backend/services/mcp/betaClient';
 import { createLogger } from '@/utils/logger';
 import { MCP_APPS_EXTENSION_ID } from '@/backend/services/mcp/appsProtocol';
 
@@ -90,8 +89,7 @@ function buildProxyServer(
     // MCP Tasks (#404) is not advertised: task lifecycle handlers are absent.
     // The route wrapper admits callers, but this server does not receive their
     // authorization or establish durable caller/workspace task ownership.
-    // See docs/features/mcp-tasks.md ("Server-side status") and the
-    // FEATURES.ENABLE_MCP_TASKS_SERVER flag.
+    // See docs/features/mcp-tasks.md ("Server-side status").
     {
       capabilities: {
         tools: {},
@@ -144,8 +142,7 @@ async function handle(request: Request, serverName: string): Promise<Response> {
     return jsonError(404, `MCP server '${serverName}' is not found or not exposed.`);
   }
 
-  const modernEnabled = await isMcpBetaProtocolEnabled();
-  const era = modernEnabled ? await classifyMcpHttpRequest(request) : 'legacy';
+  const era = await classifyMcpHttpRequest(request);
   if (era === 'too-large') return jsonError(413, 'MCP request body exceeds the limit.');
 
   // One freshly authorized connection supplies both negotiated extensions.

@@ -41,7 +41,6 @@ import { replaceResponsesSession } from '@/backend/services/model/adapters/respo
 import { admitCatalogModel, assertCatalogAdmissionCurrent, assertModelCatalogLeaseOwned, withModelCatalogLease, type ModelCatalogAdmission } from '@/backend/services/model/catalogAdmission';
 import { isOwnerCredentialBoundModel, validateOwnerCredentialBinding } from '@/shared/types/model';
 import { FlowNode } from '@/shared/types/flow';
-import { FEATURES } from '@/config/features'; // Import feature flags
 import {
   SharedState,
   ProcessNodeParams,
@@ -1275,9 +1274,9 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
     // conversation the model receives (after fold + scope + handoff-plumbing
     // strip), and per-message provenance. Derived from the SAME pipeline
     // functions used above, so it can never drift from behaviour. Gated on debug
-    // mode / the execution tracker so normal runs pay nothing, and carries
+    // mode so normal runs pay nothing, and carries
     // conversation content ONLY (never credentials).
-    if (sharedState.debugMode || FEATURES.ENABLE_EXECUTION_TRACKER) {
+    if (sharedState.debugMode) {
       try {
         prepResult.modelInput = materialized.snapshot;
         // Issue #167 (Phase 2 of #162): expose the per-model-call wire snapshots
@@ -2011,24 +2010,6 @@ export class ProcessNode extends BaseNode<ProcessNodeParams, SharedState, Proces
 
       log.info('Updated canonical messages in sharedState (system prompt excluded)', {
         messagesCount: sharedState.messages.length
-      });
-    }
-
-    // Add tracking information for the ProcessNode itself
-    if (FEATURES.ENABLE_EXECUTION_TRACKER && Array.isArray(sharedState.trackingInfo.nodeExecutionTracker)) {
-      sharedState.trackingInfo.nodeExecutionTracker.push({
-        nodeType: 'ProcessNode',
-        nodeId: node_params?.id || 'unknown',
-        nodeName: node_params?.properties?.name || 'Process Node',
-        modelDisplayName: prepResult.modelDisplayName || 'Unknown Model', // Note: modelDisplayName might not be in prepResult, adjust if needed
-        modelTechnicalName: prepResult.boundModel || 'unknown',
-        allowedTools: node_params?.properties?.allowedTools?.join(', '),
-        timestamp: new Date().toISOString()
-      });
-
-      log.info('Added ProcessNode tracking information', {
-        modelDisplayName: prepResult.modelDisplayName, // Adjust if needed
-        modelTechnicalName: prepResult.boundModel
       });
     }
 

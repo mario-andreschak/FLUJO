@@ -21,7 +21,7 @@ interface RuntimeHomeManagerProps {
 /** Per-server override for stdio HOME/config/cache inheritance. */
 const RuntimeHomeManager: React.FC<RuntimeHomeManagerProps> = ({ mode, onChange }) => {
   const { t } = useI18n();
-  const value = mode ?? 'inherit';
+  const value = mode === 'isolated' ? 'isolated' : 'host';
 
   return (
     <Box>
@@ -42,7 +42,6 @@ const RuntimeHomeManager: React.FC<RuntimeHomeManagerProps> = ({ mode, onChange 
           value={value}
           onChange={(event) => onChange(event.target.value as MCPRuntimeHomeMode)}
         >
-          <MenuItem value="inherit">{t('mcp.local.runtimeHome.inherit')}</MenuItem>
           <MenuItem value="isolated">{t('mcp.local.runtimeHome.isolated')}</MenuItem>
           <MenuItem value="host">{t('mcp.local.runtimeHome.host')}</MenuItem>
         </Select>

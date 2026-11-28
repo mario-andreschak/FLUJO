@@ -279,7 +279,7 @@ try {
   const settings = await request('/api/storage?key=speech_settings');
   await request('/api/storage', { key: 'speech_settings', value: { ...settings.value,
     telemetry: { enabled: false, notifyDaily: false }, experimental: { ...settings.value?.experimental,
-      compactionEnabled: true, compactionKeepTokens: 256, visualCompactionEnabled: false,
+      compactionKeepTokens: 256,
       ...(nativeMode ? { historyKeepRecentMessages: 1000 } : {}) } } });
   const model = await request('/api/model', { id: 'compaction-action-free', name: requestedModel, provider: 'openrouter',
     adapter, displayName: 'Existing compaction acceptance', ApiKey: relayToken, baseUrl: `${evidence.relay}/api/v1`,

@@ -34,7 +34,7 @@ import {
   patchRemoteTaskRecord,
   serverIdentityFingerprint,
 } from './remoteTaskStore';
-import { cancelRemoteTask, discoverTaskNegotiation, fetchTaskStatus, getTaskNegotiation, mcpTasksClientEnabled } from './tasksProtocol';
+import { cancelRemoteTask, discoverTaskNegotiation, fetchTaskStatus, getTaskNegotiation } from './tasksProtocol';
 
 const log = createLogger('backend/services/mcp/remoteTaskResume');
 
@@ -49,11 +49,6 @@ export interface ResumeSummary {
 
 export async function resumeRemoteMcpTasks(): Promise<ResumeSummary> {
   const summary: ResumeSummary = { resumed: 0, failedClosed: 0, skipped: 0 };
-  if (!mcpTasksClientEnabled()) {
-    log.debug('MCP Tasks client support disabled; skipping remote task resume');
-    return summary;
-  }
-
   const records = await listResumableRemoteTaskRecords();
   if (records.length === 0) return summary;
 

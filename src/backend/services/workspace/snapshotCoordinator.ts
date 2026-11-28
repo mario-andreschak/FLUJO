@@ -18,6 +18,7 @@ import {
 import { WORKSPACE_LAYOUT_VERSION } from './layoutVersion';
 import { getWorkerCompatibility, type WorkerCompatibility } from './workerCompatibility';
 import { openSnapshotDownload } from './snapshotStreaming';
+import { testSetting } from '@/shared/testSetting';
 
 const DEFAULT_SESSION_TTL_MS = 15 * 60 * 1000;
 const MAX_SESSION_TTL_MS = 60 * 60 * 1000;
@@ -105,13 +106,13 @@ const sessions = globalThis.__flujoWorkspaceSnapshotSessions
   ?? (globalThis.__flujoWorkspaceSnapshotSessions = new Map());
 
 function sessionTtlMs(): number {
-  const configured = Number.parseInt(process.env.FLUJO_SNAPSHOT_SESSION_TTL_MS ?? '', 10);
+  const configured = Number.parseInt(testSetting('FLUJO_SNAPSHOT_SESSION_TTL_MS') ?? '', 10);
   if (!Number.isSafeInteger(configured) || configured <= 0) return DEFAULT_SESSION_TTL_MS;
   return Math.min(configured, MAX_SESSION_TTL_MS);
 }
 
 function captureTimeoutMs(): number {
-  const configured = Number.parseInt(process.env.FLUJO_SNAPSHOT_CAPTURE_TIMEOUT_MS ?? '', 10);
+  const configured = Number.parseInt(testSetting('FLUJO_SNAPSHOT_CAPTURE_TIMEOUT_MS') ?? '', 10);
   if (!Number.isSafeInteger(configured) || configured <= 0) return DEFAULT_CAPTURE_TIMEOUT_MS;
   return Math.min(configured, MAX_CAPTURE_TIMEOUT_MS);
 }

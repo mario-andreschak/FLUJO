@@ -29,6 +29,7 @@ import { types } from 'node:util';
 import { FlowExecutor } from './FlowExecutor';
 import { SharedState } from './types';
 import { DEFAULT_WORKSPACE, getCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
+import { testSetting } from '@/shared/testSetting';
 
 const log = createLogger('backend/execution/flow/conversationStateCache');
 
@@ -78,7 +79,7 @@ function hasDataPrototype(value: object, array: boolean): boolean {
 }
 
 function numberFromEnv(name: string, fallback: number): number {
-  const raw = Number(process.env[name]);
+  const raw = Number(testSetting(name));
   return Number.isFinite(raw) && raw > 0 ? raw : fallback;
 }
 

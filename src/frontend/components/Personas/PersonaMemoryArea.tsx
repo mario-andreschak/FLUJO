@@ -30,7 +30,6 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 
-import { FEATURES } from '@/config/features';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { TranslationKey } from '@/frontend/i18n/messages';
 import {
@@ -409,16 +408,14 @@ export default function PersonaMemoryArea({
   };
 
   const safeConflictCounterparts = (memory: MemoryItem): MemoryItem[] => (
-    FEATURES.ENABLE_MEMORY_CONFLICT_SURFACING
-      ? (memory.conflictsWith ?? [])
-        .map(id => detailById.get(id))
-        .filter((candidate): candidate is MemoryItem => (
-          candidate !== undefined
-          && candidate.id !== memory.id
-          && candidate.personaId === memory.personaId
-          && candidate.status !== 'superseded'
-        ))
-      : []
+    (memory.conflictsWith ?? [])
+      .map(id => detailById.get(id))
+      .filter((candidate): candidate is MemoryItem => (
+        candidate !== undefined
+        && candidate.id !== memory.id
+        && candidate.personaId === memory.personaId
+        && candidate.status !== 'superseded'
+      ))
   );
 
   const openAdd = () => {

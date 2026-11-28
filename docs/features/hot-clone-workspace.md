@@ -28,11 +28,11 @@ archives are staged in an owner-only temporary directory and removed by
 
 Optional limits:
 
-- `FLUJO_SNAPSHOT_SESSION_TTL_MS` defaults to 15 minutes and is capped at one hour.
+- A snapshot session lasts 15 minutes. This is fixed; only tests change it.
 - `FLUJO_SNAPSHOT_MAX_FILE_BYTES` defaults to 256 MiB per file.
 - `FLUJO_SNAPSHOT_MAX_BYTES` defaults to 1 GiB of uncompressed workspace data.
-- `FLUJO_SNAPSHOT_CAPTURE_TIMEOUT_MS` bounds the managed write pause to 30 seconds
-  by default, at most 60 seconds, including draining current writers. Cancellation
+- The managed write pause is bounded to 30 seconds, including draining current
+  writers. This is fixed; only tests change it. Cancellation
   releases the pause immediately; it does not wait for filesystem I/O to finish.
 
 A limit or unsafe filesystem entry fails the snapshot closed.

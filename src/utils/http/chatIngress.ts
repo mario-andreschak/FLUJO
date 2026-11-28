@@ -2,6 +2,7 @@ import { getHeapStatistics } from 'node:v8';
 import { pendingAllocationBytes, setAllocationReservation } from '@/backend/execution/flow/allocationReservations';
 import { getProcessRssLimitBytes } from '@/backend/execution/flow/runAdmission';
 import { CapacityWaitQueue } from '@/utils/capacityWaitQueue';
+import { testSetting } from '@/shared/testSetting';
 
 const MiB = 1024 * 1024;
 /** `owners` bounds concurrent parses; admitted chats keep only their parsed byte charge. */
@@ -13,7 +14,7 @@ export const CHAT_INGRESS_LIMITS = Object.freeze({
 
 /** How long a chat request waits for momentarily full capacity before it gets a retryable 429 or 503. */
 export function chatAdmissionWaitMs(): number {
-  const value = Number(process.env.FLUJO_CHAT_ADMISSION_WAIT_MS);
+  const value = Number(testSetting('FLUJO_CHAT_ADMISSION_WAIT_MS'));
   return Number.isSafeInteger(value) && value > 0 ? value : CHAT_INGRESS_LIMITS.admissionWaitMs;
 }
 

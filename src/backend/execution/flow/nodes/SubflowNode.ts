@@ -29,7 +29,6 @@ import {
   ERROR_ACTION,
   IMPLICIT_SUBFLOW_RETURN_ACTION,
 } from '../types';
-import { FEATURES } from '@/config/features';
 import { FlujoChatMessage } from '@/shared/types/chat';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { EmitFn, NodeRef } from '@/shared/types/execution/events';
@@ -1504,14 +1503,6 @@ export class SubflowNode extends BaseNode<SubflowNodeParams, SharedState, Subflo
     const invocation = prepResult.invocationId
       ? sharedState.subflowInvocations?.[prepResult.invocationId]
       : undefined;
-    if (FEATURES.ENABLE_EXECUTION_TRACKER && Array.isArray(sharedState.trackingInfo.nodeExecutionTracker)) {
-      sharedState.trackingInfo.nodeExecutionTracker.push({
-        nodeType: 'SubflowNode',
-        nodeId: node_params?.id || 'unknown',
-        nodeName: node_params?.properties?.name || 'Subflow Node',
-        timestamp: new Date().toISOString(),
-      });
-    }
 
     if (!execResult.success) {
       log.error('Subflow failed', { subflowId: prepResult.subflowId, error: execResult.error });

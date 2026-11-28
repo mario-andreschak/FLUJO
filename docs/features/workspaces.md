@@ -124,11 +124,10 @@ automatically so log collectors never receive cursor-control output.
 
 The transcript reports every inventory, recovery and transaction checkpoint,
 including aggregate file/directory/link/byte counts and measured processing
-time, without printing individual filenames. `FLUJO_MIGRATION_UI=plain`
-selects it explicitly. `FLUJO_MIGRATION_UI=compact` (or `tty`) selects the
-compact animation, `FLUJO_MIGRATION_UI=landscape` forces the landscape when the
-terminal supports it, `FLUJO_MIGRATION_ASCII=1` selects compact ASCII, and the
-standard `NO_COLOR` setting disables color and the full-screen scene.
+time, without printing individual filenames. FLUJO chooses the output by
+itself from the terminal: the full-screen scene, a compact animation, compact
+ASCII or the plain transcript. The standard `NO_COLOR` setting disables color
+and the full-screen scene.
 
 The current layout mover prefers directory renames and merges populated
 destinations when necessary. For legacy data collisions, source files replace

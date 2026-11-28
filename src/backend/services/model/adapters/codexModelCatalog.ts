@@ -1,10 +1,7 @@
 import os from 'os';
 import path from 'path';
 import { promises as fs } from 'fs';
-import { loadItem } from '@/utils/storage/backend';
 import { createLogger } from '@/utils/logger';
-import { StorageKey } from '@/shared/types/storage';
-import type { Settings } from '@/shared/types/storage/storage';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 import { readStableFile } from '@/utils/readStableFile';
 import { readOrdinaryCodexVersion } from './codexRuntimeUpdate';
@@ -57,7 +54,7 @@ function isCompatibleCatalog(value: unknown, cliVersion: string): boolean {
 }
 
 /**
- * Own a verified local model catalog for one invocation when explicitly enabled.
+ * Own a verified local model catalog for one invocation.
  *
  * Codex CLI currently refreshes the remote catalog during `exec`; on some
  * machines that refresh's helper process times out and aborts an otherwise
@@ -65,9 +62,9 @@ function isCompatibleCatalog(value: unknown, cliVersion: string): boolean {
  * startup-only override and avoids that network refresh while retaining the
  * catalog maintained by the user's normal Codex installation.
  *
- * The local cache can also be incompatible with the Codex version bundled by
- * FLUJO, so this workaround is experimental and defaults to off. Settings read
- * failures fail closed and preserve Codex's normal catalogue behaviour.
+ * The local cache can be incompatible with the Codex version bundled by FLUJO.
+ * Only a cache written for the same Codex minor version with a complete model
+ * list is used; anything else keeps Codex's normal catalogue behaviour.
  * Stable operator-selected symlinks remain supported. The SDK receives a fresh
  * copy of exactly the validated bytes; refreshing the source cannot change a
  * later CLI startup. The caller must retain it until all SDK turns terminate.
@@ -79,16 +76,6 @@ export async function prepareCodexModelCatalogSnapshot(
   executable?: string,
 ): Promise<CodexModelCatalogSnapshot | undefined> {
   assertNotCancelled(signal);
-  try {
-    const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
-    assertNotCancelled(signal);
-    if (settings?.experimental?.codexModelCatalogCache !== true) return undefined;
-  } catch (err) {
-    assertNotCancelled(signal);
-    log.warn('Failed to read codexModelCatalogCache setting; defaulting to disabled', { err });
-    return undefined;
-  }
-
   const configuredHome = process.env.CODEX_HOME?.trim();
   const codexHome = configuredHome || path.join(os.homedir(), '.codex');
   const catalogPath = path.join(codexHome, 'models_cache.json');

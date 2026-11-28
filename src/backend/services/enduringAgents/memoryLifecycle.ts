@@ -9,7 +9,6 @@ import { createLogger } from '@/utils/logger';
 import {
   type MemoryItem,
 } from '@/shared/types/enduringAgent';
-import { FEATURES } from '@/config/features';
 import type { MemorySettings } from '@/shared/types/memorySettings';
 import { getMemorySettings } from './memorySettings';
 import { getMemoryItem, listMemoryItems, saveMemoryItem, getPersona } from './store';
@@ -34,7 +33,7 @@ export interface SweepStatistics {
  * Security-critical: never bypasses assertActivationPolicy.
  * 
  * Promotion preconditions (must all hold, per design D3):
- * 1. ENABLE_MEMORY_AUTO_PROMOTION feature && settings.autoPromoteEnabled
+ * 1. settings.autoPromoteEnabled (the workspace memory settings)
  * 2. item.status === 'candidate'
  * 3. item.trust !== 'external_untrusted' (exhaustive switch for compile safety)
  * 4. (model_inference only) corroborationCount >= settings.autoPromoteMinCorroborations
@@ -48,9 +47,7 @@ export async function promoteMemoryCandidate(
   memoryId: string,
   options: PersonaDomainMutationOptions = {},
 ): Promise<MemoryItem | null> {
-  if (!FEATURES.ENABLE_MEMORY_AUTO_PROMOTION) {
-    return null;
-  }
+  if (!(await getMemorySettings()).autoPromoteEnabled) return null;
 
   return withPersonaDomainMutation(personaId, options, async ({ persona }) => {
     // Precondition 7: Persona not locked
@@ -67,7 +64,7 @@ export async function promoteMemoryCandidate(
     const now = Date.now();
     const settings = await getMemorySettings();
 
-    // Precondition 1: Feature enabled && settings enabled
+    // Precondition 1: settings enabled (rechecked under the lock)
     if (!settings.autoPromoteEnabled) {
       return null;
     }
@@ -188,14 +185,6 @@ export async function sweepMemoryCandidates(personaId?: string, now = Date.now()
     const settings = await getMemorySettings();
 
     // Early exit if no cleanup is needed
-    if (
-      settings.candidateExpiryDays <= 0
-      && !settings.autoPromoteEnabled
-      && !FEATURES.ENABLE_MEMORY_CONFLICT_SURFACING
-    ) {
-      return stats;
-    }
-
     if (personaId) {
       // Sweep single persona
       await sweepPersonaMemoryCandidates(personaId, now, settings, stats);
@@ -227,7 +216,9 @@ async function sweepPersonaMemoryCandidates(
     for (const candidate of toProcess) {
       try {
         // Try auto-promotion first
-        const promoted = await promoteMemoryCandidate(personaId, candidate.id, {});
+        const promoted = settings.autoPromoteEnabled
+          ? await promoteMemoryCandidate(personaId, candidate.id, {})
+          : null;
         if (promoted) {
           stats.promoted++;
           continue;
@@ -255,9 +246,7 @@ async function sweepPersonaMemoryCandidates(
       }
     }
 
-    if (FEATURES.ENABLE_MEMORY_CONFLICT_SURFACING) {
-      stats.repaired += await repairPersonaConflictLinks(personaId);
-    }
+    stats.repaired += await repairPersonaConflictLinks(personaId);
   } catch (error) {
     log.error('Error sweeping persona candidates.', { personaId, error });
   }

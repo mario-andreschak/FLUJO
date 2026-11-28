@@ -1,10 +1,6 @@
 import { createHash } from 'crypto';
 
 import {
-  FEATURES,
-  isPersonaBehaviorMaintenanceDiagnosisReady,
-} from '@/config/features';
-import {
   BEHAVIOR_MAINTENANCE_RUN_SCHEMA_VERSION,
   BehaviorMaintenanceRunSchema,
   type BehaviorMaintenanceAction,
@@ -72,20 +68,6 @@ function digest(value: unknown): string {
   return createHash('sha256').update(canonicalJson(value)).digest('hex');
 }
 
-export function getBehaviorAutoRollbackCooldownMs(
-  raw = process.env.FLUJO_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS,
-): number {
-  if (raw === undefined || raw.trim() === '') {
-    return DEFAULT_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS;
-  }
-  const parsed = Number(raw);
-  return Number.isFinite(parsed)
-    && Number.isInteger(parsed)
-    && parsed >= DEFAULT_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS
-    ? parsed
-    : DEFAULT_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS;
-}
-
 export function activeAutoRollbackCooldownsByRevision(
   metrics: BehaviorOutcomeMetric[],
   personaId: string,
@@ -150,45 +132,40 @@ export async function collectBehaviorMaintenanceEvidenceWindow(
 }> {
   const candidates = (await listPersonaActivities(personaId))
     .filter((activity) => isEligibleBehaviorMaintenanceActivity(activity, now));
-  let eligibleCandidates = candidates;
-  let suppressedCandidates: SuppressedCandidate[] = [];
-
-  if (FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK) {
-    const cooldowns = activeAutoRollbackCooldownsByRevision(
-      await listBehaviorOutcomeMetrics(personaId),
-      personaId,
-      now,
-      getBehaviorAutoRollbackCooldownMs(),
-    );
-    const suppressedActivityIds = new Set<string>();
-    suppressedCandidates = candidates
-      .map((activity): (SuppressedCandidate & { completedAt: number }) | null => {
-        if (!activity.behaviorRevisionId) return null;
-        const cooldown = cooldowns.get(activity.behaviorRevisionId);
-        if (!cooldown) return null;
-        suppressedActivityIds.add(activity.id);
-        return {
-          activityId: activity.id,
-          activatedRevisionId: cooldown.activatedRevisionId,
-          proposalId: cooldown.proposalId,
-          metricId: cooldown.metricId,
-          reasonCode: 'auto_rollback_cooldown',
-          autoRollbackAt: cooldown.autoRollbackAt,
-          cooldownUntil: cooldown.cooldownUntil,
-          completedAt: activity.completedAt ?? 0,
-        };
-      })
-      .filter((candidate): candidate is SuppressedCandidate & { completedAt: number } => (
-        candidate !== null
-      ))
-      .sort((left, right) => (
-        right.completedAt - left.completedAt
-        || right.activityId.localeCompare(left.activityId)
-      ))
-      .slice(0, MAX_SOURCE_ACTIVITIES)
-      .map(({ completedAt: _completedAt, ...candidate }) => candidate);
-    eligibleCandidates = candidates.filter((activity) => !suppressedActivityIds.has(activity.id));
-  }
+  const cooldowns = activeAutoRollbackCooldownsByRevision(
+    await listBehaviorOutcomeMetrics(personaId),
+    personaId,
+    now,
+    DEFAULT_BEHAVIOR_AUTO_ROLLBACK_COOLDOWN_MS,
+  );
+  const suppressedActivityIds = new Set<string>();
+  const suppressedCandidates: SuppressedCandidate[] = candidates
+    .map((activity): (SuppressedCandidate & { completedAt: number }) | null => {
+      if (!activity.behaviorRevisionId) return null;
+      const cooldown = cooldowns.get(activity.behaviorRevisionId);
+      if (!cooldown) return null;
+      suppressedActivityIds.add(activity.id);
+      return {
+        activityId: activity.id,
+        activatedRevisionId: cooldown.activatedRevisionId,
+        proposalId: cooldown.proposalId,
+        metricId: cooldown.metricId,
+        reasonCode: 'auto_rollback_cooldown',
+        autoRollbackAt: cooldown.autoRollbackAt,
+        cooldownUntil: cooldown.cooldownUntil,
+        completedAt: activity.completedAt ?? 0,
+      };
+    })
+    .filter((candidate): candidate is SuppressedCandidate & { completedAt: number } => (
+      candidate !== null
+    ))
+    .sort((left, right) => (
+      right.completedAt - left.completedAt
+      || right.activityId.localeCompare(left.activityId)
+    ))
+    .slice(0, MAX_SOURCE_ACTIVITIES)
+    .map(({ completedAt: _completedAt, ...candidate }) => candidate);
+  const eligibleCandidates = candidates.filter((activity) => !suppressedActivityIds.has(activity.id));
 
   const activities = eligibleCandidates
     .sort((left, right) => (
@@ -240,10 +217,7 @@ export async function collectBehaviorMaintenanceEvidenceWindow(
 async function completeLegacyShadowAdmissionRuns(
   runs: BehaviorMaintenanceRun[],
   now: number,
-  diagnosisEnabled: boolean,
 ): Promise<BehaviorMaintenanceRun[]> {
-  if (diagnosisEnabled) return runs;
-
   const normalized: BehaviorMaintenanceRun[] = [];
   for (const run of runs) {
     if (run.state !== 'queued' || run.reasonCode !== 'shadow_admission_only') {
@@ -272,7 +246,6 @@ export async function admitBehaviorMaintenanceRun(
   sourceActivity: PersonaActivity,
   now = Date.now(),
 ): Promise<BehaviorMaintenanceRun | null> {
-  if (!FEATURES.ENABLE_PERSONA_BEHAVIOR_MAINTENANCE_ADMISSION) return null;
   if (!isEligibleBehaviorMaintenanceActivity(sourceActivity, now)) return null;
 
   return withPersonaRuntimeLock(sourceActivity.personaId, async (lock) => {
@@ -280,11 +253,9 @@ export async function admitBehaviorMaintenanceRun(
     const persona = await getPersona(sourceActivity.personaId);
     if (!persona || persona.autonomyLevel === 'locked') return null;
 
-    const diagnosisEnabled = isPersonaBehaviorMaintenanceDiagnosisReady();
     const maintenanceRuns = await completeLegacyShadowAdmissionRuns(
       await listBehaviorMaintenanceRuns(sourceActivity.personaId),
       now,
-      diagnosisEnabled,
     );
     const existingActive = maintenanceRuns
       .filter((run) => ACTIVE_EXECUTION_STATES.has(run.state))
@@ -330,8 +301,8 @@ export async function admitBehaviorMaintenanceRun(
       detectorVersion: BEHAVIOR_MAINTENANCE_DETECTOR_VERSION,
       policyVersion: BEHAVIOR_MAINTENANCE_POLICY_VERSION,
       evaluationSuiteVersion: BEHAVIOR_MAINTENANCE_EVALUATION_SUITE_VERSION,
-      state: diagnosisEnabled ? 'queued' : 'completed',
-      reasonCode: diagnosisEnabled ? 'diagnosis_pending' : 'shadow_admission_only',
+      state: 'queued',
+      reasonCode: 'diagnosis_pending',
       evidenceTrust: window.evidenceTrust,
       relatedProposalIds: [],
       attempts: 0,
@@ -341,7 +312,6 @@ export async function admitBehaviorMaintenanceRun(
       durationMs: 0,
       createdAt: now,
       updatedAt: now,
-      ...(diagnosisEnabled ? {} : { action: 'no_change', completedAt: now }),
     }) as BehaviorMaintenanceRun);
   });
 }
@@ -374,10 +344,6 @@ function reusableInstruction(activities: PersonaActivity[]): string | undefined 
 export async function diagnoseBehaviorMaintenanceRun(
   run: BehaviorMaintenanceRun,
 ): Promise<BehaviorMaintenanceDiagnosis> {
-  if (!isPersonaBehaviorMaintenanceDiagnosisReady()) {
-    throw new Error('Persona Behavior maintenance diagnosis is not ready.');
-  }
-
   const activities = (await Promise.all(
     run.sourceActivityIds.map((id) => getPersonaActivity(run.personaId, id)),
   )).filter((activity): activity is PersonaActivity => activity !== null);
@@ -460,9 +426,6 @@ export async function recordBehaviorMaintenanceDiagnosis(input: {
   durationMs?: number;
   now?: number;
 }): Promise<BehaviorMaintenanceRun> {
-  if (!isPersonaBehaviorMaintenanceDiagnosisReady()) {
-    throw new Error('Persona Behavior maintenance diagnosis is not ready.');
-  }
   const inspected = await getBehaviorMaintenanceRun(input.runId);
   if (!inspected) {
     throw new Error(`BehaviorMaintenanceRun ${JSON.stringify(input.runId)} was not found.`);
@@ -534,7 +497,6 @@ export async function executeBehaviorMaintenanceRun(
     diagnose?: (run: BehaviorMaintenanceRun) => Promise<BehaviorMaintenanceDiagnosis>;
   } = {},
 ): Promise<BehaviorMaintenanceRun | null> {
-  if (!isPersonaBehaviorMaintenanceDiagnosisReady()) return null;
   const startedAt = options.now ?? Date.now();
   const claimed = await claimBehaviorMaintenanceRun(runId, startedAt);
   if (!claimed) return getBehaviorMaintenanceRun(runId);
@@ -659,7 +621,7 @@ export async function reconcileBehaviorMaintenanceRuns(
 
   for (const run of runs) {
     if (!ACTIVE_EXECUTION_STATES.has(run.state)) continue;
-    if (!isPersonaBehaviorMaintenanceDiagnosisReady()) {
+    if (run.reasonCode === 'shadow_admission_only') {
       await completeShadowOnlyRun(run, now);
       continue;
     }

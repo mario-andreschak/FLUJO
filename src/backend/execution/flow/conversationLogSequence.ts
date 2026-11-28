@@ -239,9 +239,8 @@ export interface SequenceScanOptions { bufferBytes?: number; maxDepth?: number; 
 
 type ScanSettings = { bufferBytes: number; maxDepth: number; maxTokensPerLine: number; maxMilliseconds: number; now: () => number };
 function scanSettings(options: SequenceScanOptions): ScanSettings {
-  const configuredTime = process.env.FLUJO_CONVERSATION_SEQUENCE_SCAN_MAX_MS;
   const settings = { bufferBytes: CONVERSATION_SEQUENCE_SCAN_LIMITS.bufferBytes, maxDepth: CONVERSATION_SEQUENCE_SCAN_LIMITS.maxDepth,
-    maxTokensPerLine: Infinity, maxMilliseconds: configuredTime === undefined ? Infinity : Number(configuredTime), ...options };
+    maxTokensPerLine: Infinity, maxMilliseconds: Infinity, ...options };
   for (const value of [settings.bufferBytes, settings.maxDepth]) {
     if (!Number.isSafeInteger(value) || value < 1) limit('scanner limits must be positive safe integers');
   }

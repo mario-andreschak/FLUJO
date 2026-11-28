@@ -1,4 +1,5 @@
 import { performance } from 'node:perf_hooks';
+import { testSetting } from '@/shared/testSetting';
 
 const stages = ['CONFIG', 'ASSETS', 'DEP_LAYOUT', 'DEP_GRAPH', 'DEP_LINKS',
   'SOURCE_FINGERPRINT', 'EXEC_FINGERPRINT', 'CONSENT_DIGEST', 'CONSENT_POLICY_SCHEMA',
@@ -13,7 +14,7 @@ type Stage = ConsentDiagnosticStage;
 
 function traceStart(stage: Stage): number | undefined {
   try {
-    if (process.env.FLUJO_BUNDLED_CONSENT_TRACE !== '1' || !stages.includes(stage)) return undefined;
+    if (testSetting('FLUJO_BUNDLED_CONSENT_TRACE') !== '1' || !stages.includes(stage)) return undefined;
     const started = performance.now();
     return Number.isFinite(started) ? started : undefined;
   } catch { return undefined; }

@@ -23,7 +23,7 @@ already received by the HTTP stack are outside this allocation estimate.
 | Initial decode/parse reservation | What the declared Content-Length needs, at most 96 MiB (96 MiB without one) |
 | Process input reservations | One eighth of the RSS ceiling, at least 256 MiB |
 | Application RSS admission ceiling | Shared with run admission: 75% of usable memory, at least 2 GiB |
-| Wait for parsing capacity or memory before answering busy | 60 seconds (`FLUJO_CHAT_ADMISSION_WAIT_MS`), in arrival order |
+| Wait for parsing capacity or memory before answering busy | 60 seconds (fixed; only tests can change it), in arrival order |
 | IP rate registry | 4,096 keys, 1 MiB estimated key storage |
 | Forwarded-IP header inspected | 1,024 characters |
 | Per-IP quota | 6,000 requests per minute |

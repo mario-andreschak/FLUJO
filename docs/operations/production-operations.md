@@ -148,7 +148,7 @@ ledger, a provider authentication probe or proof of remote/descendant cleanup.
 | `approval-index-needs-census` | The durable index is discoverability metadata. Verify that the exact stored conversation and pending call still exist before an explicit approval decision. Diagnostics neither prune the index nor accept/reject the call. |
 | `queue-pressure` | Inspect a queue reaching its per-queue cap and active/exclusive ownership. Many independent overlap queues can have a large sum without any one reaching its cap. Avoid adding parallel writers. |
 | `shutdown-exit-unobserved` | Match runtime UUID and generation against actual owned process/OS observations. Cold/error state, missing cache and close/stop acknowledgement do not prove exit. A CLI exit also does not prove isolated container removal. |
-| `rss-budget-reached` | Inspect the sampled process RSS against the configured operator threshold. `FLUJO_OPERATIONS_RSS_BUDGET_BYTES` is an alert threshold, not enforcement or an agreed scorecard memory limit. Observe children/container resources separately. |
+| `rss-budget-reached` | Inspect the sampled process RSS against the memory threshold. The threshold can be changed only by tests. It is an alert threshold, not enforcement or an agreed scorecard memory limit. Observe children/container resources separately. |
 | `diagnostic-source-unavailable` or `diagnostic-row-budget-reached` | Treat the observation as partial. Inspect protected storage, permissions, size/corruption and the relevant complete source through an authorized bounded procedure. No silent empty/healthy fallback or automatic repair. |
 
 Scheduler, active-run and MCP records apply to this process and workspace; foreign

@@ -3,8 +3,7 @@ import { z } from 'zod';
 import { withWorkspaceRuntimeLock } from '@/backend/services/enduringAgents/runtimeLock';
 import { flowService } from '@/backend/services/flow';
 import { resolveCompletionAdapterRoute } from '@/backend/services/model/adapters/completionRoute';
-import { assertSafeCollectionId, listCollectionItemEntriesStrict, loadCollectionItem, loadItem, saveCollectionItem } from '@/utils/storage/backend';
-import { StorageKey, type Settings } from '@/shared/types/storage';
+import { assertSafeCollectionId, listCollectionItemEntriesStrict, loadCollectionItem, saveCollectionItem } from '@/utils/storage/backend';
 import { HarnessInputSchema, harnessCallLimit, normalizeHarnessTask, type HarnessRun, type HarnessProbe } from '@/shared/types/harness';
 import type { Flow } from '@/shared/types/flow';
 import { acceptHarnessLesson, acceptHarnessProposal, nextHarnessOperation, promptHash } from './engine';
@@ -25,8 +24,6 @@ export class HarnessError extends Error {
 
 export async function assertHarnessEnabled() {
   if (await isEncryptionLocked()) throw new HarnessError('Unlock this workspace before running Harness Lab.', 423);
-  const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
-  if (settings?.experimental?.harnessLabEnabled !== true) throw new HarnessError('Enable Harness Lab in Settings → Experimental first.', 403);
 }
 
 export async function listHarnessRuns(): Promise<HarnessRun[]> {

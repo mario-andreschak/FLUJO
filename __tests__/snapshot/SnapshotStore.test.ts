@@ -100,7 +100,6 @@ describe('SnapshotStore', () => {
       expect(status.usage.repositories).toEqual([]);
       expect(status.usage.onDiskBytes).toBe(0);
       expect(status.usage.logicalBytes).toBe(0);
-      expect(status.activity.operatorDisabled).toBe(false);
       expect(status.activity.storageBusy).toBe(false);
       expect(status.activity.localFolderAccess).toBe(false);
     });
@@ -110,7 +109,6 @@ describe('SnapshotStore', () => {
       expect(status.activity.capture).toBeDefined();
       expect(status.activity.cleanup).toBeDefined();
       expect(status.activity.migration).toBeDefined();
-      expect(typeof status.activity.operatorDisabled).toBe('boolean');
       expect(typeof status.activity.captureSuspended).toBe('boolean');
       expect(typeof status.activity.storageBusy).toBe('boolean');
       expect(typeof status.localFolderAccessSupported).toBe('boolean');

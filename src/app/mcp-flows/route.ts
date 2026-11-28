@@ -1,4 +1,3 @@
-import { isMcpBetaProtocolEnabled } from '@/backend/services/mcp/betaClient';
 import { withWorkspaceRoute } from '@/app/api/_workspace';
 /**
  * FLUJO as an MCP server — Flows-as-tools endpoint (#38, Item D / #17).
@@ -87,11 +86,9 @@ async function handle(request: Request): Promise<Response> {
     return jsonError(403, 'Forbidden: this endpoint only accepts local requests.');
   }
 
-  if (await isMcpBetaProtocolEnabled()) {
-    const era = await classifyMcpHttpRequest(request);
-    if (era === 'too-large') return jsonError(413, 'MCP request body exceeds the limit.');
-    if (era === 'modern') return handleModernFlowsMcpRequest(request);
-  }
+  const era = await classifyMcpHttpRequest(request);
+  if (era === 'too-large') return jsonError(413, 'MCP request body exceeds the limit.');
+  if (era === 'modern') return handleModernFlowsMcpRequest(request);
 
   const server = buildFlowsServer();
 

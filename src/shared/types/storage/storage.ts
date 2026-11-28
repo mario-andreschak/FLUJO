@@ -252,99 +252,13 @@ export interface NetworkSettings {
 }
 
 /**
- * Experimental-features settings interface (issue #184)
+ * Advanced settings (issue #184). Switches retired by #1449 are listed in
+ * `src/shared/config/retiredSettings.ts`.
  */
 export interface ExperimentalSettings {
-  /** Opt-in bounded text-instruction evolution; missing values disable model dispatch and promotion. */
-  harnessLabEnabled?: boolean;
-  /** When true, experimental UI (e.g. the Waves nav entry) is revealed. */
-  enabled: boolean;
-  /**
-   * Reveal models that the provider explicitly reports as lacking tool-call
-   * support in provider catalogue/picker results. Off by default. Models whose
-   * provider exposes no capability metadata remain visible.
-   */
-  showModelsWithoutToolCapabilities?: boolean;
-  /**
-   * Run Generate Flow through the editable, multi-stage system Flow instead of
-   * the production generate/improve services. Off by default: the Flow-based
-   * implementation is intentionally an experimental alternative while the
-   * sophisticated service-backed generator remains the reliable default.
-   */
-  flowBasedGenerator?: boolean;
-  /**
-   * When true, the Claude Subscription adapter REUSES its Agent SDK session
-   * across turns of the same single-node Flow — resuming the persisted session
-   * (`resume`) and sending only the per-turn delta instead of re-flattening the
-   * whole conversation each turn (issue #154). Enabled for new installations;
-   * a missing value in existing persisted settings remains disabled. Independent
-   * of `enabled` (a backend behaviour, not a UI reveal).
-   */
+  /** @deprecated Always true: Claude sessions resume and fall back to the full history by themselves (#1449). */
   claudeSessionResume?: boolean;
-  /**
-   * When true, the Claude Subscription adapter keeps one started Claude Code
-   * process parked for the next request with the same model, instructions,
-   * tools and account (issue #1408), so that request skips Claude Code's
-   * start-up. Each parked process serves one request only. Off by default; a
-   * missing value is disabled. FLUJO_CLAUDE_WARM_PROCESS=1 turns it on without
-   * the setting.
-   */
-  claudeWarmProcess?: boolean;
-  /**
-   * When true, pass the normal Codex installation's `models_cache.json` to the
-   * SDK as its `model_catalog_json` startup override. This can avoid Codex's
-   * online catalogue refresh, but the cached file may be incompatible with the
-   * bundled Codex version. Off by default; a missing value is disabled.
-   */
-  codexModelCatalogCache?: boolean;
-  /** @deprecated Ignored. Subflow capabilities are available automatically. */
-  subflowToolInvocation?: boolean;
-  /** @deprecated Ignored. Subflow capabilities are available automatically. */
-  subflowDetachedInvocation?: boolean;
-  /** @deprecated Ignored. Subflow capabilities are available automatically. */
-  subflowSessions?: boolean;
-  /**
-   * "Modern MCP protocol". Unless false, MCP client connections are built on
-   * the v2 SDK (`@modelcontextprotocol/client`, spec revision 2026-07-28):
-   * FLUJO asks each server `server/discover`, speaks the stateless protocol
-   * when the server supports it and falls back to the classic `initialize`
-   * handshake for every older server. FLUJO's own MCP endpoints serve both
-   * generations. False forces the classic handshake everywhere. Websocket
-   * transports always stay on v1 (the v2 SDK has no websocket transport).
-   * A missing value means on.
-   */
-  mcpBetaProtocol?: boolean;
-  /**
-   * When true, FLUJO reuses an MCP server's tool, resource and resource
-   * template lists between requests instead of asking again each time
-   * (issue #1408). Only for servers that announce list changes (the MCP
-   * `listChanged` capability); a list is refreshed when the server announces a
-   * change, after a reconnect, and at the latest after 60 seconds. Off by
-   * default; FLUJO_MCP_LIST_CACHE=1 turns it on without the setting.
-   */
-  mcpListCache?: boolean;
-  /**
-   * When true, a flow turn saves the conversation fewer times (issue #1408):
-   * step boundaries without tool effects and the successful end of a run are
-   * written with the run's next full save instead of at once. Checkpoints
-   * around tools that may change something are always saved at once. Off by
-   * default; FLUJO_LOW_LATENCY_SAVES=1 turns it on without the setting.
-   */
-  lowLatencySaves?: boolean;
-  /**
-   * Make workspace-managed HOME/config/cache directories the default for stdio
-   * MCP servers whose per-server runtime-home mode is `inherit`. Opt-in: a
-   * missing value is false. An operator process override remains authoritative.
-   */
-  mcpRuntimeHomeIsolation?: boolean;
-  /**
-   * When true, FLUJO automatically unloads the previously-loaded Ollama model
-   * from VRAM before sending a completion request for a different model on the
-   * same Ollama server URL. This frees GPU memory on constrained hardware.
-   * Requests to the same Ollama URL are serialised while this is on, so it adds
-   * a small latency in parallel fan-out scenarios. Enabled for new
-   * installations; a missing value in existing settings remains disabled.
-   */
+  /** @deprecated Always true: FLUJO unloads the previous Ollama model before loading another (#1449). */
   autoUnloadOllamaModels?: boolean;
   /**
    * When true, an MCP App that has already passed the per-server
@@ -361,11 +275,6 @@ export interface ExperimentalSettings {
    */
   restrictMcpFilesystemToRoots?: boolean;
   /**
-   * Enables filesystem snapshots plus the message-level restore UI/API.
-   * Missing values default to false: this experimental feature is opt-in.
-   */
-  snapshotsEnabled?: boolean;
-  /**
    * Cap, in characters, on each tool DESCRIPTION sent to the model. 0 / undefined
    * disables capping.
    *
@@ -380,46 +289,28 @@ export interface ExperimentalSettings {
    * point; a missing value keeps every description intact.
    */
   toolDescriptionMaxChars?: number;
-  /**
-   * When true, FLUJO applies SUMMARIZING COMPACTION to long conversations
-   * (issue #248): before a request that would overflow the model's context
-   * window — and after a context-length error — it summarizes the older part of
-   * the oldest provider-facing wire history into an anchored summary head and
-   * continues. The canonical persisted conversation is never replaced. Enabled
-   * for new installations; a missing value in existing settings remains
-   * enabled. AI summarization is lossy even though the exact source is retained
-   * in a run-resource anchor.
-   */
+  /** @deprecated Retired by #1449: summarizing compaction is always on; a Process node can still turn it off. */
   compactionEnabled?: boolean;
   /**
    * Head-room, in tokens, kept free below the model's context window when
    * deciding whether to compact pre-flight (compact when the estimated request
-   * size exceeds contextWindow − max(maxTokens, this)). Only meaningful when
-   * `compactionEnabled`. Missing ⇒ 50000 (~40% of 128k context, targets 30-60% usage).
+   * size exceeds contextWindow − max(maxTokens, this)).
+   * Missing ⇒ 50000 (~40% of 128k context, targets 30-60% usage).
    */
   compactionBufferTokens?: number;
   /**
    * How many tokens of the most-recent conversation tail are kept VERBATIM when
-   * compacting (everything older is summarized). Only meaningful when
-   * `compactionEnabled`. Missing ⇒ 19000 (~15% of 128k context, targets 30-60% usage).
+   * compacting (everything older is summarized).
+   * Missing ⇒ 19000 (~15% of 128k context, targets 30-60% usage).
    */
   compactionKeepTokens?: number;
   /** Optional 1–100 percent context threshold; per-model settings take precedence. */
   compactionThresholdPercent?: number;
-  /**
-   * Opt in to wire-time visual archives for old bulky context (#356). Missing
-   * values are migrated lazily to false, preserving byte-identical behaviour.
-   */
+  /** @deprecated Retired by #1449: visual compaction is off for everyone. */
   visualCompactionEnabled?: boolean;
-  /**
-   * Restrict visual archive candidates to complete old tool-call/result groups.
-   * Missing values default to true, the conservative migration default.
-   */
+  /** @deprecated Retired by #1449 together with visual compaction. */
   visualCompactionToolResultsOnly?: boolean;
-  /**
-   * Diagnostic/manual evaluation mode: calculate visual routing metrics but do
-   * not replace text with images. Missing values default to false.
-   */
+  /** @deprecated Retired by #1449 together with visual compaction. */
   visualCompactionEvaluationMode?: boolean;
   /**
    * How many of the most-recent wire messages `compactForWire` keeps VERBATIM
@@ -460,8 +351,7 @@ export interface Settings {
   /** Missing on existing installs; the secure default is localhost-only. */
   network?: NetworkSettings;
   /**
-   * Optional so existing persisted settings load unchanged; a missing value is
-   * treated as disabled (experimental features hidden).
+   * Advanced settings; missing values use their defaults.
    */
   experimental?: ExperimentalSettings;
   modelAccess?: ModelAccessSettings;

@@ -31,7 +31,7 @@ interface RuntimeEnvironmentResponse {
 }
 
 const CATEGORIES: Array<RuntimeEnvironmentCategory | 'all'> = [
-  'all', 'runtime', 'performance', 'migration', 'mcpApps', 'access', 'bash', 'browser', 'integration',
+  'all', 'runtime', 'mcpApps', 'access', 'integration',
 ];
 
 export default function RuntimeEnvironmentSettings() {

@@ -10,7 +10,7 @@ This recording uses published **FLUJO 3.46.2**, with **Workshop AI** connected t
 
 ## Set Maya up
 
-Start with the tested AI and public coffee source from [the first-agent guide](first-agent.md). In **Settings**, turn on **Enable experimental features** to show Personas and Roles.
+Start with the tested AI and public coffee source from [the first-agent guide](first-agent.md). Open **More → Experimental** to find Personas and Roles.
 
 Open **Personas → Create Persona**. The wizard moves through **About → Role → Apps → Supplemental behaviors → Review**. Name her `Maya` and give her a one-sentence purpose: help prepare a small beginner coffee workshop while keeping confirmed decisions distinct from suggestions.
 

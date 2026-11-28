@@ -1,11 +1,9 @@
 /**
- * Component tests for the Experimental Features feature (issue #184).
+ * Navigation and the Settings > Advanced page (issues #184, #1449).
  *
- * Covers the two deterministically-checkable behaviours:
  *  - The setup-first primary navigation remains small and ordered, while
- *    secondary/experimental destinations stay inside More.
- *  - The ExperimentalFeaturesSettings toggle calls updateSettings with the
- *    correctly merged payload.
+ *    secondary destinations stay inside More. Nothing hides behind a switch.
+ *  - The Advanced page keeps only real choices and saves them merged.
  */
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 
@@ -70,7 +68,7 @@ jest.mock('@/frontend/contexts/AskFlujoContext', () => ({
 import Navigation from '@/frontend/components/Navigation';
 import ExperimentalFeaturesSettings from '@/frontend/components/Settings/ExperimentalFeaturesSettings';
 
-describe('setup-first navigation and experimental gating (#184, #325)', () => {
+describe('setup-first navigation (#184, #325, #1449)', () => {
   beforeEach(() => {
     mockUpdateSettings.mockClear();
     mockPathname = '/';
@@ -109,60 +107,22 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
     expect(within(primaryNavigation).getByRole('link', { name: 'Agents' })).toHaveAttribute('href', '/flows');
   });
 
-  it('keeps stable More destinations visible and hides experimental ones before settings hydrate', () => {
+  it('shows every More destination without any switch, even before settings load', () => {
     mockPathname = '/automation/triggers';
-    mockStorageValue = {
-      settings: { experimental: { enabled: true } },
-      settingsHydrated: false,
-      updateSettings: mockUpdateSettings,
-    };
-    render(<Navigation />);
-
-    const moreSections = screen.getByRole('tablist', { name: 'More sections' });
-    expect(within(moreSections).getByRole('tab', { name: 'Automations' })).toHaveAttribute(
-      'href',
-      '/automation/triggers',
-    );
-    expect(within(moreSections).getByRole('tab', { name: 'Help' })).toHaveAttribute('aria-haspopup', 'menu');
-    expect(within(moreSections).getByRole('tab', { name: 'Settings' })).toHaveAttribute('href', '/settings');
-    expect(within(moreSections).getByRole('tab', { name: 'Meetings' })).toHaveAttribute('href', '/meetings');
-    // Roles, Extensions, and Activity are experimental too, so they stay hidden
-    // until settings hydrate and confirm experiments are on.
-    expect(within(moreSections).queryByRole('tab', { name: /Experimental/ })).toBeNull();
-    expect(within(moreSections).queryByRole('tab', { name: 'Roles' })).toBeNull();
-    expect(within(moreSections).queryByRole('tab', { name: 'Extensions' })).toBeNull();
-    expect(within(moreSections).queryByRole('tab', { name: 'Activity' })).toBeNull();
-    expect(within(moreSections).queryByRole('tab', { name: 'Personas' })).toBeNull();
-    expect(within(moreSections).queryByRole('tab', { name: 'Waves' })).toBeNull();
-    expect(within(moreSections).queryByRole('tab', { name: 'Chain Chat' })).toBeNull();
-  });
-
-  it('leaves only non-experimental More destinations while experiments are off', () => {
-    mockPathname = '/automation/triggers';
-    mockStorageValue = { settings: {}, settingsHydrated: true, updateSettings: mockUpdateSettings };
+    mockStorageValue = { settings: {}, settingsHydrated: false, updateSettings: mockUpdateSettings };
     render(<Navigation />);
 
     const moreSections = screen.getByRole('tablist', { name: 'More sections' });
     const tabs = within(moreSections).getAllByRole('tab');
-    expect(tabs.map((tab) => tab.textContent?.trim())).toEqual(['Automations', 'Meetings', 'Help', 'Settings']);
-    expect(within(moreSections).queryByRole('tab', { name: /Experimental/ })).toBeNull();
-    expect(within(moreSections).queryByRole('tab', { name: 'Personas' })).toBeNull();
-    expect(within(moreSections).queryByRole('tab', { name: 'Roles' })).toBeNull();
-    expect(within(moreSections).queryByRole('tab', { name: 'Extensions' })).toBeNull();
-    expect(within(moreSections).queryByRole('tab', { name: 'Activity' })).toBeNull();
-    expect(within(moreSections).queryByRole('tab', { name: 'Waves' })).toBeNull();
-    expect(within(moreSections).queryByRole('tab', { name: 'Chain Chat' })).toBeNull();
+    expect(tabs.map((tab) => tab.textContent?.trim())).toEqual(['Automations', 'Meetings', 'Experimental', 'Help', 'Settings']);
+    expect(within(moreSections).getByRole('tab', { name: 'Settings' })).toHaveAttribute('href', '/settings');
   });
 
   it.each(['/automation/waves', '/waves'])(
     'selects Waves in More when %s is open',
     (pathname) => {
       mockPathname = pathname;
-      mockStorageValue = {
-        settings: { experimental: { enabled: true } },
-        settingsHydrated: true,
-        updateSettings: mockUpdateSettings,
-      };
+      mockStorageValue = { settings: {}, settingsHydrated: true, updateSettings: mockUpdateSettings };
       render(<Navigation />);
 
       const moreSections = screen.getByRole('tablist', { name: 'More sections' });
@@ -177,11 +137,7 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
 
   it('selects Personas in More when a Persona desk is open', () => {
     mockPathname = '/personas/jim';
-    mockStorageValue = {
-      settings: { experimental: { enabled: true } },
-      settingsHydrated: true,
-      updateSettings: mockUpdateSettings,
-    };
+    mockStorageValue = { settings: {}, settingsHydrated: true, updateSettings: mockUpdateSettings };
     render(<Navigation />);
 
     const moreSections = screen.getByRole('tablist', { name: 'More sections' });
@@ -190,11 +146,7 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
 
   it('selects Chain Chat in More when its experimental route is open', () => {
     mockPathname = '/chain-chat';
-    mockStorageValue = {
-      settings: { experimental: { enabled: true } },
-      settingsHydrated: true,
-      updateSettings: mockUpdateSettings,
-    };
+    mockStorageValue = { settings: {}, settingsHydrated: true, updateSettings: mockUpdateSettings };
     render(<Navigation />);
 
     const moreSections = screen.getByRole('tablist', { name: 'More sections' });
@@ -203,18 +155,14 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
     expect(moreSections.closest('.MuiTabs-root')?.querySelector('.MuiTabs-scrollableX')).not.toBeNull();
   });
 
-  it('puts experimental Personas and stable Roles in More when experiments are enabled', () => {
+  it('lists Harness Lab, Personas and the other newer pages in one More menu', () => {
     mockPathname = '/automation/triggers';
-    mockStorageValue = {
-      settings: { experimental: { enabled: true } },
-      settingsHydrated: true,
-      updateSettings: mockUpdateSettings,
-    };
+    mockStorageValue = { settings: {}, settingsHydrated: true, updateSettings: mockUpdateSettings };
     render(<Navigation />);
 
     const moreSections = screen.getByRole('tablist', { name: 'More sections' });
     const tabs = within(moreSections).getAllByRole('tab');
-    // Experimental sections share one menu (#1278); Harness Lab waits for its own switch (#1320).
+    // Newer sections share one menu (#1278).
     expect(tabs.map((tab) => tab.textContent?.trim())).toEqual(['Automations', 'Meetings', 'Experimental', 'Help', 'Settings']);
     expect(within(moreSections).getByRole('tab', { name: 'Automations' })).toHaveAttribute(
       'aria-selected',
@@ -224,23 +172,10 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
     fireEvent.click(within(moreSections).getByRole('tab', { name: 'Experimental' }));
     const menu = screen.getByRole('menu', { name: 'Experimental' });
     const items = within(menu).getAllByRole('menuitem');
-    expect(items.map((item) => item.textContent?.trim())).toEqual(['Personas', 'Roles', 'Extensions', 'Activity', 'Chain Chat', 'Waves']);
+    expect(items.map((item) => item.textContent?.trim())).toEqual(['Harness Lab', 'Personas', 'Roles', 'Extensions', 'Activity', 'Chain Chat', 'Waves']);
     expect(items.map((item) => item.getAttribute('href'))).toEqual([
-      '/personas', '/roles', '/packages', '/statistics', '/chain-chat', '/automation/waves',
+      '/harness', '/personas', '/roles', '/packages', '/statistics', '/chain-chat', '/automation/waves',
     ]);
-  });
-
-  it('shows Harness Lab only once its own switch is on', () => {
-    mockPathname = '/automation/triggers';
-    mockStorageValue = {
-      settings: { experimental: { enabled: true, harnessLabEnabled: true } },
-      settingsHydrated: true,
-      updateSettings: mockUpdateSettings,
-    };
-    render(<Navigation />);
-    fireEvent.click(within(screen.getByRole('tablist', { name: 'More sections' })).getByRole('tab', { name: 'Experimental' }));
-    expect(within(screen.getByRole('menu', { name: 'Experimental' })).getByRole('menuitem', { name: 'Harness Lab' }))
-      .toHaveAttribute('href', '/harness');
   });
 
   it('offers API reference, tutorials and per-page help from the Help menu', () => {
@@ -256,14 +191,10 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
     );
   });
 
-  it('shows enabled Waves, Personas, and stable Roles in the compact navigation drawer', () => {
+  it('shows Waves, Personas, and Roles in the compact navigation drawer', () => {
     setCompactNavigation(true);
     mockPathname = '/automation/triggers';
-    mockStorageValue = {
-      settings: { experimental: { enabled: true } },
-      settingsHydrated: true,
-      updateSettings: mockUpdateSettings,
-    };
+    mockStorageValue = { settings: {}, settingsHydrated: true, updateSettings: mockUpdateSettings };
     render(<Navigation />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Open navigation menu' }));
@@ -284,167 +215,24 @@ describe('setup-first navigation and experimental gating (#184, #325)', () => {
   });
 });
 
-describe('ExperimentalFeaturesSettings toggle (#184)', () => {
+describe('Settings > Advanced (#184, #1449)', () => {
   beforeEach(() => {
     mockUpdateSettings.mockClear();
   });
 
-  it('defaults to off (unchecked) when no experimental setting exists', () => {
-    mockStorageValue = { settings: { speech: { enabled: true } }, settingsHydrated: true, updateSettings: mockUpdateSettings };
-    render(<ExperimentalFeaturesSettings />);
-    const toggle = screen.getByRole('switch', { name: /Enable Experimental Features/i });
-    expect(toggle).not.toBeChecked();
-  });
-
-  it('groups experimental controls in task-oriented order', () => {
+  it('keeps only real choices, in task-oriented order', () => {
     mockStorageValue = { settings: { speech: { enabled: true } }, settingsHydrated: true, updateSettings: mockUpdateSettings };
     render(<ExperimentalFeaturesSettings />);
 
-    const headings = [
-      'Feature access',
-      'Models and providers',
-      'Context management',
-      'Flow execution',
-      'MCP and apps',
-      'Snapshots and recovery',
-    ].map((name) => screen.getByRole('heading', { name }));
-
+    const headings = ['Context management', 'MCP and apps', 'Snapshots and recovery']
+      .map((name) => screen.getByRole('heading', { name }));
     headings.slice(1).forEach((heading, index) => {
       expect(headings[index].compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING)
         .toBeTruthy();
     });
-  });
-
-  it('calls updateSettings with a merged payload enabling experimental features', () => {
-    mockStorageValue = { settings: { speech: { enabled: true } }, settingsHydrated: true, updateSettings: mockUpdateSettings };
-    render(<ExperimentalFeaturesSettings />);
-    const toggle = screen.getByRole('switch', { name: /Enable Experimental Features/i });
-    fireEvent.click(toggle);
-    expect(mockUpdateSettings).toHaveBeenCalledWith({
-      speech: { enabled: true },
-      experimental: { enabled: true },
-    });
-  });
-
-  it('keeps the Flow-based generator off by default and persists its opt-in', () => {
-    mockStorageValue = {
-      settings: {
-        speech: { enabled: true },
-        experimental: { enabled: true, mcpBetaProtocol: true },
-      },
-      settingsHydrated: true,
-      updateSettings: mockUpdateSettings,
-    };
-    render(<ExperimentalFeaturesSettings />);
-    const toggle = screen.getByRole('switch', { name: /Flow-based Flow Generator/i });
-    expect(toggle).not.toBeChecked();
-
-    fireEvent.click(toggle);
-    expect(mockUpdateSettings).toHaveBeenCalledWith({
-      speech: { enabled: true },
-      experimental: {
-        enabled: true,
-        mcpBetaProtocol: true,
-        flowBasedGenerator: true,
-      },
-    });
-  });
-
-  it('keeps the Codex model catalog cache off by default and persists its opt-in', () => {
-    mockStorageValue = {
-      settings: {
-        speech: { enabled: true },
-        experimental: { enabled: true, mcpBetaProtocol: true },
-      },
-      settingsHydrated: true,
-      updateSettings: mockUpdateSettings,
-    };
-    render(<ExperimentalFeaturesSettings />);
-    const toggle = screen.getByRole('switch', {
-      name: /Use Codex's cached model catalog/i,
-    });
-    expect(toggle).not.toBeChecked();
-
-    fireEvent.click(toggle);
-    expect(mockUpdateSettings).toHaveBeenCalledWith({
-      speech: { enabled: true },
-      experimental: {
-        enabled: true,
-        mcpBetaProtocol: true,
-        codexModelCatalogCache: true,
-      },
-    });
-  });
-
-  it('exposes AI summarization and visual evaluation as separate persisted controls', () => {
-    mockStorageValue = {
-      settings: {
-        speech: { enabled: true },
-        experimental: { enabled: true, visualCompactionEnabled: true },
-      },
-      settingsHydrated: true,
-      updateSettings: mockUpdateSettings,
-    };
-    render(<ExperimentalFeaturesSettings />);
-
-    const summarization = screen.getByRole('switch', { name: /AI conversation summarization/i });
-    const evaluation = screen.getByRole('switch', { name: /Evaluate visual routing without sending images/i });
-    expect(summarization).not.toBeChecked();
-    expect(evaluation).not.toBeChecked();
-    expect(evaluation).not.toBeDisabled();
-
-    fireEvent.click(summarization);
-    expect(mockUpdateSettings).toHaveBeenLastCalledWith({
-      speech: { enabled: true },
-      experimental: {
-        enabled: true,
-        visualCompactionEnabled: true,
-        compactionEnabled: true,
-      },
-    });
-
-    fireEvent.click(evaluation);
-    expect(mockUpdateSettings).toHaveBeenLastCalledWith({
-      speech: { enabled: true },
-      experimental: {
-        enabled: true,
-        visualCompactionEnabled: true,
-        visualCompactionEvaluationMode: true,
-      },
-    });
-  });
-
-  it('has no activation switches for built-in subflow collaboration', () => {
-    render(<ExperimentalFeaturesSettings />);
-    expect(screen.queryByRole('switch', { name: /Subflow nodes be called as tools/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('switch', { name: /detached subflows/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('switch', { name: /Resume subflow child/i })).not.toBeInTheDocument();
-  });
-
-  it('hides explicitly tool-less provider models by default and persists the reveal toggle', () => {
-    mockStorageValue = {
-      settings: {
-        speech: { enabled: true },
-        experimental: { enabled: true, mcpBetaProtocol: true },
-      },
-      settingsHydrated: true,
-      updateSettings: mockUpdateSettings,
-    };
-    render(<ExperimentalFeaturesSettings />);
-    const toggle = screen.getByRole('switch', {
-      name: /Show Models without tool capabilities/i,
-    });
-    expect(toggle).not.toBeChecked();
-
-    fireEvent.click(toggle);
-    expect(mockUpdateSettings).toHaveBeenCalledWith({
-      speech: { enabled: true },
-      experimental: {
-        enabled: true,
-        mcpBetaProtocol: true,
-        showModelsWithoutToolCapabilities: true,
-      },
-    });
+    expect(screen.getAllByRole('switch').map((toggle) => toggle.getAttribute('name')).filter(Boolean).sort())
+      .toEqual(['requireMcpAppLaunchClick', 'restrictMcpFilesystemToRoots']);
+    expect(screen.queryByRole('switch', { name: /Experimental Features/i })).not.toBeInTheDocument();
   });
 
   it('defaults MCP App click gating and MCP roots confinement to off', () => {
@@ -468,7 +256,7 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
     mockStorageValue = {
       settings: {
         speech: { enabled: true },
-        experimental: { enabled: false, requireMcpAppLaunchClick: true },
+        experimental: { requireMcpAppLaunchClick: true },
       },
       settingsHydrated: true,
       updateSettings: mockUpdateSettings,
@@ -535,7 +323,7 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
     mockStorageValue = {
       settings: {
         speech: { enabled: true },
-        experimental: { enabled: true, mcpBetaProtocol: true },
+        experimental: { claudeSessionResume: true },
       },
       settingsHydrated: true,
       updateSettings: mockUpdateSettings,
@@ -548,8 +336,7 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
     expect(mockUpdateSettings).toHaveBeenLastCalledWith({
       speech: { enabled: true },
       experimental: {
-        enabled: true,
-        mcpBetaProtocol: true,
+        claudeSessionResume: true,
         requireMcpAppLaunchClick: true,
       },
     });
@@ -560,46 +347,8 @@ describe('ExperimentalFeaturesSettings toggle (#184)', () => {
     expect(mockUpdateSettings).toHaveBeenLastCalledWith({
       speech: { enabled: true },
       experimental: {
-        enabled: true,
-        mcpBetaProtocol: true,
+        claudeSessionResume: true,
         restrictMcpFilesystemToRoots: true,
-      },
-    });
-  });
-
-  it('defaults filesystem snapshots and restore to off', () => {
-    mockStorageValue = {
-      settings: { speech: { enabled: true } },
-      settingsHydrated: true,
-      updateSettings: mockUpdateSettings,
-    };
-    render(<ExperimentalFeaturesSettings />);
-    expect(
-      screen.getByRole('switch', { name: /Enable filesystem snapshots and chat restore/i })
-    ).not.toBeChecked();
-  });
-
-  it('persists disabling snapshots without dropping other settings', () => {
-    mockStorageValue = {
-      settings: {
-        speech: { enabled: true },
-        experimental: { enabled: true, mcpBetaProtocol: true, snapshotsEnabled: true },
-      },
-      settingsHydrated: true,
-      updateSettings: mockUpdateSettings,
-    };
-    render(<ExperimentalFeaturesSettings />);
-
-    fireEvent.click(
-      screen.getByRole('switch', { name: /Enable filesystem snapshots and chat restore/i })
-    );
-
-    expect(mockUpdateSettings).toHaveBeenCalledWith({
-      speech: { enabled: true },
-      experimental: {
-        enabled: true,
-        mcpBetaProtocol: true,
-        snapshotsEnabled: false,
       },
     });
   });

@@ -3,7 +3,6 @@ import { mcpAppsEnabled, mcpSkillsEnabled, mcpAppRuntimeBrokerEnabled } from '@/
 import { getCurrentWorkspace, bindToCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
 import { registerTasksExtensionClient } from './tasksExtensionSession';
 import { MCP_SKILLS_EXTENSION_ID } from '@/shared/types/mcp';
-import { FEATURES } from '@/config/features';
 import { InputResponseV2Schema } from '@modelcontextprotocol/ext-tasks/core/v2';
 import { getElicitationContext } from './elicitationContext';
 import { prepareBundledFlujoWorkload, getPendingWorkloadEnvironment, revokePendingWorkload, type PendingBundledFlujoWorkload } from '../security/bundledFlujoWorkload';
@@ -21,9 +20,6 @@ import { z } from "zod";
 import { createLogger } from "@/utils/logger";
 import { InPlaceProbeStdioClientTransport, stdioVersionNegotiation } from "./stdioNegotiation";
 import { assertMcpTransport } from './transportAdmission';
-import { loadItem } from "@/utils/storage/backend";
-import { StorageKey } from "@/shared/types/storage";
-import { Settings } from "@/shared/types/storage/storage";
 import { MCPServerConfig, MCPStreamableConfig } from "@/shared/types/mcp";
 import { MCPSSEConfig, MCPHeaderValue } from "@/shared/types/mcp/mcp";
 import {
@@ -73,8 +69,6 @@ import {
 // 2026-07-28 protocol when the server supports it, falling back to the classic
 // `initialize` handshake for every older server. Remote servers use the SDK's
 // `auto` mode; stdio servers are asked on their own process (stdioNegotiation.ts).
-// The owner can force the classic handshake everywhere in Settings or with
-// FLUJO_MCP_PROTOCOL_NEGOTIATION=legacy.
 //
 // The v2 Client is method-compatible with every call FLUJO makes on a v1
 // Client (connect/listTools/callTool/listResources/readResource/
@@ -90,26 +84,12 @@ import {
 const log = createLogger("backend/services/mcp/betaClient");
 
 /**
- * Whether connections negotiate the 2026-07-28 protocol (with the classic
- * handshake as fallback). On unless the owner switched "Modern MCP protocol"
- * off in Settings (`experimental.mcpBetaProtocol === false`) or set
- * FLUJO_MCP_PROTOCOL_NEGOTIATION=legacy. A settings read failure keeps the
- * default, because negotiation always falls back for older servers.
+ * Connections always negotiate the 2026-07-28 protocol; negotiation falls back
+ * to the classic handshake for older servers by itself (#1449). Still called
+ * by services/mcp/index.ts until the second #1449 pass removes the calls.
  */
 export async function isMcpBetaProtocolEnabled(): Promise<boolean> {
-  if (process.env.FLUJO_MCP_PROTOCOL_NEGOTIATION?.trim().toLowerCase() === "legacy") return false;
-  try {
-    const settings = await loadItem<Settings | undefined>(
-      StorageKey.SPEECH_SETTINGS,
-      undefined,
-    );
-    return settings?.experimental?.mcpBetaProtocol !== false;
-  } catch (err) {
-    log.warn("Failed to read the MCP protocol setting; negotiating the modern protocol", {
-      err,
-    });
-    return true;
-  }
+  return true;
 }
 
 /** Whether a client (as stored in the connection map) was built by the beta path. */
@@ -204,7 +184,6 @@ export function createNewBetaClient(
   // Register the declared host identity before discovery. Only connections
   // that negotiated 2026-07-28 can later create the raw extension channel.
   const isAuthorityCurrent = bindToCurrentWorkspace(async () => {
-    if (!FEATURES.ENABLE_MCP_TASKS_CLIENT) return false;
     const { mcpService } = await import('@/backend/services/mcp');
     return mcpService.getClient(config.name) === (client as unknown as Client);
   });

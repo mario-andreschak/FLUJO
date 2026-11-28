@@ -69,16 +69,9 @@ export function getOllamaUrl(): string {
   return base.replace(/\/+$/, '');
 }
 
-/**
- * Whether this install explicitly advertises local models (the Ollama-enabled
- * Docker image sets FLUJO_OLLAMA=1). This is only a hint for surfacing the
- * local-model onboarding: a native install where the user installed Ollama
- * themselves won't set it, so callers should treat actual Ollama reachability as
- * the authoritative signal and use this only as an additional opt-in.
- */
+/** An explicitly configured Ollama endpoint (for example a Docker sidecar) is offered even while it starts. */
 export function isLocalModelsEnabled(): boolean {
-  const v = process.env.FLUJO_OLLAMA;
-  return v === '1' || v === 'true' || v === 'yes';
+  return Boolean(process.env.FLUJO_OLLAMA_URL?.trim());
 }
 
 export type InstallMode = 'git' | 'container' | 'npm';

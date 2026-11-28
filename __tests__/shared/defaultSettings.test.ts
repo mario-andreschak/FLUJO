@@ -1,14 +1,10 @@
 import { createDefaultSettings } from '@/shared/config/defaultSettings';
 
 describe('fresh-install settings', () => {
-  it('enables the selected experimental features by default', () => {
+  it('holds no feature switches, only the values still pinned for the #571 split (#1449)', () => {
     expect(createDefaultSettings().experimental).toEqual({
-      enabled: true,
       claudeSessionResume: true,
       autoUnloadOllamaModels: true,
-      compactionEnabled: true,
-      subflowDetachedInvocation: true,
-      subflowSessions: true,
     });
   });
 

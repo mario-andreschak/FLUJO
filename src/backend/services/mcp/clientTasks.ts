@@ -92,8 +92,6 @@ export interface RemoteTaskLifecycleOptions {
   signal?: AbortSignal;
   onProgress?: (progress: ToolCallProgressLike) => void;
   ownership: McpRemoteTaskOwnership;
-  /** False only when durable persistence is unavailable (see callers). */
-  persist: boolean;
   supportsCancel: boolean;
   /** Host-captured run identity; never supplied by MCP arguments or UI metadata. */
   originatingInputContext?: ElicitationRunContext;
@@ -142,7 +140,6 @@ export async function runRemoteTaskLifecycle(
     signal,
     onProgress,
     ownership,
-    persist,
   } = options;
 
   const generation = options.generation ?? initialTask.generation ?? '2025-11-25';
@@ -187,25 +184,23 @@ export async function runRemoteTaskLifecycle(
 
   // Durable record BEFORE any follow-up request.
   let record: McpRemoteTaskRecord | null = null;
-  if (persist) {
-    try { record = await createRemoteTaskRecord({
-      remoteTaskId: initialTask.taskId,
-      serverName,
-      serverIdentity,
-      toolName,
-      ownership,
-      status: initialTask.status,
-      generation,
-      statusMessage: initialTask.generation === '2026-07-28' ? undefined : initialTask.statusMessage,
-      pollIntervalMs: basePollMs,
-      ...(expiresAt !== undefined ? { expiresAt, ttlMs: expiresAt - startedAt } : {}),
-    }); } catch (error) { log.warn('Remote MCP task persistence failed', error); }
-    if (!record) {
-      try { if (options.supportsCancel) { await assertCurrent(); await cancelRemoteTask(client, initialTask.taskId, 10_000, generation); } }
-      finally { slot.release(); }
-      return { success: false, error: 'Remote MCP task could not be recorded durably.',
-        errorType: 'task-persistence-error', progressToken: initialTask.taskId, toolName };
-    }
+  try { record = await createRemoteTaskRecord({
+    remoteTaskId: initialTask.taskId,
+    serverName,
+    serverIdentity,
+    toolName,
+    ownership,
+    status: initialTask.status,
+    generation,
+    statusMessage: initialTask.generation === '2026-07-28' ? undefined : initialTask.statusMessage,
+    pollIntervalMs: basePollMs,
+    ...(expiresAt !== undefined ? { expiresAt, ttlMs: expiresAt - startedAt } : {}),
+  }); } catch (error) { log.warn('Remote MCP task persistence failed', error); }
+  if (!record) {
+    try { if (options.supportsCancel) { await assertCurrent(); await cancelRemoteTask(client, initialTask.taskId, 10_000, generation); } }
+    finally { slot.release(); }
+    return { success: false, error: 'Remote MCP task could not be recorded durably.',
+      errorType: 'task-persistence-error', progressToken: initialTask.taskId, toolName };
   }
 
   const patch = async (

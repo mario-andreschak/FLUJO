@@ -55,7 +55,6 @@ export interface SnapshotActivity {
   migration: boolean;
   /** A storage-mutating capture, cleanup, revert, or migration is active. */
   storageBusy: boolean;
-  operatorDisabled: boolean;
   /** New captures pause while retention cannot make the store safe. */
   captureSuspended: boolean;
   localFolderAccess: boolean;

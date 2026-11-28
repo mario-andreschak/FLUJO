@@ -1,5 +1,5 @@
 /**
- * #1408: with "fewer saves per turn" on, only step boundaries without tool
+ * #1408: only step boundaries without tool
  * effects and a successful end of a run wait for the next full save. Every
  * checkpoint around a tool that may change something is saved at once.
  */
@@ -10,8 +10,6 @@ jest.mock('@/backend/execution/flow/conversationLog', () => ({
 jest.mock('@/backend/execution/flow/persistConversationState', () => ({
   persistConversationState: jest.fn(async () => undefined),
 }));
-jest.mock('@/utils/storage/backend', () => ({ loadItem: jest.fn(async () => undefined) }));
-jest.mock('@/utils/workspace', () => ({ getCurrentWorkspace: () => 'low-latency-saves-test' }));
 
 import { appendRawForState, flushConversationLog } from '@/backend/execution/flow/conversationLog';
 import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
@@ -21,10 +19,8 @@ import {
   commitToolCheckpoint,
   initializeRecovery,
 } from '@/backend/execution/flow/recoveryCheckpoint';
-import { isLowLatencySavesEnabled } from '@/backend/execution/flow/lowLatencySaves';
 import type { SharedState } from '@/backend/execution/flow/types';
 import type { StorageKey } from '@/shared/types/storage';
-import { loadItem } from '@/utils/storage/backend';
 
 const key = 'conversations/conversation-1' as StorageKey;
 const saves = persistConversationState as jest.Mock;
@@ -59,7 +55,6 @@ const nodeBoundary = (shared: SharedState, emit?: jest.Mock) => commitRecoveryCh
 const previous = process.env.FLUJO_LOW_LATENCY_SAVES;
 beforeEach(() => {
   jest.clearAllMocks();
-  process.env.FLUJO_LOW_LATENCY_SAVES = '1';
 });
 afterAll(() => {
   if (previous === undefined) delete process.env.FLUJO_LOW_LATENCY_SAVES;
@@ -67,13 +62,13 @@ afterAll(() => {
 });
 
 describe('fewer saves per turn', () => {
-  it('saves every step boundary at once while the setting is off', async () => {
+  it('ignores the retired environment switch (#1449)', async () => {
     process.env.FLUJO_LOW_LATENCY_SAVES = '0';
     const emit = jest.fn();
     await nodeBoundary(state(), emit);
     expect(emit).toHaveBeenCalledTimes(1);
-    expect(flushes).toHaveBeenCalledTimes(1);
-    expect(saves).toHaveBeenCalledTimes(1);
+    expect(saves).not.toHaveBeenCalled();
+    delete process.env.FLUJO_LOW_LATENCY_SAVES;
   });
 
   it('leaves a step boundary to the next full save, still sending its event', async () => {
@@ -134,12 +129,5 @@ describe('fewer saves per turn', () => {
   ] as const)('saves every step of a %s run at once', async (_kind, overrides) => {
     await nodeBoundary(state(overrides as Partial<SharedState>));
     expect(saves).toHaveBeenCalledTimes(1);
-  });
-
-  it('reads the experimental setting when the environment does not decide', async () => {
-    delete process.env.FLUJO_LOW_LATENCY_SAVES;
-    (loadItem as jest.Mock).mockResolvedValueOnce({ experimental: { lowLatencySaves: true } });
-    await new Promise(resolve => setTimeout(resolve, 1_100));
-    await expect(isLowLatencySavesEnabled()).resolves.toBe(true);
   });
 });

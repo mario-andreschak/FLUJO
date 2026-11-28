@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import { simpleGit, type SimpleGit } from 'simple-git';
 import { createLogger } from '@/utils/logger';
 import { loadItem, saveItem } from '@/utils/storage/backend';
-import { StorageKey, type Settings } from '@/shared/types/storage/storage';
+import { StorageKey } from '@/shared/types/storage/storage';
 import {
   DEFAULT_SNAPSHOT_RETENTION_POLICY,
   isSnapshotRetentionPolicy,
@@ -270,11 +270,7 @@ export class SnapshotStore {
     const root = snapshotRoot();
     const activityBeforeInventory = snapshotOperationActivity(root);
     const folderAccessBeforeInventory = snapshotFolderAccessActivity(root);
-    const [policy, usage, settings] = await Promise.all([
-      this.policy(),
-      this.usage(),
-      loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined).catch(() => undefined),
-    ]);
+    const [policy, usage] = await Promise.all([this.policy(), this.usage()]);
     const activityAfterInventory = snapshotOperationActivity(root);
     const folderAccessAfterInventory = snapshotFolderAccessActivity(root);
     const operationWasActive = (operation: SnapshotOperationKind): boolean => (
@@ -284,9 +280,6 @@ export class SnapshotStore {
     const cleanup = operationWasActive('cleanup');
     const revert = operationWasActive('revert');
     const migration = operationWasActive('migration');
-    const operatorDisabled = ['0', 'false', 'off'].includes(
-      (process.env.FLUJO_SNAPSHOTS || '').trim().toLowerCase(),
-    ) || settings?.experimental?.snapshotsEnabled === false;
     const overBudget = policy.enabled && usage.onDiskBytes > policy.maxBytes;
     const activity: SnapshotActivity = {
       capture,
@@ -294,7 +287,6 @@ export class SnapshotStore {
       revert,
       migration,
       storageBusy: capture || cleanup || revert || migration,
-      operatorDisabled,
       captureSuspended: overBudget,
       localFolderAccess: (
         folderAccessBeforeInventory > 0 || folderAccessAfterInventory > 0

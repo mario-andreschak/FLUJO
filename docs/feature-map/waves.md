@@ -15,10 +15,9 @@ Waves is a read-only picture of the user's automations. The "Day" view shows wha
 
 ## How to get to it (user POV)
 
-- Turn on experimental features first: Settings, "Experimental features", switch "Enable experimental features". Waves stays hidden from the navigation until then.
 - From any page in the More group (Automations, Meetings, Settings), choose the `Experimental` section tab, then `Waves` in that menu (`data-tour="nav-waves"`).
 - On a window 1535 px wide or narrower, choose "Open navigation menu", then `Waves` under the "Experimental" heading.
-- Open `http://127.0.0.1:<port>/automation/waves` or `http://127.0.0.1:<port>/waves` directly. Typing the address works even while experimental features are off.
+- Open `http://127.0.0.1:<port>/automation/waves` or `http://127.0.0.1:<port>/waves` directly.
 
 ## Driving it with flujo-drive
 

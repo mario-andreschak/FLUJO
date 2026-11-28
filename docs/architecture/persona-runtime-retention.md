@@ -37,7 +37,9 @@ A failed write stops that Persona's run and sends the workspace back to measurin
 
 ## Lease-history boundary
 
-Lease history is not part of soft cleanup: its small records gain nothing from it. `prunePersonaLeaseHistory` is the #478 deletion path. It is independently controlled by `ENABLE_PERSONA_LEASE_HISTORY_PRUNING`, which defaults off. It may delete count-excess `released` or `expired` acquisitions only after the current authority head, ownership, fencing-token history, and referenced terminal Activities are proven under the runtime lock. It retains the newest 1,000 terminal acquisitions by default and limits each sweep to 100 deletions.
+Lease history is not part of soft cleanup: its small records gain nothing from it. `prunePersonaLeaseHistory` is the #478 deletion path. It has no switch of its own: it runs only while the workspace's measured cleanup is "active", as described below. It may delete count-excess `released` or `expired` acquisitions only after the current authority head, ownership, fencing-token history, and referenced terminal Activities are proven under the runtime lock. It retains the newest 1,000 terminal acquisitions by default and limits each sweep to 100 deletions.
+
+Old runtime event segments are removed after 90 days, keeping the newest 30. This also happens only while the workspace's measured cleanup is "active".
 
 This separation keeps soft cleanup from ever authorizing irreversible audit deletion.
 

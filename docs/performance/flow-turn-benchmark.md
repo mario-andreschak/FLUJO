@@ -47,16 +47,12 @@ node scripts/flow-turn-benchmark.mjs --compare before.json after.json
   (made with `claude setup-token`). Without a token, add `--allow-model-errors`:
   each turn then ends with the model's sign-in error, which still times Claude
   Code's start-up and FLUJO's own work.
-- `--claude-warm`: turn on the parked Claude Code process
-  (`FLUJO_CLAUDE_WARM_PROCESS=1`, issue #1408) in the server under test.
 - `--pause <ms>`: wait between runs, like the gap while a caller speaks.
 - `--mcp-delay <ms>`: the stub MCP server answers each request this much later,
   like a remote server.
-- `--mcp-list-cache`: turn on reuse of MCP tool and resource lists
-  (`FLUJO_MCP_LIST_CACHE=1`, issue #1408) in the server under test. The stub
-  server announces list changes, as most current servers do.
-- `--low-latency-saves`: save the conversation fewer times per turn
-  (`FLUJO_LOW_LATENCY_SAVES=1`, issue #1408) in the server under test.
+- The parked Claude Code process, the reuse of MCP tool and resource lists and
+  the fewer saves per turn are always on, so they have no benchmark flags. The
+  stub MCP server announces list changes, as most current servers do.
 - `--scenarios direct`: a one-word classification sent straight to the model
   (`model-<name>`, no flow).
 - `--fs-probe`: count file-system calls per turn inside the server.
@@ -93,12 +89,11 @@ On a busy machine, run each side a few times, taking turns.
 
 ### Switches that change the numbers
 
-Both are read when a turn runs, so set them before Jest starts or pass them to
+This one is read when a turn runs, so set it before Jest starts or pass it to
 the server under test:
 
 | variable | effect |
 |---|---|
-| `FLUJO_LOW_LATENCY_SAVES=1` | "Fewer saves per turn" (Settings > Experimental > Flow execution). Off by default. |
 | `FLUJO_MODEL_CATALOG_READER_IDLE_MS=0` | Release the model catalog reader registration after every model call, as before #1408. By default it stays published for 30 seconds. |
 
 With `FLUJO_TURN_TRACE_FILE` set, `persist.snapshot` counts the full

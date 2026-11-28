@@ -4,6 +4,7 @@ import {
   MigrationLandscapeSession,
   terminalCanShowMigrationLandscape,
 } from './migrationLandscape';
+import { testSetting } from '@/shared/testSetting';
 
 export type MigrationProgressDetails = Record<
   string,
@@ -953,9 +954,6 @@ export function shouldUseInteractiveMigrationUI(
   stream: MigrationTerminalStream = process.stdout,
   env: MigrationEnvironment = process.env,
 ): boolean {
-  const requested = env.FLUJO_MIGRATION_UI?.trim().toLowerCase();
-  if (requested === 'plain') return false;
-  if (requested === 'tty' || requested === 'compact' || requested === 'landscape') return true;
   const ci = env.CI?.trim().toLowerCase();
   const isCi = Boolean(ci && ci !== '0' && ci !== 'false');
   return Boolean(stream.isTTY) && env.TERM !== 'dumb' && !isCi;
@@ -965,11 +963,8 @@ export function shouldUseFullscreenMigrationUI(
   stream: MigrationTerminalStream = process.stdout,
   env: MigrationEnvironment = process.env,
 ): boolean {
-  const requested = env.FLUJO_MIGRATION_UI?.trim().toLowerCase();
-  if (requested === 'plain' || requested === 'tty' || requested === 'compact') return false;
   if (!shouldUseInteractiveMigrationUI(stream, env)) return false;
   if (!terminalSupportsColor(stream, env)) return false;
-  if (['1', 'true', 'yes'].includes(env.FLUJO_MIGRATION_ASCII?.trim().toLowerCase() ?? '')) return false;
   return terminalCanShowMigrationLandscape(stream);
 }
 
@@ -1028,9 +1023,6 @@ function createDefaultReporter(): MigrationProgressReporter {
     colors,
     fullscreen: shouldUseFullscreenMigrationUI(stream),
     trueColor: terminalSupportsTrueColor(stream, process.env),
-    ascii: ['1', 'true', 'yes'].includes(
-      process.env.FLUJO_MIGRATION_ASCII?.trim().toLowerCase() ?? '',
-    ),
   });
 }
 
@@ -1042,7 +1034,7 @@ export function reportWorkspaceMigration(
   // Runtime migrations stay visible regardless of the configured application
   // log level. Jest remains quiet unless a migration test opts into the real
   // transcript explicitly.
-  if (process.env.NODE_ENV === 'test' && process.env.FLUJO_MIGRATION_VERBOSE !== '1') return;
+  if (process.env.NODE_ENV === 'test' && testSetting('FLUJO_MIGRATION_VERBOSE') !== '1') return;
 
   if (message === 'started') {
     activeReporter?.close();

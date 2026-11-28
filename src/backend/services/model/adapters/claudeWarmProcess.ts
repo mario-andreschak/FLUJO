@@ -4,8 +4,6 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type {
   HookCallback, Options, PermissionResult, Query, SDKUserMessage, SpareProcess,
 } from '@anthropic-ai/claude-agent-sdk';
-import { loadItem } from '@/utils/storage/backend';
-import { StorageKey, type Settings } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
 
 /**
@@ -16,8 +14,7 @@ import { createLogger } from '@/utils/logger';
  * calls (usage policy, remote settings) before the process is ready: about
  * 1.6 s on a Windows dev machine, before the model is even asked.
  *
- * When enabled (`experimental.claudeWarmProcess`, or FLUJO_CLAUDE_WARM_PROCESS=1),
- * a finished request leaves one parked spare process for its exact request
+ * A finished request leaves one parked spare process for its exact request
  * shape: model, system prompt, tool definitions, options and environment
  * (which carries the account's token and the workspace's private Claude
  * home). The next request with the same shape claims it with the Agent SDK's
@@ -69,19 +66,6 @@ declare global {
   var __flujoClaudeSpares: Map<string, Spare> | undefined;
 }
 const spares = globalThis.__flujoClaudeSpares ??= new Map<string, Spare>();
-
-/** Opt-in: the experimental setting, or FLUJO_CLAUDE_WARM_PROCESS for headless installs. */
-export async function isClaudeWarmProcessEnabled(): Promise<boolean> {
-  const configured = process.env.FLUJO_CLAUDE_WARM_PROCESS?.trim();
-  if (configured) return configured === '1' || configured.toLowerCase() === 'true';
-  try {
-    const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
-    return settings?.experimental?.claudeWarmProcess === true;
-  } catch (error) {
-    log.warn('Could not read the Claude warm process setting; starting Claude Code per request', error);
-    return false;
-  }
-}
 
 /** One parked spare per 2 GiB of memory, between 1 and 4. */
 export function maxClaudeSpares(totalMemory = os.totalmem()): number {

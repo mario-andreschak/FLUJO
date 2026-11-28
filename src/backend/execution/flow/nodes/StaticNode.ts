@@ -7,7 +7,6 @@ import { FlujoFunctionToolCall } from '@/shared/types/openai';
 import { resolveRunVars, isValidRunVarName } from '@/utils/shared/resolveRunVars';
 import { boundStaticText, staticResultJson, staticResultText, MAX_STATIC_ERROR_CHARS } from '@/utils/shared/staticToolResult';
 import { resolveRunResourceRefs } from '../resolveRunResourceRefs';
-import { FEATURES } from '@/config/features';
 import { mcpService } from '@/backend/services/mcp';
 import { DEFAULT_TOOL_CALL_TIMEOUT_SECONDS } from '@/shared/types/mcp';
 import type { MCPServiceResponse } from '@/shared/types/mcp';
@@ -168,15 +167,6 @@ export class StaticNode extends BaseNode<
   ): Promise<string> {
     const nodeId = node_params?.id || 'unknown';
     log.info('post() started', { nodeId, entryCount: prepResult.entries.length });
-
-    if (FEATURES.ENABLE_EXECUTION_TRACKER && Array.isArray(sharedState.trackingInfo.nodeExecutionTracker)) {
-      sharedState.trackingInfo.nodeExecutionTracker.push({
-        nodeType: 'StaticNode',
-        nodeId,
-        nodeName: node_params?.properties?.name || 'Static',
-        timestamp: new Date().toISOString(),
-      });
-    }
 
     // "Once" means once per logical run (one user turn), not once per conversation:
     // the marker stores the run that injected, so a persisted map from an earlier turn

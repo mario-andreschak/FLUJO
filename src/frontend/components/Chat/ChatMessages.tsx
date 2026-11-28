@@ -59,7 +59,6 @@ import { magicLinkUrl } from '@/frontend/utils/magicLink';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import { copyText } from '@/frontend/components/shared/CopyLinkButton';
 import RevertPreviewDialog from './RevertPreviewDialog';
-import { useStorage } from '@/frontend/contexts/StorageContext';
 import type { QueuedMessage } from './chatQueue'; // #221: inline pending bubbles
 import OpenAI from 'openai'; // Import OpenAI types for tool calls
 import { displayToolName } from '@/utils/shared/common'; // Friendly tool-name decode
@@ -1846,8 +1845,6 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
   queueHoldReason = null,
   anchorMessageId,
 }) => {
-  const { settings, settingsHydrated } = useStorage();
-  const restoreEnabled = settingsHydrated && settings?.experimental?.snapshotsEnabled === true;
   const { t, tp } = useI18n();
   // A waiting Human step gets its own card; the rest are ordinary tool approvals.
   const { humanStepCalls, toolCallsToApprove } = useMemo(() => {
@@ -2229,8 +2226,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
             <ListItemText>{t('chat.actions.splitFromHere')}</ListItemText>
           </MenuItem>
         )}
-        {restoreEnabled
-          && activeMsgForMenu
+        {activeMsgForMenu
           && (activeMsgForMenu.role === 'user' || activeMsgForMenu.role === 'assistant') ? (
           <MenuItem onClick={handleRevertToHere}>
             <ListItemIcon><RestoreIcon fontSize="small" /></ListItemIcon>
@@ -2243,7 +2239,7 @@ const ChatMessages: React.FC<ChatMessagesProps> = ({
         </MenuItem>
       </Menu>
 
-      {restoreEnabled && conversationId && (
+      {conversationId && (
         <RevertPreviewDialog
           open={!!revertMessageId}
           conversationId={conversationId}

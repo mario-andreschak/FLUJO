@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Box, Button, Chip, CircularProgress, FormControlLabel, LinearProgress, MenuItem, Paper, Stack, Switch, TextField, Typography } from '@mui/material';
 import { ScienceRounded } from '@mui/icons-material';
-import { useStorage } from '@/frontend/contexts/StorageContext';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { getSelectedWorkspace, withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import { HarnessInputSchema, harnessCallLimit, type HarnessCase, type HarnessRun } from '@/shared/types/harness';
@@ -26,8 +25,6 @@ const initialCases: HarnessCase[] = [
 
 export default function HarnessLab() {
   const { t } = useI18n();
-  const { settings, settingsHydrated } = useStorage();
-  const enabled = settingsHydrated && settings.experimental?.harnessLabEnabled === true;
   const [workspace] = useState(getSelectedWorkspace);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [history, setHistory] = useState<RunSummary[]>([]);
@@ -128,9 +125,8 @@ export default function HarnessLab() {
       badge={<Chip size="small" color="warning" label={t('harness.experimental')} />} />
     <Stack spacing={3} sx={{ p: { xs: 2, md: 3 }, maxWidth: 1250, mx: 'auto' }}>
       <Alert severity="info">{t('harness.scope')}</Alert>
-      {!enabled && settingsHydrated && <Alert severity="info" action={<Button component="a" href={withWorkspaceUrl('/settings', workspace)}>{t('nav.settings')}</Button>}>{t('harness.off')}</Alert>}
       {error && <Alert severity="error" onClose={() => setError('')}>{error}</Alert>}
-      <TargetVersions workspace={workspace} enabled={enabled && !busy} models={models} onSelect={selectTarget}
+      <TargetVersions workspace={workspace} enabled={!busy} models={models} onSelect={selectTarget}
         onExperiment={id => { void perform(async () => setRun(await api<HarnessRun>(`/${id}`, undefined, controller.current!.signal))); }} />
       {loading ? <CircularProgress aria-label={t('common.loading')} /> : <>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
@@ -146,12 +142,12 @@ export default function HarnessLab() {
           <Stack spacing={3}>
             <Stack direction="row" spacing={2} useFlexGap sx={{ flexWrap: 'wrap', alignItems: 'center' }}>
               <Typography component="h2" variant="h5">{run.input.name}</Typography><Chip label={t(statusKeys[run.status])} />
-              {run.status === 'pending' && !busy && <Button variant="contained" disabled={!enabled} onClick={() => { void perform(() => execute(run, controller.current!.signal)); }}>{t('harness.continue')}</Button>}
+              {run.status === 'pending' && !busy && <Button variant="contained" onClick={() => { void perform(() => execute(run, controller.current!.signal)); }}>{t('harness.continue')}</Button>}
               {busy && <Button disabled={pausing} onClick={() => { pause.current = true; setPausing(true); }}>{t(pausing ? 'harness.pausing' : 'harness.pause')}</Button>}
               {run.status === 'pending' && !busy && <Button onClick={() => { void perform(async () => { setRun(await api<HarnessRun>(`/${run.id}`, { action: 'cancel' }, controller.current!.signal)); await refresh(); }); }}>{t('common.cancel')}</Button>}
             </Stack>
             {busy && <LinearProgress aria-label={t('common.loading')} />}
-            <RunEvidence run={run} busy={busy} enabled={enabled} workspace={workspace}
+            <RunEvidence run={run} busy={busy} enabled workspace={workspace}
               onPromote={() => { void perform(async () => { setRun(await api<HarnessRun>(`/${run.id}`, { action: 'promote' }, controller.current!.signal)); await refresh(); }); }} />
           </Stack>
         </Paper> : <Paper variant="outlined" sx={{ p: { xs: 2, md: 3 } }}>
@@ -181,7 +177,7 @@ export default function HarnessLab() {
             <FormControlLabel control={<Switch checked={reuseLessons} disabled={busy} onChange={event => setReuseLessons(event.target.checked)} />} label={t('harness.reuse')} />
             <CaseEditor cases={cases} disabled={busy} onChange={setCases} />
             <Alert severity="info">{t('harness.calls')}: {callLimit}. {t('harness.billing')}</Alert>
-            <Button variant="contained" disabled={busy || !enabled || !modelId} onClick={create}>{t('harness.run')}</Button>
+            <Button variant="contained" disabled={busy || !modelId} onClick={create}>{t('harness.run')}</Button>
           </Stack>
         </Paper>}
       </>}

@@ -20,7 +20,7 @@ Sources: [Tasks overview](https://modelcontextprotocol.io/extensions/tasks/overv
 
 | Criterion | Status | Source | Test |
 | --- | --- | --- | --- |
-| On by default, no opt-in (`FLUJO_MCP_TASKS_CLIENT=false` turns it off) | Yes | `ENABLE_MCP_TASKS_CLIENT` in [features.ts](../../../src/config/features.ts) | every Tasks suite below runs with the default |
+| Always on, no switch | Yes | [clientTasks.ts](../../../src/backend/services/mcp/clientTasks.ts) | every Tasks suite below |
 | Declares `io.modelcontextprotocol/tasks` per request and only asks for a task when the server advertises it | Yes | [tasksProtocol.ts](../../../src/backend/services/mcp/tasksProtocol.ts) `decideTaskAugmentation` | `modernTasksDispatch.test.ts`, `toolsModernTasks.test.ts` |
 | Works on every transport that speaks 2026-07-28: Streamable HTTP, SSE and stdio (before: remote HTTP only) | Yes | Tasks registration in [betaClient.ts](../../../src/backend/services/mcp/betaClient.ts) | `stdioProtocolNegotiation.test.ts` "runs a modern Task over stdio"; `modernTasksDispatch.test.ts` (HTTP) |
 | Older 2025-11-25 servers: per-tool task support, `tasks/get`, `tasks/result`, `tasks/cancel` | Yes | [tasksProtocol.ts](../../../src/backend/services/mcp/tasksProtocol.ts) | `tasksGenerationsProtocol.test.ts`, `clientTasksGenerationsLifecycle.test.ts` |
@@ -43,7 +43,7 @@ task is gone; FLUJO then records the server's "task unavailable" answer.
 
 | Criterion | Status | Source | Test |
 | --- | --- | --- | --- |
-| Saved flows run as durable tasks for modern clients that declare Tasks | Yes, on by default (`FLUJO_MCP_TASKS_SERVER=false` turns it off) | [flowsTasksServer.ts](../../../src/backend/services/mcp/flowsTasksServer.ts), [serverTasks.ts](../../../src/backend/services/mcp/serverTasks.ts) | `flowsTasksServer.test.ts` |
+| Saved flows run as durable tasks for modern clients that declare Tasks | Yes, always on, no switch | [flowsTasksServer.ts](../../../src/backend/services/mcp/flowsTasksServer.ts), [serverTasks.ts](../../../src/backend/services/mcp/serverTasks.ts) | `flowsTasksServer.test.ts` |
 | Tasks belong to an owner: offered only with the owner bearer; without owner sign-in, ordinary tools still work and no Tasks are offered | Yes | `resolveModernOwner` | `flowsTasksServer.test.ts` |
 | `tasks/get`, `tasks/update` (confirmation form), `tasks/cancel`; results survive restart, interrupted work is never replayed | Yes | serverTasks.ts | `flowsTasksServer.test.ts`; production smoke `node scripts/smoke-mcp-tasks.mjs --production` |
 | `/mcp-proxy` Tasks | Not offered: the proxy waits for a downstream task and returns its final result | [proxyModernServer.ts](../../../src/backend/services/mcp/proxyModernServer.ts) | `proxyModernServing.test.ts` |

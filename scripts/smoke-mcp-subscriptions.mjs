@@ -213,7 +213,6 @@ try {
   await api('/api/model', { id: 'subscription-fixture', name: 'subscription-fixture', provider: 'openai', adapter: 'openai',
     ApiKey: 'synthetic-subscription-key', baseUrl: `http://127.0.0.1:${modelPort}/v1` });
   for (const generation of ['legacy', 'modern']) {
-    await api('/api/storage', { key: 'speech_settings', value: { experimental: { mcpBetaProtocol: generation === 'modern' } } });
     await api('/api/mcp/servers', { name: `events-${generation}`, transport: 'streamable', serverUrl: `http://127.0.0.1:${referencePort}/${generation}`, disabled: false });
     await catalogs(generation, 0);
     if (generation === 'modern') {

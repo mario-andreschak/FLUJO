@@ -84,7 +84,7 @@ export const ModelModal = ({ open, model, onSave, onClose, onReload }: ModelModa
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const router = useRouter();
-  const { globalEnvVars, settings } = useStorage();
+  const { globalEnvVars } = useStorage();
   const [formState, setFormState] = useState<Partial<Model>>({});
   // Multi-user mode (#575): "Anna is editing" notes, "someone else saved
   // first", and who changed what. All stay off (no request) while it is off.
@@ -432,12 +432,12 @@ export const ModelModal = ({ open, model, onSave, onClose, onReload }: ModelModa
     if (offered.length) configurationCapabilities.effortLevels = offered;
     else delete configurationCapabilities.effortLevels;
   }
-  const visibleProviderModels = useMemo(
-    () => settings?.experimental?.showModelsWithoutToolCapabilities
-      ? openRouterModels
-      : openRouterModels.filter(candidate => candidate.supportsTools !== false),
-    [openRouterModels, settings?.experimental?.showModelsWithoutToolCapabilities],
-  );
+  // Models the provider reports as unable to call tools are listed only when
+  // the provider offers nothing else.
+  const visibleProviderModels = useMemo(() => {
+    const toolCapable = openRouterModels.filter(candidate => candidate.supportsTools !== false);
+    return toolCapable.length > 0 ? toolCapable : openRouterModels;
+  }, [openRouterModels]);
 
   // Apply a provider profile: pins the vendor (provider) and SDK (adapter) and
   // prefills its base URL. A blank native-SDK URL delegates to the SDK default.

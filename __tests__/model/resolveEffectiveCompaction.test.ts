@@ -25,24 +25,9 @@ describe('resolveEffectiveCompaction (issue #248)', () => {
     expect(r.threshold).toBeUndefined();
   });
 
-  it('enables only when the global flag is on', () => {
-    expect(resolveEffectiveCompaction(undefined, undefined, { compactionEnabled: true }).enabled).toBe(true);
-    expect(resolveEffectiveCompaction(undefined, undefined, { compactionEnabled: false }).enabled).toBe(false);
-  });
-
-  it('lets a node opt OUT but not opt IN', () => {
-    // opt out while global on
-    expect(
-      resolveEffectiveCompaction({ compactionMode: 'off' }, undefined, { compactionEnabled: true }).enabled,
-    ).toBe(false);
-    // a node cannot enable compaction by itself
-    expect(
-      resolveEffectiveCompaction({ compactionMode: 'auto' }, undefined, { compactionEnabled: false }).enabled,
-    ).toBe(false);
-    // auto + global on = enabled
-    expect(
-      resolveEffectiveCompaction({ compactionMode: 'auto' }, undefined, { compactionEnabled: true }).enabled,
-    ).toBe(true);
+  it('lets a node turn it off; there is no global switch (#1449)', () => {
+    expect(resolveEffectiveCompaction({ compactionMode: 'off' }).enabled).toBe(false);
+    expect(resolveEffectiveCompaction({ compactionMode: 'auto' }).enabled).toBe(true);
   });
 
   it('resolves keepTokens with node > global > default precedence', () => {
@@ -83,23 +68,13 @@ describe('resolveEffectiveCompaction (issue #248)', () => {
 });
 
 describe('resolveEffectiveVisualCompaction (issue #356)', () => {
-  it('migrates missing persisted values to safe defaults', () => {
-    expect(resolveEffectiveVisualCompaction()).toEqual({
-      enabled: false,
-      toolResultsOnly: true,
-      evaluationOnly: false,
-    });
-  });
-
-  it('keeps the controls independent', () => {
+  it('stays off for everyone, whatever old settings say (#1449)', () => {
+    const off = { enabled: false, toolResultsOnly: true, evaluationOnly: false };
+    expect(resolveEffectiveVisualCompaction()).toEqual(off);
     expect(resolveEffectiveVisualCompaction({
       visualCompactionEnabled: true,
       visualCompactionToolResultsOnly: false,
       visualCompactionEvaluationMode: true,
-    })).toEqual({
-      enabled: true,
-      toolResultsOnly: false,
-      evaluationOnly: true,
-    });
+    })).toEqual(off);
   });
 });

@@ -80,19 +80,9 @@ beforeEach(() => {
 });
 afterEach(() => {
   closeAllClaudeSpares();
-  delete process.env.FLUJO_CLAUDE_WARM_PROCESS;
-});
-
-it('starts Claude Code per request and parks nothing when the switch is off', async () => {
-  await new ClaudeSubscriptionAdapter().createCompletion(input());
-  await new ClaudeSubscriptionAdapter().createCompletion(input());
-  expect(queryMock).toHaveBeenCalledTimes(2);
-  expect(prewarmMock).not.toHaveBeenCalled();
-  expect(queryMock.mock.calls[0][0].options.env.ENABLE_CLAUDEAI_MCP_SERVERS).toBeUndefined();
 });
 
 it('reuses a parked process only for the same start-up options', async () => {
-  process.env.FLUJO_CLAUDE_WARM_PROCESS = '1';
   const adapter = new ClaudeSubscriptionAdapter();
 
   const first = await adapter.createCompletion(input());
@@ -137,23 +127,7 @@ it('reuses a parked process only for the same start-up options', async () => {
   expect(spares[1].claim).not.toHaveBeenCalled();
 });
 
-it('closes parked processes when the switch is turned off', async () => {
-  process.env.FLUJO_CLAUDE_WARM_PROCESS = '1';
-  const adapter = new ClaudeSubscriptionAdapter();
-  await adapter.createCompletion(input());
-  await settle();
-  expect(_claudeSpareCountForTests()).toBe(1);
-  process.env.FLUJO_CLAUDE_WARM_PROCESS = '0';
-  await adapter.createCompletion(input());
-  await settle();
-  expect(_claudeSpareCountForTests()).toBe(0);
-  expect(spares[0].close).toHaveBeenCalled();
-  expect(spares[0].claim).not.toHaveBeenCalled();
-  expect(queryMock).toHaveBeenCalledTimes(2);
-});
-
 it('starts Claude Code normally when the parked process refuses the claim', async () => {
-  process.env.FLUJO_CLAUDE_WARM_PROCESS = '1';
   prewarmMock.mockImplementationOnce(async () => {
     const spare = fakeSpareProcess();
     const refused = Promise.reject(new Error('cwd_not_found'));
@@ -181,8 +155,7 @@ function streamThatWaitsForExit(exit: Promise<void>) {
   return { returned, stream: { [Symbol.asyncIterator]: () => ({ next: () => inner.next(), return: returned }) } };
 }
 
-it('answers without waiting for the used process to exit when the switch is on', async () => {
-  process.env.FLUJO_CLAUDE_WARM_PROCESS = '1';
+it('answers without waiting for the used process to exit', async () => {
   const { returned, stream } = streamThatWaitsForExit(new Promise(() => undefined));
   queryMock.mockImplementation(() => stream);
   const result = await new ClaudeSubscriptionAdapter().createCompletion(input());
@@ -190,24 +163,7 @@ it('answers without waiting for the used process to exit when the switch is on',
   expect(returned).toHaveBeenCalledTimes(1);
 });
 
-it('still waits for the process to exit when the switch is off', async () => {
-  let exited!: () => void;
-  const { returned, stream } = streamThatWaitsForExit(new Promise<void>(resolve => { exited = resolve; }));
-  queryMock.mockImplementation(() => stream);
-  let settled = false;
-  const running = new ClaudeSubscriptionAdapter().createCompletion(input()).finally(() => { settled = true; });
-  for (let waited = 0; !returned.mock.calls.length && waited < 5_000; waited += 10) {
-    await new Promise(resolve => setTimeout(resolve, 10));
-  }
-  expect(returned).toHaveBeenCalledTimes(1);
-  expect(settled).toBe(false);
-  exited();
-  await running;
-  expect(settled).toBe(true);
-});
-
 it('uses the first parked process although the SDK adds its version to the environment', async () => {
-  process.env.FLUJO_CLAUDE_WARM_PROCESS = '1';
   delete process.env.CLAUDE_AGENT_SDK_VERSION;
   queryMock.mockImplementation(() => { process.env.CLAUDE_AGENT_SDK_VERSION = '0.3.312'; return successStream(); });
   try {

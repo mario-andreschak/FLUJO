@@ -1,5 +1,5 @@
 /**
- * Optional deletion-based pruning for Persona lease history (issue #478).
+ * Deletion-based pruning for Persona lease history (issue #478).
  *
  * This path is intentionally separate from mutation-based soft retention:
  * deletion is irreversible and needs a complete cross-record proof under the
@@ -7,10 +7,10 @@
  */
 
 import type { PersonaActivity, PersonaLease } from '@/shared/types/enduringAgent';
-import { FEATURES } from '@/config/features';
 import { createLogger } from '@/utils/logger';
 import { getCurrentWorkspace } from '@/utils/workspace';
 import { withPersonaRuntimeLock } from './runtimeLock';
+import { getPersonaRuntimeRetentionMode } from './personaRuntimeRetentionControl';
 import {
   deletePersonaLeaseRecord,
   getPersonaLease,
@@ -20,6 +20,11 @@ import {
 } from './store';
 
 const log = createLogger('enduringAgents/leaseHistoryPruning');
+
+/** Deletion follows the workspace's measured Persona cleanup rollout (#481). */
+async function pruningActive(): Promise<boolean> {
+  return await getPersonaRuntimeRetentionMode() === 'active';
+}
 
 export const PERSONA_LEASE_HISTORY_RETAINED_COUNT = 1_000;
 export const PERSONA_LEASE_HISTORY_MAX_DELETES_PER_SWEEP = 100;
@@ -102,14 +107,14 @@ function orderNewestFirst(left: PersonaLease, right: PersonaLease): number {
 
 /**
  * Delete count-excess, terminal lease acquisitions only after a complete strict
- * history/head/Activity snapshot proves they are dead. The feature is independent
- * of Persona history cleanup (#481) and defaults off.
+ * history/head/Activity snapshot proves they are dead, and only while the
+ * workspace's Persona history cleanup (#481) is active.
  */
 export async function prunePersonaLeaseHistory(
   personaId: string,
   options: PersonaLeaseHistoryPruningOptions = {},
 ): Promise<PersonaLeaseHistoryPruningResult> {
-  if (!FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING) return { ...EMPTY_RESULT };
+  if (!(await pruningActive())) return { ...EMPTY_RESULT };
 
   const retainedCount = requireNonNegativeInteger(
     options.retainedCount ?? PERSONA_LEASE_HISTORY_RETAINED_COUNT,
@@ -123,7 +128,7 @@ export async function prunePersonaLeaseHistory(
   return withPersonaRuntimeLock(personaId, async (lock) => {
     // Recheck after waiting for the lock so disabling the rollout stops deletion
     // before the operation performs authoritative reads.
-    if (!FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING) return { ...EMPTY_RESULT };
+    if (!(await pruningActive())) return { ...EMPTY_RESULT };
     await lock.assertOwned();
 
     const [history, head, activities] = await Promise.all([
@@ -194,7 +199,7 @@ export async function prunePersonaLeaseHistory(
 
     let deleted = 0;
     for (const candidate of verified) {
-      if (!FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING) break;
+      if (!(await pruningActive())) break;
       await lock.assertOwned();
       await deletePersonaLeaseRecord(candidate);
       deleted += 1;
@@ -216,7 +221,7 @@ export async function prunePersonaLeaseHistory(
 export async function pruneWorkspacePersonaLeaseHistories(
   options: PersonaLeaseHistoryPruningOptions = {},
 ): Promise<WorkspaceLeaseHistoryPruningResult> {
-  if (!FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING) {
+  if (!(await pruningActive())) {
     return {
       personasExamined: 0,
       personasFailed: 0,

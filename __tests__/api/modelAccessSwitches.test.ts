@@ -125,15 +125,6 @@ describe('model access switches', () => {
       expect((await response.json()).code).toBeUndefined();
     });
 
-    it('refuses to prepare the Flow Generator when switched off', async () => {
-      await switches({ quickChat: false });
-      const { POST } = await import('@/app/api/flow/generator/route');
-
-      const response = await POST(post('http://localhost/api/flow/generator', { conversationId: 'c1', modelId: 'm1' }));
-
-      expect(response.status).toBe(403);
-    });
-
     it.each([
       ['a graph supplied by the client', { flowId: 'any-flow-id', flowSnapshot: quickChatFlow('any-flow-id') }],
       ['a Quick Chat id without a graph', { flowId: 'quickchat-c1' }],

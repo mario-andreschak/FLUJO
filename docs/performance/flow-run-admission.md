@@ -14,8 +14,7 @@ permit. A private authority-delegation hop shares its existing reservation.
 ## Operational limits
 
 The defaults are admission policy, not a measurement of total application memory.
-Positive safe-integer environment overrides use the `FLUJO_RUN_ADMISSION_` prefix.
-Invalid values retain the defaults.
+These limits are fixed. Only tests can change them.
 
 | Suffix | Default | Resource |
 | --- | ---: | --- |
@@ -49,8 +48,7 @@ dispatch or cancellation registration. The `/v1/chat/completions` endpoint does
 not refuse at once: when runs, memory or completion streams are momentarily
 full, the request waits in arrival order (`acquireFlowRunAdmissionWhenAvailable`,
 `ExecutionStreamAdmission.reserveWhenAvailable`) and starts as soon as an
-earlier run finishes. Only after `FLUJO_CHAT_ADMISSION_WAIT_MS` (default 60
-seconds) does it get the 429/503 below; a caller that disconnects stops
+earlier run finishes. Only after the fixed 60-second wait (only tests can change it) does it get the 429/503 below; a caller that disconnects stops
 waiting (#757). A second check after
 registration and lock waiting catches changed input or process pressure before
 conversation mutation; late refusal also releases its registration. It does not

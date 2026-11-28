@@ -1,4 +1,3 @@
-import { FEATURES } from '@/config/features';
 import {
   BEHAVIOR_OUTCOME_MAX_COUNTED_ACTIVITY_IDS,
   BEHAVIOR_OUTCOME_METRIC_SCHEMA_VERSION,
@@ -124,7 +123,6 @@ export async function snapshotBehaviorOutcomeBaseline(
   proposal: BehaviorProposal,
   now = Date.now(),
 ): Promise<BehaviorOutcomeMetric | null> {
-  if (!FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS) return null;
   if (proposal.status !== 'activated' || !proposal.activatedRevisionId) return null;
   if (proposal.activatedRevisionId === proposal.baseBehaviorRevisionId) return null;
 
@@ -250,8 +248,6 @@ async function maybeAutoRollback(
   metric: BehaviorOutcomeMetric,
   reason: string,
 ): Promise<BehaviorOutcomeMetric> {
-  if (!FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_AUTO_ROLLBACK) return metric;
-
   const persona = await getPersona(metric.personaId);
   if (!persona || !AUTO_ROLLBACK_AUTONOMY_LEVELS.includes(persona.autonomyLevel)) {
     return persistVerdict(
@@ -321,7 +317,6 @@ export async function evaluateBehaviorOutcomeRegression(
 export async function recordBehaviorOutcomeSample(
   activity: PersonaActivity,
 ): Promise<BehaviorOutcomeMetric | null> {
-  if (!FEATURES.ENABLE_PERSONA_BEHAVIOR_OUTCOME_METRICS) return null;
   if (!isTerminalOutcomeActivity(activity)) return null;
   if (!activity.personaId || !activity.behaviorRevisionId) return null;
 

@@ -184,10 +184,9 @@ describe('modern Flows Tasks through actual SDK HTTP serving', () => {
     expect(CallToolResultV2Schema.parse(sync.body.result).resultType).toBe('complete');
     expect(sync.body.result).not.toHaveProperty('taskId');
     process.env.FLUJO_MCP_TASKS_SERVER = 'false';
-    const disabled = await dispatch('server/discover');
-    expect((disabled.body.result?.capabilities as { extensions?: unknown }).extensions).toBeUndefined();
-    const unaware = await dispatch('tools/call', { name: 'owned_flow' }, { tasks: true });
-    expect(unaware.body.result?.resultType).toBe('complete');
+    const retiredSwitch = await dispatch('server/discover');
+    expect((retiredSwitch.body.result?.capabilities as { extensions: Record<string, unknown> }).extensions)
+      .toHaveProperty(['io.modelcontextprotocol/tasks']);
   });
 
   it('never interprets task-shaped synchronous content or authoring calls as Tasks', async () => {

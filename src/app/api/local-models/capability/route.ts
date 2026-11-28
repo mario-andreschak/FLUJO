@@ -26,8 +26,8 @@ async function GET_handler(_request: Request) {
 
     return new Response(
       JSON.stringify({
-        // Offer the local-model flow when Ollama answers, or when this build
-        // explicitly advertises it (FLUJO_OLLAMA=1) even if it is still starting.
+        // Offer the local-model flow when Ollama answers, or when an endpoint
+        // is configured (FLUJO_OLLAMA_URL) even if it is still starting.
         enabled: reachable || isLocalModelsEnabled(),
         ollamaReachable: reachable,
         ollamaUrl: getOllamaUrl(),

@@ -29,14 +29,8 @@
  *                    model alias, for example haiku. The token comes from
  *                    FLUJO_BENCH_CLAUDE_TOKEN (from `claude setup-token`). Without
  *                    one, add --allow-model-errors to time Claude Code's start-up only.
- *   --claude-warm    turn on the Claude subscription adapter's parked process
- *                    (FLUJO_CLAUDE_WARM_PROCESS=1) in the server under test
  *   --pause <ms>     wait this long between runs, like a caller speaking (default 0)
  *   --mcp-delay <ms> answer each MCP request this much later, like a remote server
- *   --mcp-list-cache turn on reuse of MCP tool and resource lists
- *                    (FLUJO_MCP_LIST_CACHE=1) in the server under test
- *   --low-latency-saves  save the conversation fewer times per turn
- *                    (FLUJO_LOW_LATENCY_SAVES=1) in the server under test
  *   --compare <before.json> <after.json>  print two --out files side by side and exit
  *   --real   use a real model instead of the stub. Reads FLUJO_BENCH_REAL_BASE_URL
  *            (default https://api.openai.com/v1), FLUJO_BENCH_REAL_MODEL
@@ -99,11 +93,8 @@ const fsProbe = flag('fs-probe');
 const ownerAuth = !flag('no-owner-auth');
 // Extra Node flags for the server under test, e.g. --node-options "--experimental-async-context-frame".
 const extraNodeOptions = option('node-options', '', { flagValue: true });
-const claudeWarm = flag('claude-warm');
 const mcpDelayMs = Number(option('mcp-delay', '0'));
 assert.ok(Number.isFinite(mcpDelayMs) && mcpDelayMs >= 0 && mcpDelayMs <= 10_000, '--mcp-delay must be 0..10000 ms');
-const mcpListCache = flag('mcp-list-cache');
-const lowLatencySaves = flag('low-latency-saves');
 const pauseMs = Number(option('pause', '0'));
 assert.ok(Number.isFinite(pauseMs) && pauseMs >= 0 && pauseMs <= 60_000, '--pause must be 0..60000 ms');
 const realModel = real ? {
@@ -379,9 +370,6 @@ async function startServer() {
       FLUJO_TELEMETRY_URL: `${base}/disabled-telemetry`, FLUJO_CODEX_AUTO_UPDATE: '0',
       FLUJO_MCP_APP_SANDBOX_HOST: '127.0.0.1', FLUJO_MCP_APP_SANDBOX_PORT: String(await freePort()),
       FLUJO_TURN_TRACE_FILE: traceFile,
-      ...(claudeWarm ? { FLUJO_CLAUDE_WARM_PROCESS: '1' } : {}),
-      ...(mcpListCache ? { FLUJO_MCP_LIST_CACHE: '1' } : {}),
-      ...(lowLatencySaves ? { FLUJO_LOW_LATENCY_SAVES: '1' } : {}),
       ...(fsProbe ? { FLUJO_BENCH_FS_STATS: fsStatsBase } : {}),
       NODE_OPTIONS: [extraNodeOptions, profileDir ? '--inspect=127.0.0.1:0' : '',
         // NODE_OPTIONS treats backslashes inside quotes as escapes; use forward slashes.
@@ -656,8 +644,8 @@ const results = { schemaVersion: 1, label, application, startedUtc: new Date().t
   node: process.version, platform: `${process.platform} ${os.release()} ${os.cpus().length} threads ${Math.round(os.totalmem() / 2 ** 30)} GB`,
   buildId: (await fs.readFile(path.join(application, '.next', 'BUILD_ID'), 'utf8')).trim(),
   model: real ? `real ${realModel.name}` : seedFrom ? `configured model ${seedModelId}`
-    : claudeModel ? `Claude subscription ${claudeModel}${claudeToken ? '' : ' (placeholder token: start-up only)'}${claudeWarm ? ', warm process on' : ''}`
-    : `stub (token gap ${tokenGapMs} ms)`, mcp: `${mcpDelayMs ? `MCP answers after ${mcpDelayMs} ms` : 'local MCP'}${mcpListCache ? ', list reuse on' : ''}${lowLatencySaves ? ', fewer saves per turn' : ''}`,
+    : claudeModel ? `Claude subscription ${claudeModel}${claudeToken ? '' : ' (placeholder token: start-up only)'}`
+    : `stub (token gap ${tokenGapMs} ms)`, mcp: `${mcpDelayMs ? `MCP answers after ${mcpDelayMs} ms` : 'local MCP'}`,
   runs, series: [] };
 try {
   for (const name of ['application', 'data', 'home', 'temp']) await fs.mkdir(path.join(root, name), { recursive: true });
