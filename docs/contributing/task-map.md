@@ -92,6 +92,9 @@ Good to know:
 - Do not run the whole suite (`npm test`, about 1,270 files) on a laptop. CI does.
 - Tests that create a workspace need the built-in MCP servers. The test runner
   builds them once when they are missing; `npm run build:mcp` does it by hand.
+- Each run keeps its temp files in its own folder that only your account can
+  change (`.flujo-test-runs` in your temp or home folder), because FLUJO
+  refuses approval files in shared folders. The runner deletes it at the end.
 - Times measured on November 25, 2026, including start-up: `pathSafety.test.ts`
   about 40 seconds, `PersonaGoalCard.test.tsx` about 30 seconds, the two-file
   example 20 seconds, the four recovery suites 100 seconds.

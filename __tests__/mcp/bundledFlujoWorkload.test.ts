@@ -3,17 +3,13 @@ import { FLUJO_AUTHORING_TOOLS, FLUJO_FLOW_TOOLS, FLUJO_SERVER_TOOLS, FLUJO_AUTO
 import { assertVerifiedBundledFlujoWorkloadStart } from '@/backend/services/mcp/trustedHost';
 import { resolveBundledFlujoWorkloadRequest, withBundledFlujoWorkloadAuthorization, type BundledFlujoWorkloadAuthorization, type PendingBundledFlujoWorkload } from '@/backend/services/security/bundledFlujoWorkload';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { getCurrentWorkspace, getWorkspaceDir } from '@/utils/workspace';
+import { getCurrentWorkspace } from '@/utils/workspace';
 import { createShippedServerConfig, SHIPPED_MCP_SERVERS } from '@/backend/services/mcp/shippedServers';
-import { ensureShippedWorkspacePackages } from '@/backend/services/mcp/shippedWorkspacePackages';
-import { saveConfig } from '@/backend/services/mcp/config';
-import { previewBundledHostConsent, approveBundledHostConsent } from '@/backend/services/security/bundledMcpConsent';
 import { attachTrustedHost, getManagedTrustedHost } from '@/backend/services/mcp/trustedHost';
 import { prepareBundledFlujoWorkload, getPendingWorkloadEnvironment } from '@/backend/services/security/bundledFlujoWorkload';
-import { installBundledFixtureOwner } from './fixtures/bundledFixtureOwner';
+import { APPROVED_BUNDLED_FLUJO_SETUP_MS, installApprovedBundledFlujo, type ApprovedBundledFlujo } from './fixtures/approvedBundledFlujo';
 import { assertMcpRuntimeAuthorityRetired, createStdioTransport, McpRuntimeAuthorityRetirementError, retireMcpRuntimeAuthority } from '@/backend/services/mcp/connection';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { trustedHostMcpPolicySchema, verifyTrustedHostMcp } from '@/backend/services/security/trustedHostMcp';
@@ -105,10 +101,32 @@ test.each(['object', 'unrelated-request'])('present public %s carrier never fall
   });
 });
 
+// Every private read on Windows starts two fresh native permission checks, and
+// one contract case makes dozens of them: 40 s on an idle PC and up to a minute
+// beside another worker on a busy one. The limit leaves room for more.
+const WORKLOAD_CASE_MS = 240_000;
+// Cancel early enough that retirement and fixture cleanup still finish in time.
+const WORKLOAD_CLEANUP_MS = 20_000;
+
+describe('real private consent and fresh guarded workload contract', () => {
+let consent!: ApprovedBundledFlujo;
+beforeAll(async () => {
+  const startedAt = performance.now();
+  consent = await installApprovedBundledFlujo({
+    prefix: 'flujo-workload-control-',
+    env: { FLUJO_SYSTEM_SCREENSHOT_ENABLED: '0', FLUJO_MCP_WORKLOAD_TRACE: '1' },
+    timed: async (name, operation) => {
+      console.info('[workload-control]', `${name}:start`, Math.round(performance.now() - startedAt));
+      try { return await operation(); } finally { console.info('[workload-control]', `${name}:settled`, Math.round(performance.now() - startedAt)); }
+    },
+  });
+}, APPROVED_BUNDLED_FLUJO_SETUP_MS);
+afterAll(async () => { await consent?.remove(); });
+
 test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','inventory-drift', 'deferred-owner-drift', 'retired-selected-context',
   'retire-unlink-retry', 'retire-closed-descriptor-retry', 'retire-unknown-parent', 'retire-quarantine-retry', 'retire-acquisition-ambiguous', 'verification-threeway-drain',
   'diagnostic-explicit', 'diagnostic-close', 'diagnostic-onclose', 'diagnostic-start-failed'] as const)
-('real private consent and fresh guarded workload contract: %s', async mode => {
+('%s', async mode => {
   const startedAt = performance.now();
   const stamp = (name: string) => console.info('[workload-control]', name, Math.round(performance.now() - startedAt));
   const timed = async <T,>(name: string, operation: () => Promise<T>): Promise<T> => {
@@ -119,7 +137,7 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
   const deadline = setTimeout(() => {
     cancellation.abort(new Error('Workload fixture cancellation deadline.'));
     try { stamp('deadline-abort'); } catch { /* Keep cancellation independent of diagnostic logging. */ }
-  }, 55_000);
+  }, WORKLOAD_CASE_MS - WORKLOAD_CLEANUP_MS);
   let graphB!: typeof import('@/backend/services/security/bundledFlujoWorkload');
   let readerDelegate!: { current: typeof import('@/backend/services/security/trustedHostMcp').readPrivateApprovalSetAsync };
   if (mode === 'deferred-owner-drift') jest.doMock('@/backend/services/security/trustedHostMcp', () => {
@@ -136,46 +154,17 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
   const serviceKey = Symbol('Source control global graph B service');
   const capturedService = Object.freeze({ assertEffect: graphB.assertBundledFlujoWorkloadEffectCurrent });
   Object.defineProperty(globalThis, serviceKey, { value: capturedService, configurable: true });
-  const names = ['FLUJO_APP_ROOT', 'FLUJO_DATA_DIR', 'FLUJO_PARENT_DATA_DIR', 'FLUJO_BASE_URL', 'FLUJO_WORKER_MODE', 'FLUJO_SYSTEM_SCREENSHOT_ENABLED', 'FLUJO_MCP_WORKLOAD_TRACE'];
-  const saved = Object.fromEntries(names.map(name => [name, process.env[name]]));
-  const parent = path.resolve(process.platform === 'win32' ? process.env.LOCALAPPDATA ?? os.tmpdir() : os.tmpdir());
-  const fixture = fs.mkdtempSync(path.join(parent, 'flujo-workload-control-'));
-  const fixtureIdentity = fs.lstatSync(fixture, { bigint: true });
-  const canonicalParent = fs.realpathSync.native(parent);
-  const parentIdentity = fs.lstatSync(canonicalParent, { bigint: true });
-  if (!parentIdentity.isDirectory() || parentIdentity.isSymbolicLink()) throw new Error('Unsafe workload fixture parent.');
-  const application = path.join(fixture, 'application');
-  const write = (relative: string, content: string) => {
-    const filename = path.join(application, relative); fs.mkdirSync(path.dirname(filename), { recursive: true }); fs.writeFileSync(filename, content);
-  };
-  let owner: ReturnType<typeof installBundledFixtureOwner> | undefined;
+  const { application, proposed } = consent;
+  const approved = { config: consent.approved };
+  // Files a case creates for itself; the shared consent stays untouched.
+  const scratch = fs.mkdtempSync(path.join(consent.fixture, 'case-'));
   let transport: { start(): Promise<void>; close(): Promise<void> } | undefined;
   let primaryFailed = false;
   let primaryError: unknown;
   const foreignDescriptors: number[] = [];
   let retireQuarantinedAuthority: (() => void) | undefined;
+  let preservedUnknown: string | undefined;
   try {
-    process.env.FLUJO_APP_ROOT = application; process.env.FLUJO_DATA_DIR = path.join(fixture, 'data');
-    process.env.FLUJO_BASE_URL = 'http://127.0.0.1:4200'; delete process.env.FLUJO_PARENT_DATA_DIR; delete process.env.FLUJO_WORKER_MODE;
-    process.env.FLUJO_SYSTEM_SCREENSHOT_ENABLED = '0';
-    process.env.FLUJO_MCP_WORKLOAD_TRACE = '1';
-    const descriptor = SHIPPED_MCP_SERVERS.find(item => item.packageDirectory === 'flujo')!;
-    write('package.json', '{"name":"flujo-ai","version":"1.0.0"}');
-    write('node_modules/fixture-dependency/package.json', '{"name":"fixture-dependency","version":"1.0.0","type":"module","exports":"./index.js"}');
-    write('node_modules/fixture-dependency/index.js', 'export const value = 1;');
-    write('mcp-servers/flujo/package.json', JSON.stringify({ name: descriptor.packageId, version: '1.0.0', type: 'module', dependencies: { 'fixture-dependency': '1.0.0' } }));
-    write('mcp-servers/flujo/src/index.ts', '// genuine fixture source');
-    write('mcp-servers/flujo/dist/index.js', 'export { value } from "fixture-dependency";');
-    fs.mkdirSync(getWorkspaceDir(getCurrentWorkspace()), { recursive: true });
-    await timed('package-copy', () => ensureShippedWorkspacePackages(getWorkspaceDir(getCurrentWorkspace()), application, ['flujo']));
-    const proposed = createShippedServerConfig(descriptor);
-    expect((await timed('persist-config', () => saveConfig(new Map([[proposed.name, proposed]])))).success).toBe(true);
-    const fixtureOwner = installBundledFixtureOwner();
-    owner = fixtureOwner;
-    const preview = await timed('preview', () => previewBundledHostConsent(proposed.name, { runtimeHome: 'host' }));
-    const approved = await timed('approve', () => approveBundledHostConsent(new Request(fixtureOwner.request(proposed.name), { signal: cancellation.signal }), proposed.name, {
-      runtimeHome: 'host', reviewedDigest: preview.policyDigest, expiresAt: fixtureOwner.expiresAt,
-    }));
     if (mode === 'verification-threeway-drain') {
       const actualOpen = fs.promises.open.bind(fs.promises);
       const sourceFile = trustedHostMcpPolicySchema.parse(approved.config.trustedHost).entryPoint;
@@ -477,7 +466,7 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
       // The fixture owns this genuinely acquired handle. Closing it establishes
       // authoritative EBADF; no production clear or authority mock is involved.
       actualClose(acquired!); foreignDescriptors.pop();
-      const unrelated = path.join(fixture, 'ambiguous-acquisition-foreign.json');
+      const unrelated = path.join(scratch, 'ambiguous-acquisition-foreign.json');
       fs.writeFileSync(unrelated, '{"unrelated":"preserve"}');
       for (let count = 0; count < 64; count++) {
         const fd = actualOpen(unrelated, 'r'); foreignDescriptors.push(fd);
@@ -541,6 +530,7 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
         await expect(transport.close()).rejects.toThrow();
         expect(fs.readFileSync(unknown, 'utf8')).toBe('{"unknown":"preserve"}');
         fs.renameSync(workloadDirectory, preserved);
+        preservedUnknown = preserved;
         fs.renameSync(held, workloadDirectory);
         expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied');
         expectedCloseCount = 3;
@@ -557,7 +547,7 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
       });
       try { await expect(transport.close()).rejects.toThrow(); } finally { fault.mockRestore(); }
       expect(injected).toBe(true);
-      const unrelated = path.join(fixture, 'unrelated-descriptor.json');
+      const unrelated = path.join(scratch, 'unrelated-descriptor.json');
       fs.writeFileSync(unrelated, '{"unrelated":"preserve"}');
       for (let count = 0; count < 64; count++) {
         const fd = fs.openSync(unrelated, 'r'); foreignDescriptors.push(fd);
@@ -586,6 +576,7 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
       // the actual production retirement preserved it.
       fs.unlinkSync(path.join(workloadDirectory, 'unknown.json'));
     }
+    if (preservedUnknown) { fs.rmSync(preservedUnknown, { recursive: true, force: true }); preservedUnknown = undefined; }
     expect(fs.readdirSync(workloadDirectory)).toEqual([]);
     expect((await resolveBundledFlujoWorkloadRequest(request())).kind).toBe('denied');
     for (const fd of foreignDescriptors) expect(fs.fstatSync(fd).isFile()).toBe(true);
@@ -602,23 +593,10 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
     try { retireQuarantinedAuthority?.(); } catch (error) { cleanupErrors.push(error); }
     try { await transport?.close(); } catch (error) { cleanupErrors.push(error); }
     for (const fd of foreignDescriptors) { try { fs.closeSync(fd); } catch (error) { cleanupErrors.push(error); } }
-    try { owner?.restore(); } catch (error) { cleanupErrors.push(error); }
-    for (const [name, value] of Object.entries(saved)) {
-      try { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
-      catch (error) { cleanupErrors.push(error); }
-    }
-    if (cleanupErrors.length === 0) try {
-      const current = fs.lstatSync(fixture, { bigint: true });
-      const currentParent = fs.lstatSync(canonicalParent, { bigint: true });
-      if (path.dirname(fixture) !== parent || fs.realpathSync.native(parent) !== canonicalParent
-          || !currentParent.isDirectory() || currentParent.isSymbolicLink()
-          || currentParent.dev !== parentIdentity.dev || currentParent.ino !== parentIdentity.ino || currentParent.birthtimeNs !== parentIdentity.birthtimeNs
-          || !/^flujo-workload-control-[A-Za-z0-9]+$/.test(path.basename(fixture)) || !current.isDirectory() || current.isSymbolicLink()
-          || current.dev !== fixtureIdentity.dev || current.ino !== fixtureIdentity.ino || current.birthtimeNs !== fixtureIdentity.birthtimeNs) throw new Error('Unsafe workload fixture cleanup.');
-      fs.rmSync(fixture, { recursive: true, force: true });
-    } catch (error) { cleanupErrors.push(error); }
+    if (cleanupErrors.length === 0) try { fs.rmSync(scratch, { recursive: true, force: true }); } catch (error) { cleanupErrors.push(error); }
     if (cleanupErrors.length) throw new AggregateError(primaryFailed ? [primaryError, ...cleanupErrors] : cleanupErrors,
       'Workload fixture cleanup failed.', primaryFailed ? { cause: primaryError } : undefined);
     stamp('cleanup:settled');
   }
-}, 60_000);
+}, WORKLOAD_CASE_MS);
+});

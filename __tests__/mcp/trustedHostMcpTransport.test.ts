@@ -17,6 +17,9 @@ import { callTool } from '@/backend/services/mcp/tools';
 import { createRootsListHandler, setNodeRoots, _resetNodeRootsForTests } from '@/backend/services/mcp/roots';
 import { resolveGlobalVars } from '@/backend/utils/resolveGlobalVars';
 import { getMcpAppRuntimeBrokerSnapshot, revokeMcpAppRuntimeBrokerForServer } from '@/backend/mcpApps/runtimeBroker';
+import { PRIVATE_READ_TEST_MS } from '../helpers/privateReadTime';
+
+jest.setTimeout(PRIVATE_READ_TEST_MS);
 
 jest.mock('@/backend/services/mcp/config', () => ({ loadServerConfigs: jest.fn() }));
 jest.mock('@/utils/storage/backend', () => ({ loadItem: jest.fn(async () => undefined), saveItem: jest.fn() }));

@@ -67,9 +67,11 @@ const mockRecordStatisticsEvent = jest.fn();
 jest.mock('@/backend/services/statistics', () => ({
   classifySchedulerSkip: jest.fn(() => 'unknown'),
   createStatisticsEvent: jest.fn((event: Record<string, unknown>) => event),
-  recordStatisticsEvent: jest.fn((event: Record<string, unknown>) =>
-    mockRecordStatisticsEvent(event)
-  ),
+  recordStatisticsEvent: jest.fn((event: Record<string, unknown>) => {
+    const result = mockRecordStatisticsEvent(event);
+    mockNotifyProgress();
+    return result;
+  }),
 }));
 
 const completedResult = {
@@ -92,14 +94,33 @@ const input = (overrides: Record<string, unknown> = {}) => ({
 
 const readRuns = (id: string) => (store.get(`planned-execution-runs/${id}`) as RunRecord[]) ?? [];
 
-/** Let queued microtasks + the service's short async hops settle. */
+/**
+ * Give a run that must NOT happen a chance to show up. Only negative checks use
+ * this; a fixed pause cannot make them fail on a busy PC.
+ */
 const flush = () => new Promise(resolve => setTimeout(resolve, 20));
+
+/** Wakes `until` whenever the service starts a run or records a fire. */
+let progressWaiters: Array<() => void> = [];
+function mockNotifyProgress() {
+  for (const wake of progressWaiters.splice(0)) wake();
+}
+
+/** Resolves once the service under test has done what `condition` checks for. */
+async function until(condition: () => boolean): Promise<void> {
+  while (!condition()) await new Promise<void>(resolve => progressWaiters.push(resolve));
+}
+const runsStarted = (count: number) => until(() => runFlowMock.mock.calls.length >= count);
+const firesQueued = (count: number) => until(() => mockRecordStatisticsEvent.mock.calls
+  .filter(([event]) => event.type === 'scheduler.fire' && event.outcome === 'queued').length >= count);
 
 /** Make runFlow hang until the test releases the Nth call via pendingRuns[n]. */
 const blockRunFlow = () =>
-  runFlowMock.mockImplementation(
-    () => new Promise(resolve => pendingRuns.push(resolve as (r: unknown) => void))
-  );
+  runFlowMock.mockImplementation(() => {
+    const run = new Promise(resolve => pendingRuns.push(resolve as (r: unknown) => void));
+    mockNotifyProgress();
+    return run;
+  });
 
 describe('SchedulerService overlap strategy (#121)', () => {
   let scheduler: SchedulerService;
@@ -108,6 +129,7 @@ describe('SchedulerService overlap strategy (#121)', () => {
     store.clear();
     runFlowMock.mockReset();
     pendingRuns = [];
+    progressWaiters = [];
     locked = false;
     mockRecordStatisticsEvent.mockReset();
     scheduler = new SchedulerService();
@@ -118,7 +140,7 @@ describe('SchedulerService overlap strategy (#121)', () => {
     const { execution } = await scheduler.create(input());
 
     const p1 = scheduler.fire(execution!, { kind: 'schedule', summary: 'first' });
-    await flush();
+    await runsStarted(1);
     expect(scheduler.isRunning(execution!.id)).toBe(true);
     expect(runFlowMock).toHaveBeenCalledTimes(1);
 
@@ -142,7 +164,7 @@ describe('SchedulerService overlap strategy (#121)', () => {
     }));
 
     const first = scheduler.fire(execution!, { kind: 'schedule', summary: 'first' });
-    await flush();
+    await runsStarted(1);
     const second = await scheduler.fire(execution!, { kind: 'schedule', summary: 'second' });
 
     expect(second.status).toBe('skipped');
@@ -160,14 +182,14 @@ describe('SchedulerService overlap strategy (#121)', () => {
     const { execution } = await scheduler.create(input({ trigger, overlapStrategy: 'skip' }));
 
     const first = scheduler.fire(execution!, { kind: 'mcp-event', summary: 'first' });
-    await flush();
+    await runsStarted(1);
     const second = scheduler.fire(execution!, { kind: 'mcp-event', summary: 'second' });
     await flush();
     expect(runFlowMock).toHaveBeenCalledTimes(1);
 
     pendingRuns[0](completedResult);
     await first;
-    await flush();
+    await runsStarted(2);
     expect(runFlowMock).toHaveBeenCalledTimes(2);
     pendingRuns[1](completedResult);
     expect((await second).status).toBe('completed');
@@ -186,7 +208,7 @@ describe('SchedulerService overlap strategy (#121)', () => {
     const { execution } = await scheduler.create(input({ overlapStrategy: 'error' }));
 
     const p1 = scheduler.fire(execution!, { kind: 'schedule', summary: 'first' });
-    await flush();
+    await runsStarted(1);
 
     const second = await scheduler.fire(execution!, { kind: 'schedule', summary: 'second' });
     expect(second.status).toBe('error');
@@ -205,9 +227,9 @@ describe('SchedulerService overlap strategy (#121)', () => {
     const { execution } = await scheduler.create(input({ overlapStrategy: 'parallel' }));
 
     const p1 = scheduler.fire(execution!, { kind: 'schedule', summary: 'first' });
-    await flush();
+    await runsStarted(1);
     const p2 = scheduler.fire(execution!, { kind: 'schedule', summary: 'second' });
-    await flush();
+    await runsStarted(2);
 
     // Both runs are actually in flight.
     expect(runFlowMock).toHaveBeenCalledTimes(2);
@@ -230,10 +252,10 @@ describe('SchedulerService overlap strategy (#121)', () => {
     const { execution } = await scheduler.create(input({ overlapStrategy: 'queue' }));
 
     const p1 = scheduler.fire(execution!, { kind: 'schedule', summary: 'first' });
-    await flush();
+    await runsStarted(1);
     const p2 = scheduler.fire(execution!, { kind: 'schedule', summary: 'second' });
     const p3 = scheduler.fire(execution!, { kind: 'schedule', summary: 'third' });
-    await flush();
+    await firesQueued(2);
 
     // Only the first is running; the other two are queued.
     expect(runFlowMock).toHaveBeenCalledTimes(1);
@@ -257,13 +279,13 @@ describe('SchedulerService overlap strategy (#121)', () => {
 
     pendingRuns[0](completedResult);
     const r1 = await p1;
-    await flush();
+    await runsStarted(2);
     // Second dequeued and now running.
     expect(runFlowMock).toHaveBeenCalledTimes(2);
 
     pendingRuns[1](completedResult);
     const r2 = await p2;
-    await flush();
+    await runsStarted(3);
     // Third dequeued and now running.
     expect(runFlowMock).toHaveBeenCalledTimes(3);
 
@@ -289,7 +311,7 @@ describe('SchedulerService overlap strategy (#121)', () => {
 
     // First fire starts running; then fill the queue to its cap (50).
     void scheduler.fire(execution!, { kind: 'schedule', summary: 'running' });
-    await flush();
+    await runsStarted(1);
     for (let i = 0; i < 50; i++) {
       void scheduler.fire(execution!, { kind: 'schedule', summary: `q${i}` });
     }
@@ -306,11 +328,11 @@ describe('SchedulerService overlap strategy (#121)', () => {
     const { execution } = await scheduler.create(input({ overlapStrategy: 'skip' }));
 
     const p1 = scheduler.fire(execution!, { kind: 'schedule', summary: 'scheduled' });
-    await flush();
+    await runsStarted(1);
     expect(scheduler.isRunning(execution!.id)).toBe(true);
 
     const manual = scheduler.runNow(execution!.id);
-    await flush();
+    await runsStarted(2);
     // The manual run started concurrently despite the 'skip' policy.
     expect(runFlowMock).toHaveBeenCalledTimes(2);
 
@@ -349,9 +371,9 @@ describe('SchedulerService overlap strategy (#121)', () => {
     const id = execution!.id;
 
     const p1 = scheduler.fire(execution!, { kind: 'schedule', summary: 'first' });
-    await flush();
+    await runsStarted(1);
     const p2 = scheduler.fire(execution!, { kind: 'schedule', summary: 'second' });
-    await flush();
+    await firesQueued(1);
     // Only the first is running; the second is queued.
     expect(runFlowMock).toHaveBeenCalledTimes(1);
 
@@ -379,9 +401,9 @@ describe('SchedulerService overlap strategy (#121)', () => {
     const id = execution!.id;
 
     const p1 = scheduler.fire(execution!, { kind: 'schedule', summary: 'first' });
-    await flush();
+    await runsStarted(1);
     const p2 = scheduler.fire(execution!, { kind: 'schedule', summary: 'second' });
-    await flush();
+    await firesQueued(1);
     expect(runFlowMock).toHaveBeenCalledTimes(1);
 
     await scheduler.setPaused(true);
@@ -403,9 +425,9 @@ describe('SchedulerService overlap strategy (#121)', () => {
     const id = execution!.id;
 
     const p1 = scheduler.fire(execution!, { kind: 'schedule', summary: 'first' });
-    await flush();
+    await runsStarted(1);
     const p2 = scheduler.fire(execution!, { kind: 'schedule', summary: 'second' });
-    await flush();
+    await firesQueued(1);
     expect(runFlowMock).toHaveBeenCalledTimes(1);
 
     // Simulate the raced case: the execution disappears from storage WITHOUT
@@ -432,9 +454,9 @@ describe('SchedulerService overlap strategy (#121)', () => {
     const id = execution!.id;
 
     const p1 = scheduler.fire(execution!, { kind: 'schedule', summary: 'first' });
-    await flush();
+    await runsStarted(1);
     const p2 = scheduler.fire(execution!, { kind: 'schedule', summary: 'second' });
-    await flush();
+    await firesQueued(1);
     expect(runFlowMock).toHaveBeenCalledTimes(1);
 
     await scheduler.update(id, { prompt: 'NEW' });

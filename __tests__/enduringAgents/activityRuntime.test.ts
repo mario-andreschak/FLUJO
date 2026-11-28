@@ -23,6 +23,7 @@ import {
 } from '@/backend/services/enduringAgents';
 import { projectPersonaPresentation } from '@/backend/services/enduringAgents/personaPresentation';
 import { assertHeldPersonaActivityRead, readWithPersonaActivityLease, type HeldPersonaActivityRead } from '@/backend/services/enduringAgents/activityRuntime';
+import { _setPersonaRuntimeClockForTests } from '@/backend/services/enduringAgents/runtimeClock';
 import { createPersonaFromRole } from './fixtures/personaFactory';
 import { flowService } from '@/backend/services/flow';
 import { ENDURING_AGENT_COLLECTIONS } from '@/backend/services/enduringAgents/collections';
@@ -1417,6 +1418,81 @@ describe('enduring-agent Activity runtime', () => {
         return 'must-not-escape';
       })).rejects.toBeInstanceOf(PersonaLeaseLostError);
       expect((await getPersonaLeaseRecord(active.lease.id))?.status).toBe('expired');
+    });
+  });
+
+  it('lets a slow held read finish while its lease is fresh and stops a read at half the lease', async () => {
+    await inFreshWorkspace(async () => {
+      let wall = 50_000, monotonic = 0;
+      const previous = _setPersonaRuntimeClockForTests({
+        now: () => wall, monotonicNow: () => monotonic,
+        setTimer: (callback, ms) => { const timer = setTimeout(callback, ms); return { clear: () => clearTimeout(timer), unref: () => timer.unref() }; },
+        sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+      });
+      try {
+        const { persona } = await createJim('held-half-lease');
+        await enqueuePersonaMailboxItem(assignment(persona.id, 'held-half-lease'));
+        const active = await claim(persona.id, 30_000);
+        // A busy PC: 14 s pass inside one read, far beyond a fixed few-second hold.
+        await expect(readWithPersonaActivityLease(fence(active), async reader => {
+          await reader.assertCurrent();
+          wall += 14_000; monotonic += 14_000;
+          await reader.assertCurrent();
+          return 'slow read finished';
+        })).resolves.toBe('slow read finished');
+        // Half of the 30 s lease has passed since its last renewal: a check
+        // inside a running read yields to the heartbeat, and the lease stays active.
+        await expect(readWithPersonaActivityLease(fence(active), async reader => {
+          wall += 1_000; monotonic += 1_000;
+          await reader.assertCurrent();
+          return 'must-not-finish';
+        })).rejects.toBeInstanceOf(PersonaLeaseLostError);
+        expect((await getPersonaLeaseRecord(active.lease.id))?.status).toBe('active');
+      } finally { _setPersonaRuntimeClockForTests(previous); }
+    });
+  });
+
+  it('starts a held read late in the lease after the renewal instead of refusing it', async () => {
+    await inFreshWorkspace(async () => {
+      let wall = 50_000;
+      let waits = 0;
+      let waited: () => void = () => undefined;
+      const previous = _setPersonaRuntimeClockForTests({
+        now: () => wall, monotonicNow: () => wall,
+        setTimer: (callback, ms) => { const timer = setTimeout(callback, ms); return { clear: () => clearTimeout(timer), unref: () => timer.unref() }; },
+        sleep: ms => { waits += 1; waited(); return new Promise(resolve => setTimeout(resolve, ms)); },
+      });
+      const firstWait = () => new Promise<void>(resolve => { waited = resolve; });
+      try {
+        const { persona } = await createJim('held-late-start');
+        await enqueuePersonaMailboxItem(assignment(persona.id, 'held-late-start'));
+        const active = await claim(persona.id, 30_000);
+        // The heartbeat is late: the read waits outside the lock, the renewal
+        // gets the lock, and the read then runs with a whole window.
+        wall += 16_000;
+        let ran = false;
+        const sawWait = firstWait();
+        const read = readWithPersonaActivityLease(fence(active), async reader => {
+          ran = true;
+          await reader.assertCurrent();
+          return 'read after renewal';
+        });
+        await sawWait;
+        expect(ran).toBe(false);
+        await renewPersonaActivityLease({ ...fence(active), ttlMs: 30_000 });
+        await expect(read).resolves.toBe('read after renewal');
+
+        // No renewal ever comes: the wait ends when the lease really expires,
+        // which is refused and recorded like any other expiry.
+        wall += 16_000;
+        const sawSecondWait = firstWait();
+        const expiring = readWithPersonaActivityLease(fence(active), async () => 'must-not-run');
+        await sawSecondWait;
+        wall += 15_000;
+        await expect(expiring).rejects.toBeInstanceOf(PersonaLeaseLostError);
+        expect(waits).toBeGreaterThanOrEqual(2);
+        expect((await getPersonaLeaseRecord(active.lease.id))?.status).toBe('expired');
+      } finally { _setPersonaRuntimeClockForTests(previous); }
     });
   });
 
