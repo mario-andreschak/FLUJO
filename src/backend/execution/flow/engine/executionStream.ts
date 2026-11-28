@@ -58,7 +58,9 @@ export class ExecutionStreamAdmission {
         const release = this.reserve(conversationId);
         if (!release) throw STREAM_BUSY;
         return release;
-      }, { waitable: refusal => refusal === STREAM_BUSY, blocksAll: () => this.active >= this.limits.maxProcess }, options);
+      }, { waitable: refusal => refusal === STREAM_BUSY, blocksAll: () => this.active >= this.limits.maxProcess,
+        group: getCurrentWorkspace, blocksGroup: (_refusal, workspace) => (this.workspaces.get(workspace) ?? 0) >= this.limits.maxWorkspace },
+      options);
     } catch (refusal) {
       if (refusal === STREAM_BUSY) return undefined;
       throw refusal;

@@ -107,3 +107,45 @@ it('tries each waiter in its own async context, even when another caller frees c
   await waiting;
   expect(seen.at(-1)).toBe('waiter-workspace');
 });
+
+it('ends a full group\'s turn in a pass but still tries the other groups (a burst once retried every waiter)', async () => {
+  const queue = new CapacityWaitQueue();
+  const context = new AsyncLocalStorage<string>();
+  const free: Record<string, number> = { a: 0, b: 0 };
+  const attempts: string[] = [];
+  const take = () => {
+    const group = context.getStore()!;
+    attempts.push(group);
+    if (free[group] <= 0) throw new Busy(group);
+    free[group] -= 1;
+    return group;
+  };
+  const groupRules = { ...rules, group: () => context.getStore()!, blocksGroup: (_refusal: unknown, group: string) => free[group] <= 0 };
+  const waiting = ['a', 'a', 'a', 'b', 'b', 'a'].map(group =>
+    context.run(group, () => queue.acquire(take, groupRules, { deadline: Date.now() + 5000 })));
+  attempts.length = 0;
+  queue.wake();
+  expect(attempts).toEqual(['a', 'b']);
+  attempts.length = 0;
+  free.b = 2;
+  queue.wake();
+  expect(attempts).toEqual(['a', 'b', 'b']);
+  await expect(Promise.all(waiting.slice(3, 5))).resolves.toEqual(['b', 'b']);
+  free.a = 4;
+  queue.wake();
+  await expect(Promise.all([...waiting.slice(0, 3), waiting[5]])).resolves.toEqual(['a', 'a', 'a', 'a']);
+  expect(queue.size).toBe(0);
+});
+
+it('gives a waiter skipped behind its full group that group\'s refusal at the deadline', async () => {
+  const queue = new CapacityWaitQueue();
+  const refusal = new Busy('workspace full');
+  const groupRules = { ...rules, group: () => 'workspace', blocksGroup: () => true };
+  const first = queue.acquire(() => { throw refusal; }, groupRules, { deadline: Date.now() + 80 });
+  let tried = false;
+  const skipped = queue.acquire(() => { tried = true; throw new Busy('never built'); }, groupRules, { deadline: Date.now() + 40 });
+  await expect(skipped).rejects.toBe(refusal);
+  expect(tried).toBe(false);
+  await expect(first).rejects.toBe(refusal);
+  expect(queue.size).toBe(0);
+});

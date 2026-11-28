@@ -9,6 +9,11 @@ import { AsyncLocalStorage } from 'node:async_hooks';
  * timer retries too: memory pressure eases without any release announcing it,
  * and a missed wake can never strand a waiter. Each wait ends at its deadline
  * or when its caller aborts, with the last refusal it met.
+ *
+ * A refusal that holds for a whole group (one workspace is full) ends that
+ * group's turn in the current pass: its later waiters would only be refused
+ * the same way. Without this, every release retried every waiter, and a burst
+ * of 300 chats spent more time building refusals than running (#757).
  */
 export interface CapacityWaitOptions {
   /** `Date.now()` value after which the caller gets the last refusal. */
@@ -21,10 +26,14 @@ export interface CapacityRules {
   waitable: (refusal: unknown) => boolean;
   /** The refusal holds for every waiter (process memory), so later waiters need not try now. */
   blocksAll?: (refusal: unknown) => boolean;
+  /** The caller's group (its workspace), read in the caller's context when it starts waiting. */
+  group?: () => string;
+  /** The refusal holds for every waiter of `group`, so its later waiters need not try now. */
+  blocksGroup?: (refusal: unknown, group: string) => boolean;
 }
 
-type Attempt = 'settled' | 'waiting' | 'blocked';
-interface Waiter { attempt: () => Attempt }
+type Attempt = 'settled' | 'waiting' | 'blocked' | 'group-blocked';
+interface Waiter { attempt: () => Attempt; group?: string; refusal: unknown }
 
 const RETRY_MS = 250;
 
@@ -43,7 +52,8 @@ export class CapacityWaitQueue {
    */
   acquire<T>(attempt: () => T, rules: CapacityRules, options: CapacityWaitOptions): Promise<T> {
     const tryAcquire = AsyncLocalStorage.bind(attempt);
-    let lastRefusal: unknown;
+    const group = rules.group?.();
+    let firstRefusal: unknown;
     // Newcomers never overtake callers that are already waiting.
     if (this.waiters.size === 0) {
       try {
@@ -52,7 +62,7 @@ export class CapacityWaitQueue {
         if (!rules.waitable(refusal) || Date.now() >= options.deadline || options.signal?.aborted) {
           return Promise.reject(refusal);
         }
-        lastRefusal = refusal;
+        firstRefusal = refusal;
       }
     }
     return new Promise<T>((resolve, reject) => {
@@ -68,7 +78,7 @@ export class CapacityWaitQueue {
       const giveUp = () => {
         if (!this.waiters.has(waiter)) return;
         finish();
-        reject(lastRefusal ?? new Error('Capacity wait ended before any attempt.'));
+        reject(waiter.refusal ?? new Error('Capacity wait ended before any attempt.'));
       };
       const waiter: Waiter = {
         attempt: () => {
@@ -77,8 +87,9 @@ export class CapacityWaitQueue {
             value = tryAcquire();
           } catch (refusal) {
             if (rules.waitable(refusal)) {
-              lastRefusal = refusal;
-              return rules.blocksAll?.(refusal) ? 'blocked' : 'waiting';
+              waiter.refusal = refusal;
+              if (rules.blocksAll?.(refusal)) return 'blocked';
+              return group !== undefined && rules.blocksGroup?.(refusal, group) ? 'group-blocked' : 'waiting';
             }
             finish();
             reject(refusal);
@@ -88,6 +99,8 @@ export class CapacityWaitQueue {
           resolve(value);
           return 'settled';
         },
+        group,
+        refusal: firstRefusal,
       };
       const deadlineTimer = setTimeout(giveUp, Math.max(0, options.deadline - Date.now()));
       options.signal?.addEventListener('abort', giveUp, { once: true });
@@ -96,15 +109,24 @@ export class CapacityWaitQueue {
         this.retryTimer = setInterval(() => this.wake(), RETRY_MS);
         this.retryTimer.unref?.();
       }
-      if (lastRefusal === undefined) this.wake();
+      if (firstRefusal === undefined) this.wake();
       if (options.signal?.aborted) giveUp();
     });
   }
 
   /** Capacity was freed: admit every waiter that fits now, oldest first. */
   wake(): void {
+    let full: Map<string, unknown> | undefined;
     for (const waiter of [...this.waiters]) {
-      if (this.waiters.has(waiter) && waiter.attempt() === 'blocked') return;
+      if (!this.waiters.has(waiter)) continue;
+      if (waiter.group !== undefined && full?.has(waiter.group)) {
+        // Skipped, not forgotten: a wait that ends now reports why its group was full.
+        waiter.refusal = full.get(waiter.group);
+        continue;
+      }
+      const result = waiter.attempt();
+      if (result === 'blocked') return;
+      if (result === 'group-blocked') (full ??= new Map()).set(waiter.group!, waiter.refusal);
     }
   }
 }
