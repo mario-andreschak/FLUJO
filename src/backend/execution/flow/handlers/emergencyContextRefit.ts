@@ -38,6 +38,7 @@ function countOmitted(
 function notice(
   counts: EmergencyContextRefitResult['omitted'],
   receipts: string[],
+  sourceArchiveUri?: string,
 ): OpenAI.ChatCompletionAssistantMessageParam {
   const total = counts.assistant + counts.tool + counts.user + counts.other;
   return {
@@ -48,6 +49,9 @@ function notice(
       `Omitted: ${counts.tool} tool results, ${counts.assistant} assistant messages, ${counts.user} user messages, ${counts.other} other messages.`,
       'The canonical FLUJO conversation remains intact. This is a deterministic last-resort refit, not an AI-generated summary.',
       'Continue from the retained recent context.',
+      ...(sourceArchiveUri ? [
+        `Exact pre-refit context is archived at ${sourceArchiveUri}. Use read_resource with search_text or bounded ranges to recover earlier decisions and observations before acting; do not repeat past actions to reconstruct them.`,
+      ] : []),
       ...receipts,
     ].join('\n'),
   };
@@ -57,6 +61,7 @@ function materialize(
   messages: readonly OpenAI.ChatCompletionMessageParam[],
   omitted: ReadonlySet<number>,
   resourceMarkers?: Map<string, ToolResourceMarker>,
+  sourceArchiveUri?: string,
 ): OpenAI.ChatCompletionMessageParam[] {
   if (omitted.size === 0) return messages.slice();
   const leadingSystem: OpenAI.ChatCompletionMessageParam[] = [];
@@ -67,7 +72,7 @@ function materialize(
   }
   return [
     ...leadingSystem,
-    notice(countOmitted(messages, omitted), omittedReceipts(messages, omitted, resourceMarkers)),
+    notice(countOmitted(messages, omitted), omittedReceipts(messages, omitted, resourceMarkers), sourceArchiveUri),
     ...messages.slice(index).filter((_message, messageIndex) => !omitted.has(messageIndex + index)),
   ];
 }
@@ -220,6 +225,8 @@ export function emergencyRefitMessages(
     measure: (messages: readonly OpenAI.ChatCompletionMessageParam[]) => number;
     keepRecentMessages?: number;
     resourceMarkers?: Map<string, ToolResourceMarker>;
+    /** Exact durable pre-refit source, including omitted assistant decisions. */
+    sourceArchiveUri?: string;
   },
 ): EmergencyContextRefitResult {
   const target = Math.max(1, options.target);
@@ -242,7 +249,7 @@ export function emergencyRefitMessages(
   for (let offset = 0, batch = 1; offset < chunks.length; batch *= 2) {
     const end = Math.min(chunks.length, offset + batch);
     for (; offset < end; offset++) chunks[offset].indexes.forEach(index => omitted.add(index));
-    fitted = materialize(messages, omitted, options.resourceMarkers);
+    fitted = materialize(messages, omitted, options.resourceMarkers, options.sourceArchiveUri);
     if (options.measure(fitted) <= target) break;
   }
 
