@@ -487,7 +487,9 @@ describe('#756: what is left of the subscription, from a real run', () => {
   it('fails the turn at the limit, says why, and shows nothing left', async () => {
     const token = 'sk-ant-oat01-at-the-five-hour-limit';
     standIn.subscription = { fiveHour: 1, sevenDay: 0.5 };
-    await expect(turn([{ role: 'user', content: 'Hello there.' }], { apiKey: token })).rejects.toThrow(/limit/i);
+    // The error keeps the 429, so a fallback policy moves on to its next model.
+    await expect(turn([{ role: 'user', content: 'Hello there.' }], { apiKey: token })).rejects.toMatchObject({
+      message: expect.stringMatching(/limit/i), status: 429, headers: { 'retry-after': expect.stringMatching(/^\d+$/) } });
     expect(standIn.requests.at(-1)).toMatchObject({ status: 429 });
     expect(numbers(projected(token))).toEqual([['five_hour', 0], ['seven_day', 50]]);
   });

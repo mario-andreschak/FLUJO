@@ -101,6 +101,21 @@ const HANDOFF_STOP_WAIT_MS = 3_000;
  * `return()`, and the SDK's clean-up there waits up to two seconds for Claude
  * Code to exit. This wrapper starts that same clean-up and returns at once.
  */
+/**
+ * The error of a run Claude Code ended itself. It keeps the service's status,
+ * so a used-up plan window (429) reads as a rate limit to fallback policies,
+ * with the window's reset as its Retry-After.
+ */
+function claudeTerminalError(text: string, result: unknown, limitResetsAt: number | undefined): Error {
+  const { api_error_status: status, api_error: code } = (result ?? {}) as { api_error_status?: unknown; api_error?: unknown };
+  const waitSeconds = limitResetsAt === undefined ? undefined : Math.max(1, Math.ceil(limitResetsAt - Date.now() / 1000));
+  return Object.assign(new Error(text), {
+    ...(typeof status === 'number' ? { status } : {}),
+    ...(typeof code === 'string' ? { code } : {}),
+    ...(status === 429 && waitSeconds !== undefined ? { headers: { 'retry-after': String(waitSeconds) } } : {}),
+  });
+}
+
 function withoutExitWait<T>(source: AsyncIterable<T>): AsyncIterable<T> {
   return {
     [Symbol.asyncIterator]: () => {
@@ -1580,6 +1595,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
     // waiting out the subprocess teardown.
     let allowanceObservation: ReturnType<typeof collectClaudeAllowance> | undefined;
     const allowanceKey = allowanceAccountKey('claude', apiKey);
+    let limitResetsAt: number | undefined;
     let tracedFirstMessage = false;
     let tracedFirstDelta = false;
     const messageLoop = async (): Promise<void> => {
@@ -1641,6 +1657,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
         }
         if (message.type === 'rate_limit_event') {
           for (const allowanceSignal of claudeRateLimitSignals(message.rate_limit_info)) recordAllowanceSignal(allowanceKey, allowanceSignal);
+          if (message.rate_limit_info.status === 'rejected') limitResetsAt = message.rate_limit_info.resetsAt;
         }
         // Once cancelled, stop recording/streaming anything the detached loop
         // may still drain out of the dying subprocess.
@@ -1818,7 +1835,8 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             const reported = Array.isArray(errs) && errs.length ? errs.join('; ')
               : (message as { result?: string }).result?.trim();
             const detail = reported && apiKey ? reported.split(apiKey).join('[credential redacted]') : reported;
-            throw new Error(`Claude invocation incomplete: ${terminalReason}${detail ? ` (${detail.slice(0, 500)})` : ''}`);
+            throw claudeTerminalError(`Claude invocation incomplete: ${terminalReason}${detail ? ` (${detail.slice(0, 500)})` : ''}`,
+              message, limitResetsAt);
           }
           await nativeOriginalProcessHost?.observeSdkUsage(message);
           for (const denial of message.permission_denials ?? []) {
@@ -1834,7 +1852,7 @@ export class ClaudeSubscriptionAdapter implements CompletionAdapter {
             const rawDetail = Array.isArray(errs) && errs.length ? errs.join('; ')
               : errorResult?.trim() || (message.is_error ? 'SDK reported an error result' : message.subtype);
             const detail = apiKey ? rawDetail.split(apiKey).join('[credential redacted]') : rawDetail;
-            throw new Error(`Claude subscription run failed: ${detail}`);
+            throw claudeTerminalError(`Claude subscription run failed: ${detail}`, message, limitResetsAt);
           }
           await watcher.poll();
           if (attribution.settled && (queuedDelivery || activeDelivery)) await deliverySettled;

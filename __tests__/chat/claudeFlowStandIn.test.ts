@@ -15,6 +15,7 @@
  *         cache, the conversation keeps its instructions, and an edit applies
  *         to the next conversation
  *   #1092 a refused token ends the chat turn with an error, never an answer
+ *   #756  a fallback policy moves on when the first Claude login is at its limit
  *   #756  after the runs, the allowance bar of the model shows Claude's numbers
  */
 import fs from 'node:fs/promises';
@@ -42,6 +43,7 @@ type Body = { system?: unknown; messages: Array<{ role: string; content: unknown
 
 const TOKEN = 'sk-ant-oat01-flujo-flow-stand-in-not-a-token';
 const REFUSED = 'sk-ant-oat01-invalid-flow-stand-in';
+const AT_LIMIT = 'sk-ant-oat01-at-limit-flow-stand-in';
 const ENGLISH = 'Always answer in English.';
 const SPANISH = 'Responde siempre en español.';
 const ENV = ['FLUJO_DATA_DIR', 'FLUJO_ENCRYPTION_SECRET_FILE'] as const;
@@ -139,6 +141,7 @@ beforeAll(async () => {
   await fs.writeFile(secret, randomBytes(32).toString('base64url'));
   process.env.FLUJO_ENCRYPTION_SECRET_FILE = secret;
   standIn = await startAnthropicStandIn({ reply: planReply, subscription: { fiveHour: 0.12, sevenDay: 0.31 } });
+  standIn.subscriptionFor = credential => (credential.value === AT_LIMIT ? { fiveHour: 1, sevenDay: 0.5 } : undefined);
   queryMock.mockImplementation(relay.relayQuery);
 
   const { ensureWorkspaceDirs } = await import('@/utils/workspace');
@@ -146,12 +149,15 @@ beforeAll(async () => {
   const { saveCollectionItem } = await import('@/utils/storage/backend');
   await inWorkspace(async () => {
     await ensureWorkspaceDirs();
-    for (const [id, token] of [['claude-sub', TOKEN], ['claude-refused', REFUSED]]) {
+    for (const [id, token] of [['claude-sub', TOKEN], ['claude-refused', REFUSED], ['claude-at-limit', AT_LIMIT]]) {
       const saved = await modelService.addModel({ id, name: 'sonnet', displayName: id, provider: 'claude-subscription', adapter: 'claude-cli', ApiKey: token });
       expect(saved.success).toBe(true);
     }
+    const policy = await modelService.addModel({ id: 'claude-policy', name: 'policy/claude-first', displayName: 'claude-policy', ApiKey: '',
+      fallbackPolicy: { modelIds: ['claude-at-limit', 'claude-sub'], cooldownSeconds: 0 } });
+    expect(policy.success).toBe(true);
     for (const saved of [flow('PerTurnTickets', 'claude-sub', 'per-turn'), flow('StableTickets', 'claude-sub', 'stable'),
-      flow('RefusedTickets', 'claude-refused', 'stable')]) {
+      flow('RefusedTickets', 'claude-refused', 'stable'), flow('PolicyTickets', 'claude-policy', 'stable')]) {
       await saveCollectionItem('flows', saved.id, saved);
     }
   });
@@ -249,6 +255,18 @@ it('#1092: a refused token ends the chat turn with an error, and Claude Code\'s 
     const answers = (stored?.messages ?? []).filter(message => message.role === 'assistant').map(message => JSON.stringify(message.content));
     expect(answers.filter(text => /OAuth token has expired|Invalid API key/.test(text))).toEqual([]);
   }
+});
+
+it('#756 and #1092: a fallback policy answers with its next Claude login when the first one is at its limit', async () => {
+  await setLanguage(ENGLISH);
+  const routed = await chat('PolicyTickets', 'Remember ticket 77. Which ticket?');
+  expect(routed.answer).toBe('Your ticket is 77.');
+  expect(routed.requests.map(request => request.status)).toEqual([429, 200]);
+  const { GET } = await import('@/app/api/model/allowance/route');
+  const body = await (await GET(new NextRequest('http://localhost/api/model/allowance', { headers: { host: 'localhost' } }))).json() as {
+    models?: Array<{ modelId: string; windows: Array<{ id: string; remainingPercent: number | null }> }> };
+  const limited = body.models?.find(model => model.modelId === 'claude-at-limit');
+  expect(limited?.windows.map(window => [window.id, window.remainingPercent])).toEqual([['five_hour', 0], ['seven_day', 50]]);
 });
 
 it('#756: after a run, the allowance bar of the Claude model shows Claude\'s five-hour and weekly numbers', async () => {

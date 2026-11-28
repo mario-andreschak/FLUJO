@@ -292,7 +292,8 @@ const MODELS = Object.freeze([
  *                                   message, headers? } } or { hang: true } (stream that never ends).
  *                                   Default: one short text answer.
  *   subscription                    plan windows (subscriptionWindows options) for OAuth answers; may be
- *                                   changed between requests.
+ *                                   changed between requests. `subscriptionFor(credential)` on the
+ *                                   returned object may give one login its own windows.
  *   acceptedVersions                API versions this server knows; others get a 400 naming anthropic-version.
  *   requireCredential               refuse requests without a key or token (default true).
  *   refuses(credential)             credentials answered with 401 (default: any containing "invalid").
@@ -314,7 +315,8 @@ export async function startAnthropicStandIn({
   const requests = [];
   const cache = createPromptCache({ now });
   /** @type {{ baseUrl: string, requests: StandInRecord[], cache: ReturnType<typeof createPromptCache>,
-   *   subscription: StandInSubscription, usagePage: StandInUsagePage | undefined, acceptedVersions: string[],
+   *   subscription: StandInSubscription, subscriptionFor?: (credential: StandInCredential) => StandInSubscription | undefined,
+   *   usagePage: StandInUsagePage | undefined, acceptedVersions: string[],
    *   reply: StandInReplyFunction, refusesCredential: (credential: StandInCredential) => boolean, close: () => Promise<void> }} */
   const standIn = { baseUrl: '', requests, cache, subscription, usagePage, acceptedVersions, reply, refusesCredential: refuses,
     close: async () => undefined };
@@ -346,7 +348,8 @@ export async function startAnthropicStandIn({
         return;
       }
       if (request.method === 'GET' && url.pathname === '/api/oauth/usage') {
-        const page = standIn.usagePage ?? { status: 200, body: oauthUsageBody(subscriptionWindows({ ...standIn.subscription, now: now() })) };
+        const plan = standIn.subscriptionFor?.(credential) ?? standIn.subscription;
+        const page = standIn.usagePage ?? { status: 200, body: oauthUsageBody(subscriptionWindows({ ...plan, now: now() })) };
         if (page.status === 200) answer(200, page.body, page.headers);
         else refuse(page.status, page.status === 429 ? 'rate_limit_error' : page.status === 403 ? 'permission_error' : 'api_error', page.message ?? 'Usage is not available.', page.headers);
         return;
@@ -375,7 +378,7 @@ export async function startAnthropicStandIn({
       if (broken) { refuse(400, 'invalid_request_error', broken); return; }
       const charged = cache.charge(body);
       if (charged.error) { refuse(400, 'invalid_request_error', charged.error); return; }
-      const windows = subscriptionWindows({ ...standIn.subscription, now: now() });
+      const windows = subscriptionWindows({ ...(standIn.subscriptionFor?.(credential) ?? standIn.subscription), now: now() });
       const limitHeaders = credential.kind === 'oauth' ? unifiedRateLimitHeaders(windows) : apiKeyRateLimitHeaders({ now: now() });
       if (credential.kind === 'oauth' && limitHeaders['anthropic-ratelimit-unified-status'] === 'rejected') {
         const resetsAt = Number(limitHeaders['anthropic-ratelimit-unified-reset']);
