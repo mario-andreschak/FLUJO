@@ -1,6 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useCallback, useEffect, useRef, useState } from 'react';
+import { useLatest } from '@/frontend/hooks/useLatest';
 import { v4 as uuidv4 } from 'uuid';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import { TOUR_STEPS } from '@/frontend/components/Tour/tourSteps';
@@ -104,8 +105,7 @@ function webCapabilityScore(value: string): number {
 export const TourProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { settings, updateSettings, isLoading, settingsHydrated } = useStorage();
   const canStartTour = settingsHydrated && !isLoading;
-  const settingsRef = useRef(settings);
-  settingsRef.current = settings;
+  const settingsRef = useLatest(settings);
 
   const [isActive, setIsActive] = useState(false);
   const [stepIndex, setStepIndex] = useState(0);

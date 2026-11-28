@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useLatest } from '@/frontend/hooks/useLatest';
 
 /** Git state of a project folder, as reported by `/api/projects`. */
 export interface ProjectGitInfo {
@@ -93,8 +94,7 @@ export function useProjects(conversationId?: string | null): {
   const [state, setState] = useState<ProjectsState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const conversationRef = useRef(conversationId);
-  conversationRef.current = conversationId;
+  const conversationRef = useLatest(conversationId);
   // Identifies this instance's change events: it already holds the answer.
   const instanceRef = useRef({});
 

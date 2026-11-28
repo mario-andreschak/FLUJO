@@ -1,17 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useLatest } from './useLatest';
 
 // The only place UI code may start raw timers (lint rule flujo/no-raw-timers).
 // Each hook owns its timer and clears it on unmount, so timers cannot leak or pile up.
-
-function useLatest<T>(value: T) {
-  const ref = useRef(value);
-  useEffect(() => {
-    ref.current = value;
-  });
-  return ref;
-}
 
 /** Runs `callback` once, `delayMs` after the delay is set. `null` disarms it. A new `delayMs` or `restartKey` restarts it. */
 export function useTimeout(callback: () => void, delayMs: number | null, restartKey?: unknown): void {

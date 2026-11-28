@@ -138,6 +138,20 @@ export default defineConfig([
     },
   },
   {
+    // These files are generated from flujo-avatar and kept byte for byte
+    // (src/vendor/avatar/PROVENANCE.json, checked by
+    // __tests__/architecture/vendorAvatarProvenance.test.ts). Fix them in
+    // flujo-avatar and resync instead of editing the copy.
+    files: [
+      'src/vendor/avatar/client/Eyes.tsx',
+      'src/vendor/avatar/client/useNativeRouterVoice.ts',
+      'src/vendor/avatar/client/usePocketSpeech.ts',
+    ],
+    rules: {
+      'react-hooks/refs': 'off',
+    },
+  },
+  {
     files: ['src/**/*.{js,jsx,ts,tsx}'],
     ignores: ['src/utils/mcp/startupFailureHint.ts'],
     rules: {

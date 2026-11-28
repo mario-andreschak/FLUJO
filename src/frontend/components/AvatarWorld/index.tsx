@@ -50,7 +50,7 @@ export default function AvatarWorld({ voiceTransport }: { voiceTransport?: Nativ
   const requestVoice = useCallback((endpoint: Parameters<NativeVoiceTransport['request']>[0], init: RequestInit) =>
     voiceTransport ? voiceTransport.request(endpoint, init) : fetch(endpoint === 'voice' ? '/api/avatar/voice' : `/api/avatar/${endpoint}`, init), [voiceTransport]);
   useEffect(() => { setFlujoLocale(locale); }, [locale, setFlujoLocale]);
-  const panel = useWorldPanel(() => input.current?.focus(), locale);
+  const { iframeRef: panelFrame, ...panel } = useWorldPanel(() => input.current?.focus(), locale);
   const reload = useCallback(async () => {
     const generation = ++snapshotRequest.current;
     try {
@@ -204,7 +204,7 @@ export default function AvatarWorld({ voiceTransport }: { voiceTransport?: Nativ
     {resource && <ResourcePreview key={resource.id} object={resource} locale={locale} onClose={() => setResource(null)} onConversation={() => { panel.navigate(resource.href); setResource(null); }} />}
     {panel.src && <section className={styles.panel} data-open={panel.open} aria-label={c.inspect} aria-hidden={!panel.open} inert={!panel.open}>
       <div className={styles.panelHead}><span>FLUJO</span><button onClick={() => { panel.close(); void reload(); input.current?.focus(); }} aria-label={c.close}>×</button></div>
-      <iframe ref={panel.iframeRef} src={panel.src} data-flujo-avatar-panel="true" title={c.inspect} />
+      <iframe ref={panelFrame} src={panel.src} data-flujo-avatar-panel="true" title={c.inspect} />
     </section>}
     {setup && <div className={styles.scrim}><ConnectionSetup locale={locale} onClose={() => setSetup(false)} onVerified={async () => { work.newChat(); setVoiceMessages([]); offered.current.clear(); await reload(); setExploring(false); }} onOther={() => { setSetup(false); panel.navigate('/models'); }} /></div>}
   </div>;

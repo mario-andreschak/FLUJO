@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useLayoutEffect, useRef } from 'react';
 import { mcpService } from '@/frontend/services/mcp';
 import { createLogger } from '@/utils/logger';
 import type { MCPToolResponse } from '@/shared/types/mcp';
@@ -38,14 +38,16 @@ export function useServerTools(serverName: string | null) {
     toolCount: number;
   } | null>(null);
 
-  // Invalidate requests as soon as a render selects a different server. This
-  // prevents a completion from an earlier A -> B -> A request from taking
-  // ownership again just because the server names happen to match.
-  if (selectedServerRef.current !== serverName) {
+  // Invalidate requests as soon as a different server is committed, before any
+  // effect loads tools for it. This prevents a completion from an earlier
+  // A -> B -> A request from taking ownership again just because the server
+  // names happen to match.
+  useLayoutEffect(() => {
+    if (selectedServerRef.current === serverName) return;
     selectedServerRef.current = serverName;
     requestGenerationRef.current += 1;
     lastRefreshRef.current = null;
-  }
+  }, [serverName]);
 
   useEffect(() => {
     mountedRef.current = true;

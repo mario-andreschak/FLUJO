@@ -402,21 +402,8 @@
     "flujo/no-raw-timers": {
       "count": 1
     },
-    "react-hooks/refs": {
-      "count": 4
-    },
     "react-hooks/set-state-in-effect": {
       "count": 3
-    }
-  },
-  "src/frontend/components/AvatarWorld/useAvatarWork.ts": {
-    "react-hooks/refs": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/AvatarWorld/useWorldPanel.ts": {
-    "react-hooks/refs": {
-      "count": 2
     }
   },
   "src/frontend/components/BugReport/BugReportButton.tsx": {
@@ -1139,9 +1126,6 @@
     }
   },
   "src/frontend/components/mcp/MCPServerManager/Modals/ServerModal/tabs/MarketplaceTab/index.tsx": {
-    "react-hooks/refs": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
@@ -1191,17 +1175,11 @@
     "flujo/no-double-cast": {
       "count": 1
     },
-    "react-hooks/refs": {
-      "count": 2
-    },
     "react-hooks/set-state-in-effect": {
       "count": 2
     }
   },
   "src/frontend/components/mcp/McpSecurityReviewPanel.tsx": {
-    "react-hooks/refs": {
-      "count": 2
-    },
     "react-hooks/set-state-in-effect": {
       "count": 2
     }
@@ -1245,20 +1223,12 @@
       "count": 2
     }
   },
-  "src/frontend/contexts/AskFlujoContext.tsx": {
-    "react-hooks/refs": {
-      "count": 2
-    }
-  },
   "src/frontend/contexts/I18nContext.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
   "src/frontend/contexts/TourContext.tsx": {
-    "react-hooks/refs": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 3
     }
@@ -1278,9 +1248,6 @@
   },
   "src/frontend/hooks/useProjects.ts": {
     "flujo/no-raw-timers": {
-      "count": 1
-    },
-    "react-hooks/refs": {
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
@@ -1309,9 +1276,6 @@
   "src/frontend/hooks/useServerTools.ts": {
     "flujo/no-raw-timers": {
       "count": 1
-    },
-    "react-hooks/refs": {
-      "count": 5
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -1362,23 +1326,8 @@
       "count": 1
     }
   },
-  "src/vendor/avatar/client/Eyes.tsx": {
-    "react-hooks/refs": {
-      "count": 1
-    }
-  },
   "src/vendor/avatar/client/nativeRouterPlayback.ts": {
     "flujo/no-double-cast": {
-      "count": 1
-    }
-  },
-  "src/vendor/avatar/client/useNativeRouterVoice.ts": {
-    "react-hooks/refs": {
-      "count": 6
-    }
-  },
-  "src/vendor/avatar/client/usePocketSpeech.ts": {
-    "react-hooks/refs": {
       "count": 1
     }
   }

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useLatest } from '@/frontend/hooks/useLatest';
 import { Alert, Box, Button, Checkbox, FormControlLabel, Stack, TextField, Typography } from '@mui/material';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { getSelectedWorkspace, onWorkspaceChanged, withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
@@ -93,12 +94,10 @@ export default function McpModelRiskAssessmentPanel({ repositoryUrl, active = tr
   const { t } = useI18n();
   const headingId = useId();
   const target = repositoryTarget(repositoryUrl);
-  const currentUrl = useRef(repositoryUrl);
-  currentUrl.current = repositoryUrl;
+  const currentUrl = useLatest(repositoryUrl);
   const modelsRequest = useRef<AbortController | null>(null);
   const reviewRequest = useRef<AbortController | null>(null);
-  const activeRef = useRef(active);
-  activeRef.current = active;
+  const activeRef = useLatest(active);
   const [state, setState] = useState<PanelState | null>(null);
   const abort = useCallback(() => {
     modelsRequest.current?.abort(); modelsRequest.current = null;

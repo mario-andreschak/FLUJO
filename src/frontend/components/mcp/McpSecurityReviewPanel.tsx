@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useId, useRef, useState } from 'react';
+import { useLatest } from '@/frontend/hooks/useLatest';
 import { Alert, Box, Button, Stack, Typography } from '@mui/material';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { getSelectedWorkspace, onWorkspaceChanged, withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
@@ -41,11 +42,9 @@ export default function McpSecurityReviewPanel({ repositoryUrl, active = true }:
   const { t } = useI18n();
   const headingId = useId();
   const target = repositoryTarget(repositoryUrl);
-  const currentUrl = useRef(repositoryUrl);
-  currentUrl.current = repositoryUrl;
+  const currentUrl = useLatest(repositoryUrl);
   const request = useRef<AbortController | null>(null);
-  const activeRef = useRef(active);
-  activeRef.current = active;
+  const activeRef = useLatest(active);
   const [state, setState] = useState<{
     url: string; workspace: string; pending?: boolean; review?: McpSecurityReview;
   } | null>(null);

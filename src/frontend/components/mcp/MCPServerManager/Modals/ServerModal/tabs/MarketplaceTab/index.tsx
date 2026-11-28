@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useLatest } from '@/frontend/hooks/useLatest';
 import { TabProps, MessageState } from '../../types';
 import {
   RegistryListResponse,
@@ -100,8 +101,7 @@ const MarketplaceTab: React.FC<TabProps & { active?: boolean }> = ({
   // Monotonic id so stale fetch responses (rapid re-searches) can't clobber newer ones
   const fetchIdRef = useRef(0);
   const fetchRequest = useRef<AbortController | null>(null);
-  const activeRef = useRef(active);
-  activeRef.current = active;
+  const activeRef = useLatest(active);
   const cancelFetch = useCallback(() => {
     fetchIdRef.current++;
     fetchRequest.current?.abort();
