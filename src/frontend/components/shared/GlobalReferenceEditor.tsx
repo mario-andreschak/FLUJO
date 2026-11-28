@@ -45,6 +45,8 @@ import { extractUiResourceUri, isMcpAppMimeType, isUiResourceUri } from '@/share
 import { getSelectedWorkspace } from '@/frontend/utils/workspaceSelection';
 import './PromptBuilder/promptBuilder.css';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
+import { useDebouncedValue, useLater } from '@/frontend/hooks/timing';
 
 export interface GlobalReferenceEditorRef {
   insertText: (text: string) => void;
@@ -393,6 +395,14 @@ const insertReference = (editor: Editor, ref: PromptRef) => {
   Transforms.move(editor);
 };
 
+/** Swaps the whole document, as Slate documents for a value set from outside. `caretAtEnd` keeps a caret for a focused editor. */
+const replaceEditorContent = (editor: Editor, nodes: Descendant[], caretAtEnd: boolean) => {
+  editor.children = nodes;
+  const end = Editor.end(editor, []);
+  editor.selection = caretAtEnd ? { anchor: end, focus: end } : null;
+  editor.onChange();
+};
+
 const replaceCompletedGlobalBeforeCaret = (editor: Editor) => {
   if (!editor.selection || !Range.isCollapsed(editor.selection)) return;
   const point = editor.selection.anchor;
@@ -526,9 +536,8 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
   const { t } = useI18n();
   const editor = useMemo(() => withHistory(withReferencePills(withReact(createEditor()))), []);
   const initialValue = useMemo(() => deserializeReferenceValue(value || ''), []);
-  const [activeCompletion, setActiveCompletion] = useState<ActiveCompletion | null>(null);
+  const [completionState, setActiveCompletion] = useState<ActiveCompletion | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
-  const [revision, setRevision] = useState(0);
   const applyingExternalValue = useRef(false);
   const [enhancedSuggestions, setEnhancedSuggestions] = useState<PromptReferenceSuggestion[]>([]);
   const [configuredRoots, setConfiguredRoots] = useState<string[]>([]);
@@ -539,7 +548,7 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
   useEffect(() => {
     // Entity/app discovery can fan out to several services. Load it on the
     // first ordinary `@` completion instead of on every mounted prompt field.
-    if (!enhancedHitlist || activeCompletion?.mode !== 'at') return;
+    if (!enhancedHitlist || completionState?.mode !== 'at') return;
     let cancelled = false;
     void loadEnhancedHitlist().then((result) => {
       if (cancelled) return;
@@ -547,7 +556,7 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
       setConfiguredRoots(result.roots);
     });
     return () => { cancelled = true; };
-  }, [activeCompletion?.mode, enhancedHitlist]);
+  }, [completionState?.mode, enhancedHitlist]);
   const pickerSuggestions = useMemo(() => {
     const globals = globalNames.map((name) => createPromptReferenceSuggestion(
       { kind: 'global', server: '', name },
@@ -560,6 +569,24 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
     () => suggestions ? new Set(pickerSuggestions.map((item) => item.value)) : null,
     [pickerSuggestions, suggestions],
   );
+
+  // An open picker shows the cached entities and the remote content/file results
+  // as they arrive, and drops stale remote matches when a later query has none,
+  // without requiring another editor keystroke.
+  const activeCompletion = useMemo(() => {
+    if (!completionState) return null;
+    const parsed = parseHitlistQuery(completionState.query);
+    const remote = completionState.mode === 'at'
+      && (parsed.scope === 'conversation' || parsed.scope === 'file' || parsed.scope === 'folder')
+      ? asyncSuggestions
+      : [];
+    const items = completionState.mode === 'at'
+      ? selectHitlistSuggestions([...pickerSuggestions, ...remote], completionState.query)
+      : filterReferenceSuggestions(pickerSuggestions.filter(item => item.kind === 'global'), completionState.query);
+    const unchanged = completionState.items.length === items.length
+      && completionState.items.every((item, index) => item.value === items[index]?.value);
+    return unchanged ? completionState : { ...completionState, items };
+  }, [asyncSuggestions, completionState, pickerSuggestions]);
 
   const updateCompletion = useCallback(() => {
     if (!editor.selection || !Range.isCollapsed(editor.selection)) {
@@ -594,80 +621,58 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
     });
   }, [editor, pickerSuggestions]);
 
+  const remoteQuery = enhancedHitlist && activeCompletion?.mode === 'at' ? parseHitlistQuery(activeCompletion.query) : null;
+  const remoteSearchApplies = Boolean(remoteQuery
+    && (remoteQuery.scope === 'conversation' || remoteQuery.scope === 'file' || remoteQuery.scope === 'folder')
+    && remoteQuery.query.trim());
+  useResetOnChange(remoteSearchApplies, (applies) => {
+    if (!applies) setAsyncSuggestions([]);
+  });
+  // Remote search starts once the query has stopped changing for 160 ms.
+  const remoteSearch = remoteSearchApplies && remoteQuery ? JSON.stringify([remoteQuery.scope, remoteQuery.query]) : null;
+  const settledRemoteSearch = useDebouncedValue(remoteSearch, 160);
   useEffect(() => {
-    if (!enhancedHitlist || activeCompletion?.mode !== 'at') {
-      setAsyncSuggestions([]);
-      return;
-    }
-    const parsed = parseHitlistQuery(activeCompletion.query);
-    if ((parsed.scope !== 'conversation' && parsed.scope !== 'file' && parsed.scope !== 'folder') || !parsed.query.trim()) {
-      setAsyncSuggestions([]);
-      return;
-    }
+    const parsed = remoteQuery;
+    if (!remoteSearch || settledRemoteSearch !== remoteSearch || !parsed) return;
     let cancelled = false;
-    const timer = window.setTimeout(() => {
-      if (parsed.scope === 'conversation') {
-        void chatService.listConversationPage({ limit: 50, search: parsed.query, dimension: 'content' })
-          .then((page) => page.items.map((conversation) => ({
-            kind: 'mention' as const,
-            server: '',
-            name: conversation.id,
-            label: conversation.title,
-            value: encodeDynamicReference('conversation', conversation.id),
-            description: conversation.id,
-            // The backend matched this query against message content. Preserve
-            // that match when the shared fuzzy filter ranks the returned rows.
-            searchText: parsed.query,
-            category: 'conversation' as const,
-          })))
-          .then((items) => { if (!cancelled) setAsyncSuggestions(items); })
-          .catch(() => { if (!cancelled) setAsyncSuggestions([]); });
-        return;
-      }
-      const roots = workspaceRoots?.length ? workspaceRoots : configuredRoots;
-      const params = new URLSearchParams({ q: parsed.query });
-      if (roots.length > 0) params.set('roots', JSON.stringify(roots));
-      void fetch(`/api/reference-search/files?${params.toString()}`)
-        .then((response) => response.ok ? response.json() : { items: [] })
-        .then((result) => (Array.isArray(result.items) ? result.items : []).map((item: { path: string; name: string; isDirectory: boolean }) => ({
+    if (parsed.scope === 'conversation') {
+      void chatService.listConversationPage({ limit: 50, search: parsed.query, dimension: 'content' })
+        .then((page) => page.items.map((conversation) => ({
           kind: 'mention' as const,
           server: '',
-          name: item.path,
-          label: item.name,
-          value: encodeDynamicReference(item.isDirectory ? 'folder' : 'file', item.path),
-          description: item.path,
-          category: item.isDirectory ? 'folder' as const : 'file' as const,
+          name: conversation.id,
+          label: conversation.title,
+          value: encodeDynamicReference('conversation', conversation.id),
+          description: conversation.id,
+          // The backend matched this query against message content. Preserve
+          // that match when the shared fuzzy filter ranks the returned rows.
+          searchText: parsed.query,
+          category: 'conversation' as const,
         })))
         .then((items) => { if (!cancelled) setAsyncSuggestions(items); })
         .catch(() => { if (!cancelled) setAsyncSuggestions([]); });
-    }, 160);
-    return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [activeCompletion?.mode, activeCompletion?.query, configuredRoots, enhancedHitlist, workspaceRoots]);
-
-  // Refresh an already-open picker when cached entities or async content/file
-  // results arrive. This also clears stale remote matches when a later query has
-  // no results, without requiring another editor keystroke.
-  useEffect(() => {
-    if (!activeCompletion) return;
-    const parsed = parseHitlistQuery(activeCompletion.query);
-    const remote = activeCompletion.mode === 'at'
-      && (parsed.scope === 'conversation' || parsed.scope === 'file' || parsed.scope === 'folder')
-      ? asyncSuggestions
-      : [];
-    const items = activeCompletion.mode === 'at'
-      ? selectHitlistSuggestions([...pickerSuggestions, ...remote], activeCompletion.query)
-      : filterReferenceSuggestions(pickerSuggestions.filter(item => item.kind === 'global'), activeCompletion.query);
-    setActiveCompletion((current) => {
-      if (!current
-        || current.mode !== activeCompletion.mode
-        || current.query !== activeCompletion.query
-        || current.items.length === items.length
-          && current.items.every((item, index) => item.value === items[index]?.value)) {
-        return current;
-      }
-      return { ...current, items };
-    });
-  }, [activeCompletion?.mode, activeCompletion?.query, asyncSuggestions, pickerSuggestions]);
+      return () => { cancelled = true; };
+    }
+    const roots = workspaceRoots?.length ? workspaceRoots : configuredRoots;
+    const params = new URLSearchParams({ q: parsed.query });
+    if (roots.length > 0) params.set('roots', JSON.stringify(roots));
+    void (async () => {
+      const response = await fetch(`/api/reference-search/files?${params.toString()}`);
+      return response.ok ? response.json() : { items: [] };
+    })()
+      .then((result) => (Array.isArray(result.items) ? result.items : []).map((item: { path: string; name: string; isDirectory: boolean }) => ({
+        kind: 'mention' as const,
+        server: '',
+        name: item.path,
+        label: item.name,
+        value: encodeDynamicReference(item.isDirectory ? 'folder' : 'file', item.path),
+        description: item.path,
+        category: item.isDirectory ? 'folder' as const : 'file' as const,
+      })))
+      .then((items) => { if (!cancelled) setAsyncSuggestions(items); })
+      .catch(() => { if (!cancelled) setAsyncSuggestions([]); });
+    return () => { cancelled = true; };
+  }, [configuredRoots, remoteSearch, settledRemoteSearch, workspaceRoots]);
 
   const chooseSuggestion = useCallback((item: PromptReferenceSuggestion) => {
     if (!activeCompletion) return;
@@ -701,6 +706,7 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
     focus: safeFocus,
   }), [editor, onChange, safeFocus]);
 
+  const refocusLater = useLater();
   useEffect(() => {
     const current = serializeReferenceValue(editor.children as Descendant[]);
     const normalized = serializeReferenceValue(deserializeReferenceValue(value || ''));
@@ -711,23 +717,19 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
     // the end of the new content instead.
     const wasFocused = ReactEditor.isFocused(editor);
     applyingExternalValue.current = true;
-    editor.children = deserializeReferenceValue(value || '') as typeof editor.children;
-    const end = Editor.end(editor, []);
-    editor.selection = wasFocused ? { anchor: end, focus: end } : null;
-    editor.onChange();
-    setRevision((currentRevision) => currentRevision + 1);
+    replaceEditorContent(editor, deserializeReferenceValue(value || ''), wasFocused);
     if (!wasFocused) return;
     // Slate writes the DOM selection in a layout effect; refocus afterwards so the
     // caret is actually visible and the next keystroke lands in the editor.
-    const frame = requestAnimationFrame(() => {
+    refocusLater(() => {
       try {
         ReactEditor.focus(editor);
       } catch {
         /* editor unmounted or detached — nothing to focus */
       }
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [editor, value]);
+    }, 'frame');
+    return refocusLater.cancel;
+  }, [editor, refocusLater, value]);
 
   const handleChange = useCallback((nodes: Descendant[]) => {
     if (applyingExternalValue.current) {
@@ -855,7 +857,7 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
   const editorMaxHeight = maxRows ? `${Math.max(minRows, maxRows) * lineHeight}em` : undefined;
 
   return (
-    <Box sx={{ position: 'relative', width: '100%', ...containerSx }} data-revision={revision}>
+    <Box sx={{ position: 'relative', width: '100%', ...containerSx }}>
       <Box
         className={bare ? 'global-reference-editor bare' : 'global-reference-editor'}
         // Clicks that land on the frame's padding (not on the text line itself) used to

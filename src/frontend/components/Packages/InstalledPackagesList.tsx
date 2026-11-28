@@ -66,6 +66,12 @@ interface UninstallSummary {
  * Uninstall action (with a confirm dialog) that reverses a package install,
  * deleting only entities the install created and preserving adopted ones.
  */
+async function readInstalledPackages(failedMessage: (status: number) => string): Promise<{ packages: InstalledPackage[] }> {
+  const res = await fetch('/api/packages/installed');
+  if (!res.ok) throw new Error(failedMessage(res.status));
+  return (await res.json()) as { packages: InstalledPackage[] };
+}
+
 export default function InstalledPackagesList() {
   const { t, tp, formatDate, formatNumber } = useI18n();
   const [packages, setPackages] = useState<InstalledPackage[]>([]);
@@ -97,25 +103,24 @@ export default function InstalledPackagesList() {
     });
   }, []);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch('/api/packages/installed');
-      if (!res.ok) throw new Error(t('packages.installed.loadFailed', { status: res.status }));
-      const data = (await res.json()) as { packages: InstalledPackage[] };
-      setPackages(data.packages ?? []);
-    } catch (err) {
+  /** Fetches the installed packages; the list starts loading, and load shows it again. */
+  const fetchInstalled = useCallback(() => readInstalledPackages((status) => t('packages.installed.loadFailed', { status }))
+    .then((data) => setPackages(data.packages ?? []))
+    .catch((err) => {
       log.warn('Failed to load installed packages', err);
       setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [t]);
+    })
+    .finally(() => setLoading(false)), [t]);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    return fetchInstalled();
+  }, [fetchInstalled]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void fetchInstalled();
+  }, [fetchInstalled]);
 
   const uninstall = useCallback(async (pkg: InstalledPackage, plan?: PackageUninstallPlan) => {
     setBusy(true);

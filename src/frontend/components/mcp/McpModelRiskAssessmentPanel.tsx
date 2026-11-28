@@ -1,11 +1,14 @@
 'use client';
 
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useLatest } from '@/frontend/hooks/useLatest';
 import { Alert, Box, Button, Checkbox, FormControlLabel, Stack, TextField, Typography } from '@mui/material';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { getSelectedWorkspace, onWorkspaceChanged, withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import { supportsMcpModelRiskAssessment, type McpModelRiskAssessment } from '@/shared/mcpModelRiskAssessment';
 import type { Model } from '@/shared/types/model';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
+import { isModelAdapter, isModelProvider } from '@/shared/types/model/provider';
 
 function repositoryTarget(value: string): string | null {
   try {
@@ -77,7 +80,15 @@ function eligibleModels(value: unknown): Choice[] {
   return value.flatMap(model => {
     if (!record(model) || !text(model.id, 256) || !text(model.name, 256)
       || (model.outputModalities !== undefined && (!Array.isArray(model.outputModalities) || !model.outputModalities.every(item => typeof item === 'string')))
-      || !supportsMcpModelRiskAssessment(model as unknown as Model) || seen.has(String(model.id))) return [];
+      // A provider or adapter FLUJO does not know is never a supported text model.
+      || (model.provider !== undefined && !isModelProvider(model.provider))
+      || (model.adapter !== undefined && !isModelAdapter(model.adapter))
+      || !supportsMcpModelRiskAssessment({
+        provider: isModelProvider(model.provider) ? model.provider : undefined,
+        adapter: isModelAdapter(model.adapter) ? model.adapter : undefined,
+        outputModalities: model.outputModalities,
+        fallbackPolicy: model.fallbackPolicy,
+      }) || seen.has(String(model.id))) return [];
     seen.add(String(model.id));
     return [{ id: String(model.id), name: String(model.displayName || model.name).slice(0, 256) }];
   });
@@ -93,30 +104,31 @@ export default function McpModelRiskAssessmentPanel({ repositoryUrl, active = tr
   const { t } = useI18n();
   const headingId = useId();
   const target = repositoryTarget(repositoryUrl);
-  const currentUrl = useRef(repositoryUrl);
-  currentUrl.current = repositoryUrl;
+  const currentUrl = useLatest(repositoryUrl);
   const modelsRequest = useRef<AbortController | null>(null);
   const reviewRequest = useRef<AbortController | null>(null);
-  const activeRef = useRef(active);
-  activeRef.current = active;
+  const activeRef = useLatest(active);
   const [state, setState] = useState<PanelState | null>(null);
   const abort = useCallback(() => {
     modelsRequest.current?.abort(); modelsRequest.current = null;
     reviewRequest.current?.abort(); reviewRequest.current = null;
   }, []);
+  useResetOnChange(repositoryUrl, () => setState(null));
   useEffect(() => {
-    setState(null);
     const unsubscribe = onWorkspaceChanged(() => { abort(); setState(null); });
     return () => { unsubscribe(); abort(); };
   }, [abort, repositoryUrl]);
-  useEffect(() => {
-    if (active) return;
-    abort();
+  // Hiding the panel stops its requests and shows them as cancelled.
+  useResetOnChange(active, (isActive) => {
+    if (isActive) return;
     setState(previous => previous && (previous.loading || previous.pending) ? {
       ...previous, loading: false, pending: false,
       loadError: previous.loading || previous.loadError,
       review: previous.pending ? { status: 'cancelled' } : previous.review,
     } : previous);
+  });
+  useEffect(() => {
+    if (!active) abort();
   }, [abort, active]);
   const visible = state?.url === repositoryUrl && state.workspace === getSelectedWorkspace() ? state : null;
 

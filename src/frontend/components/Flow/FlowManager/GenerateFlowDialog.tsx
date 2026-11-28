@@ -155,15 +155,18 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
     };
   }, [open, t]);
 
-  useEffect(() => {
-    if (!open) return;
-    setWireMessages([]);
-    setDraft(null);
-    setAllowInstall(false);
-    setMaxDepth(DEFAULT_SUBFLOW_DEPTH);
-    dispatchVisual({ type: 'reset' });
-    setError(null);
-  }, [open]);
+  const [wasOpen, setWasOpen] = useState(false);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) {
+      setWireMessages([]);
+      setDraft(null);
+      setAllowInstall(false);
+      setMaxDepth(DEFAULT_SUBFLOW_DEPTH);
+      dispatchVisual({ type: 'reset' });
+      setError(null);
+    }
+  }
 
   const visibleMessages = useMemo(() => displayMessages(wireMessages), [wireMessages]);
 
@@ -198,6 +201,7 @@ const GenerateFlowDialog = ({ open, onClose, onGenerated }: GenerateFlowDialogPr
             || event.type === 'step-added'
             || event.type === 'suggestion-decision';
           if (animate && process.env.NODE_ENV !== 'test') {
+            // eslint-disable-next-line flujo/no-raw-timers -- paces the live build animation: the stream reader waits for each step to show, and a hook cannot be awaited
             await new Promise((resolve) => window.setTimeout(resolve, 140));
           }
         }, controller.signal);

@@ -71,6 +71,7 @@ import {
 } from '@/utils/shared/packageRename';
 import { createLogger } from '@/utils/logger';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
 
 const log = createLogger('frontend/components/Packages/PackageInstallWizard');
 
@@ -116,9 +117,9 @@ export default function PackageInstallWizard({
   onClose,
   onInstalled,
 }: PackageInstallWizardProps) {
-  const { t, tp, formatNumber, formatList } = useI18n();
+  const { t, tp, formatNumber, formatList, locale } = useI18n();
 
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(open);
   const [installing, setInstalling] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<InstallSummary | null>(null);
@@ -199,9 +200,9 @@ export default function PackageInstallWizard({
   );
 
   // --- load the side-effect free preview ------------------------------------
-  useEffect(() => {
+  // Opening the wizard for a package starts over from a fresh preview.
+  const startOver = () => {
     if (!open) return;
-    let cancelled = false;
     setLoading(true);
     setError(null);
     setPreview(null);
@@ -217,7 +218,12 @@ export default function PackageInstallWizard({
     setExpandedFlow(null);
     setRenameRules({ flows: { mode: 'none' }, plannedExecutions: { mode: 'none' } });
     setRenameOverrides({ flows: {}, plannedExecutions: {} });
-
+  };
+  useResetOnChange(open ? JSON.stringify([packageId, version ?? null]) : null, startOver);
+  useResetOnChange(locale, startOver);
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
     void packageService
       .installFromRegistry({ packageId, ...(version ? { version } : {}), consentGranted: false })
       .then((summary) => {

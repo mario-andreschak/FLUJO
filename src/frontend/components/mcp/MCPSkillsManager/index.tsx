@@ -29,6 +29,7 @@ import {
   subscribeMcpSkillSession,
 } from '@/frontend/services/mcp/skillSessionStore';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
 
 interface Props {
   serverName: string;
@@ -38,6 +39,22 @@ interface Props {
 function manifestDigest(entry: McpSkillEntry): McpSkillDigest | undefined {
   if (entry.resources === 'dynamic') return undefined;
   return entry.resources.find((resource) => resource.uri === entry.uri)?.digest;
+}
+
+/** Lists every page of a server's skills. `complete` is false when a later page failed. */
+async function listAllServerSkills(serverName: string): Promise<{ result: McpServerSkillsResult; complete: boolean }> {
+  const first = await mcpService.listServerSkills(serverName);
+  const skills = [...first.skills];
+  let cursor = first.nextCursor;
+  const seen = new Set<string>();
+  while (cursor && !seen.has(cursor) && skills.length <= 1024) {
+    seen.add(cursor);
+    const page = await mcpService.listServerSkills(serverName, cursor);
+    if (page.error) return { result: { ...first, skills, error: page.error }, complete: false };
+    skills.push(...page.skills);
+    cursor = page.nextCursor;
+  }
+  return { result: { ...first, skills, nextCursor: cursor }, complete: true };
 }
 
 /**
@@ -51,7 +68,7 @@ const MCPSkillsManager: React.FC<Props> = ({ serverName, conversationId }) => {
   );
   const effectiveConversationId = conversationId ?? activeConversationId ?? undefined;
   const [result, setResult] = useState<McpServerSkillsResult | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [loadingUri, setLoadingUri] = useState<string | null>(null);
   const [loaded, setLoaded] = useState<Map<string, McpLoadedSkill>>(new Map());
 
@@ -62,28 +79,13 @@ const MCPSkillsManager: React.FC<Props> = ({ serverName, conversationId }) => {
     return subscribeMcpSkillSession(sync);
   }, [conversationId]);
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
+  const refresh = useCallback(() => {
     mcpService.clearSkillsCache(serverName);
-    try {
-      const first = await mcpService.listServerSkills(serverName);
-      const skills = [...first.skills];
-      let cursor = first.nextCursor;
-      const seen = new Set<string>();
-      while (cursor && !seen.has(cursor) && skills.length <= 1024) {
-        seen.add(cursor);
-        const page = await mcpService.listServerSkills(serverName, cursor);
-        if (page.error) {
-          setResult({ ...first, skills, error: page.error });
-          return;
-        }
-        skills.push(...page.skills);
-        cursor = page.nextCursor;
-      }
-      const next = { ...first, skills, nextCursor: cursor };
+    return listAllServerSkills(serverName).then(({ result: next, complete }) => {
       setResult(next);
+      if (!complete) return;
       const validKeys = new Set<string>();
-      for (const entry of skills) {
+      for (const entry of next.skills) {
         const digest = manifestDigest(entry);
         if (digest) validKeys.add(mcpSkillCacheKey(serverName, entry.uri, digest));
       }
@@ -108,16 +110,23 @@ const MCPSkillsManager: React.FC<Props> = ({ serverName, conversationId }) => {
       } else {
         setLoaded(new Map());
       }
-    } finally {
-      setLoading(false);
-    }
+    }).finally(() => setLoading(false));
   }, [effectiveConversationId, serverName]);
 
-  useEffect(() => {
+  // Another server or conversation starts from an empty list.
+  useResetOnChange(JSON.stringify([serverName, effectiveConversationId ?? null]), () => {
     setResult(null);
     setLoaded(new Map());
+    setLoading(true);
+  });
+  useEffect(() => {
     void refresh();
-  }, [effectiveConversationId, refresh]);
+  }, [refresh]);
+
+  const reload = () => {
+    setLoading(true);
+    void refresh();
+  };
 
   const load = async (entry: McpSkillEntry) => {
     if (!effectiveConversationId || entry.resources === 'dynamic') return;
@@ -188,7 +197,7 @@ const MCPSkillsManager: React.FC<Props> = ({ serverName, conversationId }) => {
         <Button
           size="small"
           startIcon={<RefreshIcon />}
-          onClick={() => void refresh()}
+          onClick={reload}
           disabled={loading}
         >
           {t('mcp.skills.refresh')}

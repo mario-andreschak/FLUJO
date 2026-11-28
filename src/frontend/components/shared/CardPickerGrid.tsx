@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useState } from 'react';
 import {
   Alert,
   Box,
@@ -11,6 +11,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
+import { useForkRef } from '@mui/material/utils';
 import SearchIcon from '@mui/icons-material/Search';
 import CollapsibleCardSection from './CollapsibleCardSection';
 import StickySearchBar from './StickySearchBar';
@@ -147,23 +148,12 @@ const CardPickerGrid: React.FC<CardPickerGridProps> = ({
   const resolvedLoadingMessage = loadingMessage ?? t('common.loading');
   const resolvedSearchPlaceholder = searchPlaceholder ?? t('common.search');
   const cols = { ...DEFAULT_COLUMNS, ...columns };
-  const gridRootRef = useRef<HTMLDivElement | null>(null);
 
   // #372: default both auto-focus and sticky on when the grid is searchable.
   const effectiveAutoFocus = autoFocusSearch ?? searchable;
   const effectiveSticky = stickySearch ?? searchable;
   const autoFocusRef = useAutoFocusSearch({ enabled: effectiveAutoFocus, delayMs: autoFocusDelayMs });
-  const setSearchInputRef = useCallback(
-    (node: HTMLInputElement | null) => {
-      autoFocusRef.current = node;
-      if (typeof searchInputRef === 'function') {
-        searchInputRef(node);
-      } else if (searchInputRef) {
-        (searchInputRef as React.MutableRefObject<HTMLInputElement | null>).current = node;
-      }
-    },
-    [autoFocusRef, searchInputRef],
-  );
+  const setSearchInputRef = useForkRef(autoFocusRef, searchInputRef);
 
   // Search state: controlled when `searchTerm` is passed, otherwise internal.
   const [internalSearch, setInternalSearch] = useState('');
@@ -204,7 +194,7 @@ const CardPickerGrid: React.FC<CardPickerGridProps> = ({
 
   const focusRelativeItem = (current: HTMLElement, direction: -1 | 1 | 'first' | 'last') => {
     const candidates = Array.from(
-      gridRootRef.current?.querySelectorAll<HTMLElement>(
+      current.closest('[data-card-picker-root="true"]')?.querySelectorAll<HTMLElement>(
         '[data-card-picker-selectable="true"]:not([aria-disabled="true"])',
       ) ?? [],
     ).filter((candidate) => !candidate.closest('[data-card-picker-collapsed="true"]'));
@@ -334,7 +324,7 @@ const CardPickerGrid: React.FC<CardPickerGridProps> = ({
 
   const withSearch = (body: React.ReactNode) => (
     <Box
-      ref={gridRootRef}
+      data-card-picker-root="true"
       role={selectionMode === 'single' ? 'radiogroup' : selectionMode === 'multiple' ? 'group' : undefined}
       aria-label={ariaLabel}
     >

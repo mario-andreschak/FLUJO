@@ -19,7 +19,6 @@ import { assertMcpHostInstallationAllowed, createMcpInstallerEnvironment, McpHos
 import { loadItem } from '@/utils/storage/backend';
 import { realpath } from '@/utils/realpath';
 import { StorageKey } from '@/shared/types/storage';
-import { propertyOf } from '@/shared/utils/records';
 
 const log = createLogger('app/api/git/route');
 
@@ -368,11 +367,11 @@ async function executeCommandInRepo({ savePath, command, args, actionName, reque
       if (commandError instanceof Error) {
         commandOutput = commandError.message || 'Unknown error';
         
-        // Check if it's an exec error with stdout/stderr
-        const stdout = propertyOf(commandError, 'stdout');
-        const stderr = propertyOf(commandError, 'stderr');
+        // An exec error carries the command's stdout/stderr
+        const stdout = 'stdout' in commandError ? commandError.stdout : undefined;
+        const stderr = 'stderr' in commandError ? commandError.stderr : undefined;
         if (stdout || stderr) {
-          commandOutput = String(stdout ?? '') + String(stderr ?? '');
+          commandOutput = (stdout ? String(stdout) : '') + (stderr ? String(stderr) : '');
           log.debug(`${actionName} error output [${requestId}]`, {
             outputLength: commandOutput.length,
             outputPreview: commandOutput.substring(0, 200) + (commandOutput.length > 200 ? '...' : '')

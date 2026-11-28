@@ -1,12 +1,12 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { Box, Button, Typography } from '@mui/material';
 import { modelTurnJsonPage } from './modelTurnJsonPage';
+import { useKeyedState } from './hooks/useKeyedState';
 
 export default function ModelTurnJsonPreview({ value, testId }: { value: unknown; testId?: string }) {
-  const [page, setPage] = useState(0);
-  useEffect(() => { setPage(0); }, [value]);
+  const [page, setPage] = useKeyedState(value, 0);
   const current = useMemo(() => modelTurnJsonPage(value, page), [value, page]);
   return (
     <>

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -88,7 +88,10 @@ export const EdgePropertiesModal = ({ open, edge, sourceNodeType, onClose, onSav
   const [negate, setNegate] = useState(false);
 
   // Re-seed local state from the edge whenever the modal (re)opens.
-  useEffect(() => {
+  const seedDeps = [edge, open, defaultTarget];
+  const [seededFor, setSeededFor] = useState<readonly unknown[] | null>(null);
+  if (!seededFor || seedDeps.some((dep, index) => dep !== seededFor[index])) {
+    setSeededFor(seedDeps);
     const cond = (edge?.data as { condition?: EdgeCondition } | undefined)?.condition;
     if (cond) {
       setConditional(true);
@@ -109,7 +112,7 @@ export const EdgePropertiesModal = ({ open, edge, sourceNodeType, onClose, onSav
       setIgnoreCase(false);
       setNegate(false);
     }
-  }, [edge, open, defaultTarget]);
+  }
 
   if (!edge) return null;
 

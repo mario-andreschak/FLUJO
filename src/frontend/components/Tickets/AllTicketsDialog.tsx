@@ -30,6 +30,7 @@ import { createLogger } from '@/utils/logger';
 import type { Ticket, TicketStatus } from '@/shared/types/ticket';
 
 import { TicketCard } from './TicketCard';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
 
 const log = createLogger('frontend/components/Tickets/AllTicketsDialog');
 
@@ -52,36 +53,32 @@ export function AllTicketsDialog({ open, onClose, onChanged }: AllTicketsDialogP
   const [error, setError] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<string[] | null>(null);
 
-  const load = useCallback(async () => {
-    try {
-      const page = await ticketService.listTickets({
-        ...(status === 'all' ? {} : { status }),
-        ...(search.trim() ? { search: search.trim() } : {}),
-        ...(label ? { label } : {}),
-        limit: 100,
-      });
-      // Defensive: a degraded/stubbed API may answer without a usable `items`
-      // array; the dialog must render empty rather than throw (#379).
-      setItems(Array.isArray(page?.items) ? page.items : []);
-      setError(null);
-    } catch (loadError) {
-      log.warn('Failed to load tickets', loadError);
-      setItems([]);
-      setError(t('tickets.toast.loadFailed'));
-    }
-  }, [label, search, status, t]);
+  const load = useCallback(() => ticketService.listTickets({
+    ...(status === 'all' ? {} : { status }),
+    ...(search.trim() ? { search: search.trim() } : {}),
+    ...(label ? { label } : {}),
+    limit: 100,
+  }).then((page) => {
+    // Defensive: a degraded/stubbed API may answer without a usable `items`
+    // array; the dialog must render empty rather than throw (#379).
+    setItems(Array.isArray(page?.items) ? page.items : []);
+    setError(null);
+  }).catch((loadError) => {
+    log.warn('Failed to load tickets', loadError);
+    setItems([]);
+    setError(t('tickets.toast.loadFailed'));
+  }), [label, search, status, t]);
 
   useEffect(() => {
     if (!open) return;
     void load();
   }, [open, load]);
 
-  useEffect(() => {
-    if (!open) {
-      setSelected([]);
-      setPendingDelete(null);
-    }
-  }, [open]);
+  useResetOnChange(open, (isOpen) => {
+    if (isOpen) return;
+    setSelected([]);
+    setPendingDelete(null);
+  });
 
   const labelOptions = useMemo(
     () => Array.from(new Set(items.flatMap((ticket) => (Array.isArray(ticket?.labels) ? ticket.labels : []))))

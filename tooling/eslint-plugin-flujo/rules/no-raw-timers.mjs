@@ -18,8 +18,9 @@ export default {
       rawTimer:
         '`{{name}}` in UI code usually patches over an ordering problem (a flicker, a value that is not '
         + 'ready yet), and copies of it pile up and slow the app down. Derive the value during render or '
-        + 'react to the real event. If a delay is the actual behaviour (debounce, polling, auto-hide), use '
-        + 'useTimeout, useInterval, useDebouncedValue or useDebouncedCallback from src/frontend/hooks/timing.ts.',
+        + 'react to the real event. If a delay is the actual behaviour (debounce, polling, auto-hide, batching a '
+        + 'stream, waiting for layout), use useTimeout, useInterval, useDebouncedValue, useDebouncedCallback, '
+        + 'useBatchedCallback or useAnimationFrame from src/frontend/hooks/timing.ts.',
     },
   },
   create(context) {

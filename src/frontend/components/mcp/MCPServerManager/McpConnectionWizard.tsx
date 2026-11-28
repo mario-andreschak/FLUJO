@@ -30,6 +30,7 @@ import McpAiConnectionPanel from './McpAiConnectionPanel';
 import AskFlujoButton from '@/frontend/components/AskFlujo/AskFlujoButton';
 import BugReportButton from '@/frontend/components/BugReport/BugReportButton';
 import { useSetupStepFocus } from '@/frontend/hooks/useSetupStepFocus';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
 
 type WizardStep = 'welcome' | 'ai' | 'discovery' | 'source';
 
@@ -150,12 +151,15 @@ export default function McpConnectionWizard({
   const [installing, setInstalling] = useState(false);
   const installingRef = useRef(false);
 
-  useEffect(() => {
-    installingRef.current = false;
+  // Opening or closing starts the wizard over.
+  useResetOnChange(open, (isOpen) => {
     setInstalling(false);
-    if (!open) return;
+    if (!isOpen) return;
     setStep('welcome');
     setHistory([]);
+  });
+  useEffect(() => {
+    installingRef.current = false;
   }, [open]);
 
   const go = (nextStep: WizardStep) => {

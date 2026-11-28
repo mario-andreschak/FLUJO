@@ -10,6 +10,7 @@ import { parseAskFlujoResponse, extractAskFlujoToolActions } from '@/frontend/ut
 import { workspaceLocalStorageKey } from '@/frontend/utils/workspaceSelection';
 import type { EyePhase } from './Eyes';
 import { worldCopy, type WorldLocale } from './copy';
+import { useLatest } from '@/frontend/hooks/useLatest';
 
 const SYSTEM_PROMPT = `You are the user's FLUJO guide, represented by white eyes in an evolving world. You are the selected work AI: handle all substantive reasoning, planning, configuration, and work through Flujo's existing tools and runtimes. Speak briefly and naturally in the user's language. Discover capabilities when needed; Flujo supports advanced multi-model flows, connected apps, tools, resources, automations, Personas, meetings, packages and recovery. Never claim an operation ran or succeeded without its actual result. Never ask for secrets in chat: open the appropriate setup panel. Distinguish stopping voice from cancelling work.
 Give the outcome briefly; expand only when the user asks for detail. Do not repeat available-model inventories, connection confirmations, setup advice or follow-up offers during ordinary work. Discuss changing models only when asked or needed to resolve a real failure. Model catalogs change: use current Flujo configuration/discovery tools when model information is requested; do not recommend remembered model names or treat catalog hints as verified account access. The workspace work preference applies to new guide work; existing authored Flow/Persona bindings still own their models.
@@ -80,7 +81,7 @@ export function useAvatarWork({ modelId, locale, context }: { modelId: string | 
     stream.current?.close();
     stream.current = null;
   }, []);
-  const contextRef = useRef(context); contextRef.current = context;
+  const contextRef = useLatest(context);
   const refresh = useCallback(async (id: string) => {
     const canonical = await chatService.getConversation(id);
     if (!mounted.current || idRef.current !== id) return;
@@ -100,41 +101,44 @@ export function useAvatarWork({ modelId, locale, context }: { modelId: string | 
     if (canonical.lastError) setError(canonical.lastError.message);
     return canonical;
   }, []);
-  const attach: (id: string, fromSeq?: number) => void = useCallback((id: string, fromSeq = 0) => {
-    detach();
-    if (!mounted.current || idRef.current !== id) return;
-    const generation = streamGeneration.current;
-    seq.current = fromSeq - 1;
-    stream.current = chatService.subscribeToEvents(id, { onEvent(event) {
-      if (!mounted.current || streamGeneration.current !== generation || idRef.current !== id || event.conversationId !== id) return;
-      if (event.type === 'model:delta' || event.type === 'tool:progress') return;
-      if (event.seq <= seq.current) return;
-      seq.current = event.seq;
-      if (event.depth && event.depth > 0) return;
-      if (event.type === 'run:start' || event.type === 'model:start') { awaitingControl.current = false; setBusy(true); setPhase('thinking'); }
-      if (event.type === 'tool:call') { setPhase('usingApp'); setActivity(event.name); }
-      if (event.type === 'tool:result') { awaitingControl.current = false; setPhase(event.isError ? 'error' : 'thinking'); setActivity(null); }
-      // Subscription adapters keep the HTTP run open while awaiting approval.
-      // Their canonical status stays running; a later transcript refresh must
-      // preserve the live control event until work actually resumes or ends.
-      if (['run:awaiting_approval', 'run:awaiting_elicitation', 'run:awaiting_question', 'run:paused'].includes(event.type)) { awaitingControl.current = true; setActivity(null); setPhase('waiting'); }
-      if (event.type === 'error') { setPhase('error'); }
-      if (event.type === 'run:done') awaitingControl.current = false;
-      if (event.type === 'run:done' || event.type === 'message') void refresh(id).catch(() => setError(worldCopy(locale).unavailable));
-    }, onError() {
-      if (mounted.current && streamGeneration.current === generation && idRef.current === id) void refresh(id).catch(() => setError(worldCopy(locale).unavailable));
-    }, onReset(control) {
-      if (!mounted.current || streamGeneration.current !== generation || idRef.current !== id) return;
+  const attach = useCallback((id: string, fromSeq = 0) => {
+    const connect = (startSeq: number) => {
       detach();
-      const recoveryGeneration = streamGeneration.current;
-      void refresh(id).then(() => {
-        if (!mounted.current || streamGeneration.current !== recoveryGeneration || idRef.current !== id) return;
-        retryTimer.current = setTimeout(() => {
-          retryTimer.current = undefined;
-          if (mounted.current && streamGeneration.current === recoveryGeneration && idRef.current === id) attach(id, control.nextSeq);
-        }, 3000);
-      }).catch(() => { if (mounted.current && idRef.current === id) setError(worldCopy(locale).unavailable); });
-    } }, fromSeq, { activityOnly: true });
+      if (!mounted.current || idRef.current !== id) return;
+      const generation = streamGeneration.current;
+      seq.current = startSeq - 1;
+      stream.current = chatService.subscribeToEvents(id, { onEvent(event) {
+        if (!mounted.current || streamGeneration.current !== generation || idRef.current !== id || event.conversationId !== id) return;
+        if (event.type === 'model:delta' || event.type === 'tool:progress') return;
+        if (event.seq <= seq.current) return;
+        seq.current = event.seq;
+        if (event.depth && event.depth > 0) return;
+        if (event.type === 'run:start' || event.type === 'model:start') { awaitingControl.current = false; setBusy(true); setPhase('thinking'); }
+        if (event.type === 'tool:call') { setPhase('usingApp'); setActivity(event.name); }
+        if (event.type === 'tool:result') { awaitingControl.current = false; setPhase(event.isError ? 'error' : 'thinking'); setActivity(null); }
+        // Subscription adapters keep the HTTP run open while awaiting approval.
+        // Their canonical status stays running; a later transcript refresh must
+        // preserve the live control event until work actually resumes or ends.
+        if (['run:awaiting_approval', 'run:awaiting_elicitation', 'run:awaiting_question', 'run:paused'].includes(event.type)) { awaitingControl.current = true; setActivity(null); setPhase('waiting'); }
+        if (event.type === 'error') { setPhase('error'); }
+        if (event.type === 'run:done') awaitingControl.current = false;
+        if (event.type === 'run:done' || event.type === 'message') void refresh(id).catch(() => setError(worldCopy(locale).unavailable));
+      }, onError() {
+        if (mounted.current && streamGeneration.current === generation && idRef.current === id) void refresh(id).catch(() => setError(worldCopy(locale).unavailable));
+      }, onReset(control) {
+        if (!mounted.current || streamGeneration.current !== generation || idRef.current !== id) return;
+        detach();
+        const recoveryGeneration = streamGeneration.current;
+        void refresh(id).then(() => {
+          if (!mounted.current || streamGeneration.current !== recoveryGeneration || idRef.current !== id) return;
+          retryTimer.current = setTimeout(() => {
+            retryTimer.current = undefined;
+            if (mounted.current && streamGeneration.current === recoveryGeneration && idRef.current === id) connect(control.nextSeq);
+          }, 3000);
+        }).catch(() => { if (mounted.current && idRef.current === id) setError(worldCopy(locale).unavailable); });
+      } }, startSeq, { activityOnly: true });
+    };
+    connect(fromSeq);
   }, [detach, refresh, locale]);
   useEffect(() => {
     mounted.current = true;

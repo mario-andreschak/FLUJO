@@ -64,11 +64,11 @@ beforeEach(() => {
   approvals = { schemaVersion: 1, ownerId: 'approved-owner', approvals: [{ workspace: getCurrentWorkspace(), serverName: config.name,
     policyDigest: isolatedMcpPolicyDigest(config.isolation), expiresAt: Date.now() + 60_000 }] };
   persist();
-  close = jest.fn(() => ({ outcome: 'removed' }));
+  close = jest.fn(async () => ({ outcome: 'removed' }));
   launch = { command: path.join(directory, 'docker'), args: ['container', 'start', '--attach', 'c'.repeat(64)],
     env: { NODE_ENV: 'production', ...(process.platform === 'win32' ? { SystemRoot: 'C:\\Windows' } : {}) }, cwd: directory, generation,
     containerId: 'c'.repeat(64), close };
-  create.mockReset().mockReturnValue(launch);
+  create.mockReset().mockResolvedValue(launch);
   configs.mockReset().mockResolvedValue([config]);
   jest.mocked(resolveGlobalVars).mockClear();
   global.__flujo_mcp_isolated_generations?.clear();
@@ -423,6 +423,7 @@ test('natural transport close removes its generation and preserves subsequently 
   transport.onclose();
   expect(close).toHaveBeenCalled();
   expect(callback).toHaveBeenCalledTimes(1);
+  await new Promise(resolve => { setImmediate(resolve); });
   expect(global.__flujo_mcp_isolated_generations?.size).toBe(0);
 });
 
@@ -452,11 +453,11 @@ test('a second launch cannot remove an active same-server generation as a test p
 
 test('unobserved cleanup prevents replacement; successful reconciliation permits it', async () => {
   const first = await createStdioTransport(config);
-  close.mockReturnValue({ outcome: 'unknown' });
+  close.mockResolvedValue({ outcome: 'unknown' });
   await first.close();
   await expect(createStdioTransport(config)).rejects.toThrow(expect.objectContaining({ code: 'ISOLATION_UNAVAILABLE' }));
   expect(create).toHaveBeenCalledTimes(1);
-  close.mockReturnValue({ outcome: 'removed' });
+  close.mockResolvedValue({ outcome: 'removed' });
   await createStdioTransport(config);
   expect(create).toHaveBeenCalledTimes(2);
 });
@@ -464,7 +465,7 @@ test('unobserved cleanup prevents replacement; successful reconciliation permits
 test('a stopped attach CLI cannot qualify unknown container cleanup', async () => {
   const transport = await createStdioTransport(config);
   (transport as unknown as { _process: unknown })._process = { exitCode: 0, signalCode: null, kill: jest.fn() };
-  close.mockReturnValue({ outcome: 'unknown' });
+  close.mockResolvedValue({ outcome: 'unknown' });
   const result = await safelyCloseClient({ transport, close: jest.fn() } as unknown as Client, config.name, config);
   expect(result.exited).toBe(false);
   expect(result.exitOutcome).toBe('unknown');

@@ -1,6 +1,7 @@
 import { Cron } from 'croner';
 import { verifyStorage } from '@/utils/storage/backend';
 import { mcpService } from '@/backend/services/mcp';
+import { settleMcpRuntimeRetirements } from '@/backend/services/mcp/connection';
 import { sweepOldRunResources } from '@/backend/services/runResources';
 import { sweepUnsavedRunStores } from '@/backend/execution/flow/stepToolResults';
 import { snapshotStore } from '@/backend/services/snapshot/SnapshotStore';
@@ -128,6 +129,9 @@ export function shutdownBackendServices(reason: string): Promise<void> {
         log.warn(`MCP teardown failed for workspace ${workspace}:`, error);
       }
     }
+    // A server that stopped by itself started its cleanup without anyone
+    // waiting. Finish it here, while the process may still run async work.
+    await settleMcpRuntimeRetirements();
   })().catch(error => {
     log.warn('Backend shutdown encountered an error:', error);
   });

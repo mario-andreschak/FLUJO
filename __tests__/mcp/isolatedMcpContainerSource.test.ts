@@ -70,7 +70,7 @@ console.log(JSON.stringify(result===undefined?{jsonrpc:'2.0',id:q.id,error:{code
     expect(closed.isolation?.cleanupOutcome).toMatch(/^(removed|absent)$/);
     console.log(JSON.stringify({ sourceContainerProbe: era, discoveryPages: 2, flags: 'passed', cleanup: closed.isolation?.cleanupOutcome }));
   } finally {
-    getManagedMcpIsolation(transport)?.close();
+    await getManagedMcpIsolation(transport)?.close();
     await client.close().catch(() => {});
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;

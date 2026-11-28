@@ -311,7 +311,7 @@ export const STAGES = [
   {
     id: 'reload-and-double-click',
     title: 'Step 5: a reload shows the card again; a double click on Approve runs the tool once',
-    async run({ page, baseUrl, log, notes }) {
+    async run({ page, baseUrl, notes }) {
       await ask(page, 'WRITE-FILE reload.txt');
       await seeText(page, CARD_TITLE);
       await page.reload();

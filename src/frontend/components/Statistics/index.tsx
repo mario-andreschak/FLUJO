@@ -61,6 +61,7 @@ import {
 } from '@/shared/types/statistics';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { TranslationKey } from '@/frontend/i18n/messages';
+import { useResetOnChange, useStateFromProp } from '@/frontend/hooks/useResetOnChange';
 
 const RUN_SOURCES: StatisticsRunSource[] = [
   'chat',
@@ -221,11 +222,7 @@ interface IdentifierFilterProps {
 
 function IdentifierFilter({ label, values, onChange }: IdentifierFilterProps) {
   const { t } = useI18n();
-  const [draft, setDraft] = useState(values.join(', '));
-
-  useEffect(() => {
-    setDraft(values.join(', '));
-  }, [values]);
+  const [draft, setDraft] = useStateFromProp(values.join(', '));
 
   const commit = () => onChange(parseIdentifiers(draft));
 
@@ -552,7 +549,7 @@ function Breakdown({ title, description, rows, emptyLabel }: BreakdownProps) {
 }
 
 export default function Statistics() {
-  const { t, tp, formatNumber } = useI18n();
+  const { t, tp, formatNumber, locale } = useI18n();
   const [filters, setFilters] = useState<StatisticsDashboardFilters>(
     () => createDefaultStatisticsFilters(),
   );
@@ -580,16 +577,19 @@ export default function Statistics() {
       ? t('statistics.invalidRange')
       : null;
 
+  // New filters (or a refresh) show the loading state, or the range problem, at once.
+  const startLoad = () => {
+    setLoading(!rangeError);
+    setError(rangeError);
+  };
+  useResetOnChange(filters, startLoad);
+  useResetOnChange(refreshVersion, startLoad);
+  useResetOnChange(rangeError, startLoad);
+  useResetOnChange(locale, startLoad);
   useEffect(() => {
-    if (rangeError) {
-      setLoading(false);
-      setError(rangeError);
-      return;
-    }
+    if (rangeError) return;
 
     const controller = new AbortController();
-    setLoading(true);
-    setError(null);
     statisticsService.get(filters, controller.signal)
       .then((response) => setData(response))
       .catch((requestError: unknown) => {

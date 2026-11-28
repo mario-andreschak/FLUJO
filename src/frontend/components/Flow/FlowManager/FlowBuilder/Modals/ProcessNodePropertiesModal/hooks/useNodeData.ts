@@ -1,11 +1,13 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { FlowNode } from '@/frontend/types/flow/flow';
 import type { ProcessNodeData, ProcessNodeProperties } from '../types';
 
 const useNodeData = (node: FlowNode | null) => {
   const [nodeData, setNodeData] = useState<ProcessNodeData | null>(null);
 
-  useEffect(() => {
+  const [seededFrom, setSeededFrom] = useState<FlowNode | null>(null);
+  if (node !== seededFrom) {
+    setSeededFrom(node);
     if (node) {
       setNodeData({
         id: node.id, // Include the node ID
@@ -13,7 +15,7 @@ const useNodeData = (node: FlowNode | null) => {
         properties: { ...node.data.properties } as ProcessNodeProperties
       });
     }
-  }, [node]);
+  }
 
   const handlePropertyChange = useCallback((key: string, value: unknown) => {
     setNodeData((prev) => {

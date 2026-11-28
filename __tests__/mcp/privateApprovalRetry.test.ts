@@ -16,7 +16,6 @@ import { WindowsAuthorityInspectionError, windowsPrivateAuthorityStampAsync } fr
 // while a lasting failure still ends in a short, plain refusal.
 jest.mock('@/backend/services/security/windowsPrivateAuthority', () => ({
   ...jest.requireActual('@/backend/services/security/windowsPrivateAuthority'),
-  windowsPrivateAuthorityStamp: jest.fn(),
   windowsPrivateAuthorityStampAsync: jest.fn(),
 }));
 jest.mock('@/utils/paths', () => ({ getDataDir: () => path.resolve('synthetic-data') }));

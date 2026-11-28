@@ -26,6 +26,7 @@ import RepeatRoundedIcon from '@mui/icons-material/RepeatRounded';
 import PauseCircleOutlineRoundedIcon from '@mui/icons-material/PauseCircleOutlineRounded';
 import type { AutomationMapResponse } from '@/shared/types/waves/automationMap';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useInterval } from '@/frontend/hooks/timing';
 import type { Translator } from '@/frontend/i18n/core';
 import DayViewMiniMonth from './DayViewMiniMonth';
 import {
@@ -594,14 +595,8 @@ export default function DayView({
     [internalDate, selectedDateMs],
   );
 
-  useEffect(() => {
-    if (suppliedNow !== undefined) {
-      setLiveNow(suppliedNow);
-      return;
-    }
-    const timer = setInterval(() => setLiveNow(Date.now()), 30_000);
-    return () => clearInterval(timer);
-  }, [suppliedNow]);
+  const clockNow = suppliedNow ?? liveNow;
+  useInterval(() => setLiveNow(Date.now()), suppliedNow === undefined ? 30_000 : null);
 
   const setDate = useCallback((next: Date) => {
     const normalized = normalizeCalendarDay(next);
@@ -675,7 +670,7 @@ export default function DayView({
           size="small"
           variant="outlined"
           startIcon={<TodayRoundedIcon />}
-          onClick={() => setDate(new Date(liveNow))}
+          onClick={() => setDate(new Date(clockNow))}
         >
           {t('waves.day.today')}
         </Button>
@@ -752,7 +747,7 @@ export default function DayView({
             <Box sx={{ maxWidth: 320, mx: 'auto', pt: 1.25 }}>
               <DayViewMiniMonth
                 selectedDate={currentDate}
-                today={new Date(liveNow)}
+                today={new Date(clockNow)}
                 packages={schedule.packages}
                 hiddenPackages={hiddenPackages}
                 packageColor={packageColor}
@@ -784,7 +779,7 @@ export default function DayView({
         >
           <DayViewMiniMonth
             selectedDate={currentDate}
-            today={new Date(liveNow)}
+            today={new Date(clockNow)}
             packages={schedule.packages}
             hiddenPackages={hiddenPackages}
             packageColor={packageColor}
@@ -818,7 +813,7 @@ export default function DayView({
           ) : (
             <DesktopTimeline
               date={currentDate}
-              now={liveNow}
+              now={clockNow}
               items={visibleTimed}
               packageColor={packageColor}
               onActivate={activate}

@@ -26,6 +26,7 @@ import McpAppFrame from '@/frontend/components/Chat/McpAppFrame';
 import DialogHeaderActions from '@/frontend/components/shared/DialogHeaderActions';
 import { mcpAppKey as appKey, useMcpAppsDiscovery } from './useMcpAppsDiscovery';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
 
 /** Server + `ui://` resource the dashboard should preview when it opens (#396). */
 export interface McpAppsDashboardSelection {
@@ -75,13 +76,10 @@ const McpAppsDashboard: React.FC<McpAppsDashboardProps> = ({
   // Each discovery run (open, refresh, server config change) restarts the
   // selection exactly as before, so a revoked server can never keep an app
   // frame on screen.
-  useEffect(() => {
-    setSelectedKey(null);
-  }, [discoveryId]);
-
-  useEffect(() => {
-    if (!open) setSelectedKey(null);
-  }, [open]);
+  useResetOnChange(discoveryId, () => setSelectedKey(null));
+  useResetOnChange(open, (isOpen) => {
+    if (!isOpen) setSelectedKey(null);
+  });
 
   // #396: a caller-supplied target is honored once and then forgotten, so a
   // later refresh or a manual click is not undone by it.

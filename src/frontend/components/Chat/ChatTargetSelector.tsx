@@ -24,6 +24,7 @@ import PersonOutlineRoundedIcon from '@mui/icons-material/PersonOutlineRounded';
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 
 import FlowSelector from './FlowSelector';
+import { useKeyedState } from './hooks/useKeyedState';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { personasService } from '@/frontend/services/personas';
 import { withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
@@ -61,28 +62,32 @@ const ChatTargetSelector: React.FC<ChatTargetSelectorProps> = ({
 }) => {
   const { t } = useI18n();
   const [personas, setPersonas] = useState<Persona[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const fetchAvailable = typeof fetch === 'function';
+  const [listLoading, setLoading] = useState(fetchAvailable);
+  const [listError, setError] = useState<string | null>(null);
+  const loading = fetchAvailable && listLoading;
+  const error = fetchAvailable ? listError : t('chat.target.loadFailed');
   const [open, setOpen] = useState(false);
   const [candidatePersona, setCandidatePersona] = useState<Persona | null>(null);
-  const [candidateComposition, setCandidateComposition] = useState<PersonaComposition | null>(null);
-  const [compositionLoading, setCompositionLoading] = useState(false);
-  const [compositionError, setCompositionError] = useState<string | null>(null);
   const [compositionAttempt, setCompositionAttempt] = useState(0);
-  const [selectedBehaviorName, setSelectedBehaviorName] = useState<string | null>(null);
+  // Picking a persona (or retrying) loads its behaviors from scratch.
+  const compositionKey = candidatePersona ? `${candidatePersona.id}\u0000${compositionAttempt}` : null;
+  const [candidateComposition, setCandidateComposition] = useKeyedState<PersonaComposition | null>(compositionKey, null);
+  const [compositionLoading, setCompositionLoading] = useKeyedState(compositionKey, compositionKey !== null);
+  const [compositionError, setCompositionError] = useKeyedState<string | null>(compositionKey, null);
+  const selectedBehaviorKey = selectedPersonaId
+    && selectedPersonaBehaviorSlotKey
+    && selectedPersonaBehaviorSlotKey !== 'primary'
+    ? `${selectedPersonaId}\u0000${selectedPersonaBehaviorSlotKey}`
+    : null;
+  const [selectedBehaviorName, setSelectedBehaviorName] = useKeyedState<string | null>(selectedBehaviorKey, null);
   const [activeTab, setActiveTab] = useState<'agents' | 'personas'>('agents');
   const [selectedFlowName, setSelectedFlowName] = useState('');
   const [externalAgentSearch, setExternalAgentSearch] = useState<string | undefined>();
 
   useEffect(() => {
+    if (!fetchAvailable) return undefined;
     const controller = new AbortController();
-    setLoading(true);
-    setError(null);
-    if (typeof fetch !== 'function') {
-      setError(t('chat.target.loadFailed'));
-      setLoading(false);
-      return () => controller.abort();
-    }
     fetch(withWorkspaceUrl('/v1/personas'), { signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) throw new Error(`Persona list failed (${response.status})`);
@@ -92,6 +97,7 @@ const ChatTargetSelector: React.FC<ChatTargetSelectorProps> = ({
         if (controller.signal.aborted) return;
         const loaded = Array.isArray(items) ? items : [];
         setPersonas(loaded);
+        setError(null);
         onPersonaNamesLoaded?.(Object.fromEntries(loaded.map(({ id, name }) => [id, name])));
       })
       .catch((cause) => {
@@ -105,19 +111,11 @@ const ChatTargetSelector: React.FC<ChatTargetSelectorProps> = ({
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [t, onPersonaNamesLoaded]);
+  }, [fetchAvailable, t, onPersonaNamesLoaded]);
 
   useEffect(() => {
-    if (!candidatePersona) {
-      setCandidateComposition(null);
-      setCompositionError(null);
-      setCompositionLoading(false);
-      return;
-    }
+    if (!candidatePersona) return undefined;
     let cancelled = false;
-    setCandidateComposition(null);
-    setCompositionError(null);
-    setCompositionLoading(true);
     void personasService.getComposition(candidatePersona.id)
       .then((composition) => {
         if (!cancelled) setCandidateComposition(composition);
@@ -131,19 +129,11 @@ const ChatTargetSelector: React.FC<ChatTargetSelectorProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [candidatePersona, compositionAttempt, t]);
+  }, [compositionKey, t]);
 
   useEffect(() => {
-    if (
-      !selectedPersonaId
-      || !selectedPersonaBehaviorSlotKey
-      || selectedPersonaBehaviorSlotKey === 'primary'
-    ) {
-      setSelectedBehaviorName(null);
-      return;
-    }
+    if (!selectedBehaviorKey || !selectedPersonaId) return undefined;
     let cancelled = false;
-    setSelectedBehaviorName(null);
     void personasService.getComposition(selectedPersonaId)
       .then((composition) => {
         if (cancelled) return;
@@ -157,7 +147,7 @@ const ChatTargetSelector: React.FC<ChatTargetSelectorProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [selectedPersonaBehaviorSlotKey, selectedPersonaId]);
+  }, [selectedBehaviorKey]);
 
   useEffect(() => {
     const listener = (event: Event) => {

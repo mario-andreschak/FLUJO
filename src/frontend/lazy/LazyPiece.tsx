@@ -6,12 +6,12 @@ import {
   createElement,
   use,
   useState,
-  useSyncExternalStore,
   type ComponentType,
   type ReactNode,
 } from 'react';
 
 import { useTimeout } from '@/frontend/hooks/timing';
+import { useHydrated } from '@/frontend/hooks/useBrowserValue';
 import { createLogger } from '@/utils/logger';
 import {
   createPieceChunk,
@@ -34,15 +34,6 @@ export const ESSENTIAL_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000] as const;
 /** Waits between the error page's own attempts to bring the workspace back: 10 s, 20 s, 40 s … up to 2 minutes. */
 export function healRetryDelayMs(attempt: number): number {
   return Math.min(10_000 * 2 ** attempt, 120_000);
-}
-
-const subscribeNever = () => () => {};
-const inBrowser = () => true;
-const onServer = () => false;
-
-/** False on the server and while hydrating, so client-only pieces render the same first HTML on both sides. */
-function useHydrated(): boolean {
-  return useSyncExternalStore(subscribeNever, inBrowser, onServer);
 }
 
 function RetryAfter({ delayMs, onRetry }: { delayMs: number; onRetry: () => void }) {

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Alert,
   Autocomplete,
@@ -15,6 +15,7 @@ import {
 } from '@mui/material';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { folderName, switchableBranches, type ProjectGitInfo } from '@/frontend/hooks/useProjects';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
 
 export type BranchDialogMode = 'switch' | 'create' | 'worktree';
 
@@ -36,12 +37,13 @@ export function BranchDialog({ open, mode, git, folder, onClose, onSubmit }: Bra
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!open) return;
+  // Each opening (or another mode while open) starts with an empty form.
+  useResetOnChange(open ? mode : null, (openedAs) => {
+    if (openedAs === null) return;
     setBranch('');
     setError(null);
     setSaving(false);
-  }, [open, mode]);
+  });
 
   const allBranches = useMemo(() => switchableBranches(git), [git]);
   // Git refuses to check out a branch that another worktree (or this folder)

@@ -768,9 +768,9 @@ async function POST_handler(req: NextRequest) {
     // Check if file already exists to prevent accidental overwrite (optional but good practice)
     try {
       await fs.access(filePath);
+      // Creating a legacy conversation under an existing id starts it over; the
+      // Persona-owned case was refused above, and a deleted target rolls back below.
       log.warn(`Conversation file already exists, potentially overwriting`, { requestId, conversationId, filePath });
-      // Decide on behavior: return error, allow overwrite, etc. Let's allow overwrite for now.
-      // return NextResponse.json({ error: `Conversation with ID ${conversationId} already exists` }, { status: 409 }); // 409 Conflict
     } catch (accessError: unknown) {
       if (!accessError || typeof accessError !== 'object' || !('code' in accessError) || accessError.code !== 'ENOENT') {
         throw accessError; // Re-throw unexpected errors

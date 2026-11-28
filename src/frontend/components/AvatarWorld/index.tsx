@@ -20,10 +20,31 @@ import WorldLink from './WorldLink';
 import WorldScene from './WorldScene';
 import '@flujo-ai/avatar-sdk/styles.css';
 import styles from './world.module.css';
+import { useBrowserValue } from '@/frontend/hooks/useBrowserValue';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
+import { useInterval } from '@/frontend/hooks/timing';
+
+async function readWorld(): Promise<AvatarWorldSnapshot> {
+  const response = await fetch('/api/avatar/world');
+  if (!response.ok) throw new Error(`Flujo (${response.status})`);
+  return response.json() as Promise<AvatarWorldSnapshot>;
+}
+const readStoredLocale = (): WorldLocale | null => {
+  const stored = window.localStorage.getItem(workspaceLocalStorageKey('flujo-avatar:locale'));
+  return stored === 'es' || stored === 'pt' || stored === 'en' ? stored : null;
+};
+const readStoredAvatar = (): AvatarStyle | null => {
+  const stored = window.localStorage.getItem(workspaceLocalStorageKey('flujo-avatar:style'));
+  return stored === 'moss' || stored === 'orbit' || stored === 'spark' ? stored : null;
+};
 
 export default function AvatarWorld({ voiceTransport }: { voiceTransport?: NativeVoiceTransport } = {}) {
-  const [locale, setLocale] = useState<WorldLocale>(DEFAULT_LOCALE);
-  const [avatar, setAvatar] = useState<AvatarStyle>('moss');
+  const storedLocale = useBrowserValue(readStoredLocale, null);
+  const storedAvatar = useBrowserValue(readStoredAvatar, null);
+  const [chosenLocale, setLocale] = useState<WorldLocale | null>(null);
+  const [chosenAvatar, setAvatar] = useState<AvatarStyle | null>(null);
+  const locale = chosenLocale ?? storedLocale ?? DEFAULT_LOCALE;
+  const avatar = chosenAvatar ?? storedAvatar ?? 'moss';
   const [snapshot, setSnapshot] = useState<AvatarWorldSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [setup, setSetup] = useState(false);
@@ -50,26 +71,23 @@ export default function AvatarWorld({ voiceTransport }: { voiceTransport?: Nativ
   const requestVoice = useCallback((endpoint: Parameters<NativeVoiceTransport['request']>[0], init: RequestInit) =>
     voiceTransport ? voiceTransport.request(endpoint, init) : fetch(endpoint === 'voice' ? '/api/avatar/voice' : `/api/avatar/${endpoint}`, init), [voiceTransport]);
   useEffect(() => { setFlujoLocale(locale); }, [locale, setFlujoLocale]);
-  const panel = useWorldPanel(() => input.current?.focus(), locale);
-  const reload = useCallback(async () => {
+  const { iframeRef: panelFrame, ...panel } = useWorldPanel(() => input.current?.focus(), locale);
+  const reload = useCallback((): Promise<AvatarWorldSnapshot | undefined> => {
     const generation = ++snapshotRequest.current;
-    try {
-      const response = await fetch('/api/avatar/world');
-      if (!response.ok) throw new Error(`Flujo (${response.status})`);
-      const value: AvatarWorldSnapshot = await response.json();
-      if (generation === snapshotRequest.current) { setSnapshot(value); setError(null); }
-      return value;
-    } catch (err) { if (generation === snapshotRequest.current) setError(err instanceof Error ? err.message : 'Flujo unavailable'); }
+    return readWorld()
+      .then(value => {
+        if (generation === snapshotRequest.current) { setSnapshot(value); setError(null); }
+        return value;
+      })
+      .catch((err: unknown) => {
+        if (generation === snapshotRequest.current) setError(err instanceof Error ? err.message : 'Flujo unavailable');
+        return undefined;
+      });
   }, []);
   useEffect(() => {
-    const storedLocale = window.localStorage.getItem(workspaceLocalStorageKey('flujo-avatar:locale'));
-    const storedAvatar = window.localStorage.getItem(workspaceLocalStorageKey('flujo-avatar:style'));
-    if (['es', 'pt', 'en'].includes(storedLocale ?? '')) setLocale(storedLocale as WorldLocale);
-    if (['moss', 'orbit', 'spark'].includes(storedAvatar ?? '')) setAvatar(storedAvatar as AvatarStyle);
     void reload();
-    const interval = setInterval(() => { if (document.visibilityState === 'visible') void reload(); }, 15_000);
-    return () => clearInterval(interval);
   }, [reload]);
+  useInterval(() => { if (document.visibilityState === 'visible') void reload(); }, 15_000);
   const pageContext = async (): Promise<AskFlujoPageContext> => await panel.context() ?? {
     scopeId: `world:${getSelectedWorkspace()}`, pageType: 'generic', route: '/world', title: 'Flujo world',
     data: { locale, avatarStyle: avatar, activeIdentity: work.target, selectedPlace: place, world: await reload() ?? snapshot,
@@ -94,10 +112,11 @@ export default function AvatarWorld({ voiceTransport }: { voiceTransport?: Nativ
     onObserverError: () => setError(locale === 'pt' ? 'Não reconheci o pedido. Você pode escrever.' : locale === 'es' ? 'No reconocí la petición. Puedes escribir.' : 'The request was not recognized. You can type.'),
     onInterrupted: () => setVoiceMessages(current => current.map(message => message.done ? message : { ...message, text: '', done: true })),
   });
+  // Another voice transport starts without voice until it answers.
+  useResetOnChange(requestVoice, () => { setVoiceAvailable(false); setVoiceMessages([]); });
   useEffect(() => {
     const controller = new AbortController();
-    setVoiceAvailable(false); offered.current.clear(); voiceRequest.current++;
-    setVoiceMessages([]);
+    offered.current.clear(); voiceRequest.current++;
     void requestVoice('voice', { method: 'GET', signal: controller.signal })
       .then(response => response.ok ? response.json() : null)
       .then(status => { if (!controller.signal.aborted) setVoiceAvailable(Boolean(status?.available)); })
@@ -204,7 +223,7 @@ export default function AvatarWorld({ voiceTransport }: { voiceTransport?: Nativ
     {resource && <ResourcePreview key={resource.id} object={resource} locale={locale} onClose={() => setResource(null)} onConversation={() => { panel.navigate(resource.href); setResource(null); }} />}
     {panel.src && <section className={styles.panel} data-open={panel.open} aria-label={c.inspect} aria-hidden={!panel.open} inert={!panel.open}>
       <div className={styles.panelHead}><span>FLUJO</span><button onClick={() => { panel.close(); void reload(); input.current?.focus(); }} aria-label={c.close}>×</button></div>
-      <iframe ref={panel.iframeRef} src={panel.src} data-flujo-avatar-panel="true" title={c.inspect} />
+      <iframe ref={panelFrame} src={panel.src} data-flujo-avatar-panel="true" title={c.inspect} />
     </section>}
     {setup && <div className={styles.scrim}><ConnectionSetup locale={locale} onClose={() => setSetup(false)} onVerified={async () => { work.newChat(); setVoiceMessages([]); offered.current.clear(); await reload(); setExploring(false); }} onOther={() => { setSetup(false); panel.navigate('/models'); }} /></div>}
   </div>;

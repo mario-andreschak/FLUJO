@@ -29,6 +29,7 @@ import { useI18n } from '@/frontend/contexts/I18nContext';
 import StickySearchBar from '@/frontend/components/shared/StickySearchBar';
 import { useAutoFocusSearch } from '@/frontend/hooks/useAutoFocusSearch';
 import { getSelectedWorkspace } from '@/frontend/utils/workspaceSelection';
+import { useBrowserValue } from '@/frontend/hooks/useBrowserValue';
 
 const GROUP_MESSAGE_KEYS = {
   openai: { name: 'docs.group.openai.name', description: 'docs.group.openai.description' },
@@ -170,19 +171,15 @@ function EndpointCard({ endpoint, workspace }: { endpoint: ApiEndpoint; workspac
   );
 }
 
+const readOrigin = () => window.location.origin;
+
 export default function Docs() {
   const { t } = useI18n();
   const workspace = getSelectedWorkspace();
   const workspaceHeader = workspaceHeaderForReference(workspace);
   const [query, setQuery] = useState('');
   const searchInputRef = useAutoFocusSearch();
-  const [origin, setOrigin] = useState('');
-
-  React.useEffect(() => {
-    if (typeof window !== 'undefined') {
-      setOrigin(window.location.origin);
-    }
-  }, []);
+  const origin = useBrowserValue(readOrigin, '');
 
   const downloadOpenApi = () => {
     const document_ = buildOpenApiDocument(API_GROUPS, origin || 'http://localhost:4200', 'current');
@@ -190,7 +187,8 @@ export default function Docs() {
     const link = document.createElement('a');
     link.href = url; link.download = 'flujo-openapi.json';
     link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    // The click has handed the file to the browser's download, like every other download here.
+    URL.revokeObjectURL(url);
   };
 
   const filteredGroups = useMemo(() => {

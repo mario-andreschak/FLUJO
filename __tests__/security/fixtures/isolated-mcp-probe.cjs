@@ -9,7 +9,7 @@ const ts = require('typescript');
 const repository = path.resolve(__dirname, '../../..');
 const source = path.join(repository, 'src/backend/services/security/isolatedMcp.ts');
 const allowedSources = new Set(['isolatedMcp.ts', 'isolatedMcpInspection.ts', 'windowsPrivateAuthority.ts']
-  .map(name => path.join(path.dirname(source), name)));
+  .map(name => path.join(path.dirname(source), name)).concat(path.resolve(path.dirname(source), '../../../utils/realpath.ts')));
 require.extensions['.ts'] = (module, filename) => {
   if (!allowedSources.has(filename)) throw new Error('Unexpected source module');
   module._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
@@ -22,7 +22,7 @@ const tempRoot = path.resolve(os.tmpdir());
 const workspace = fs.mkdtempSync(path.join(tempRoot, 'flujo-mcp-probe-'));
 let launch;
 let cleanup;
-try {
+(async () => { try {
   const grants = path.join(workspace, 'storage/mcp-grants');
   fs.mkdirSync(path.join(grants, 'public'), { recursive: true });
   fs.mkdirSync(path.join(grants, 'private'));
@@ -59,14 +59,14 @@ try {
     mounts: [{ name: 'public', source: 'storage/mcp-grants/public' }],
     memoryMiB: 128, cpus: 0.5, pidsLimit: 32,
   };
-  launch = createIsolatedMcpLaunch(policy, isolatedMcpPolicyDigest(policy), workspace,
+  launch = await createIsolatedMcpLaunch(policy, isolatedMcpPolicyDigest(policy), workspace,
     { TEST_GRANTED_TOKEN: 'approved fixture token', HOST_SYNTHETIC_SECRET: 'not forwarded' });
   const output = execFileSync(launch.command, [...launch.args], {
     env: launch.env, cwd: launch.cwd, windowsHide: true, timeout: 10000,
     encoding: 'utf8', maxBuffer: 64 * 1024, stdio: ['ignore', 'pipe', 'pipe'],
   });
   const result = JSON.parse(output.trim());
-  cleanup = launch.close();
+  cleanup = await launch.close();
   console.log(JSON.stringify({ sourceProbe: true, image, ...result, cleanup: cleanup.outcome }));
   const booleans = ['grantedRead', 'grantWriteDenied', 'rootWriteDenied', 'ungrantedSiblingDenied',
     'hostSecretAbsent', 'grantedEnvironment', 'nonRoot', 'noCapabilities', 'noNewPrivileges', 'scratchWrite', 'networkDenied'];
@@ -77,8 +77,8 @@ try {
   console.error(error instanceof Error && error.name === 'McpIsolationError' ? error.message : 'Source isolation probe failed');
   process.exitCode = 1;
 } finally {
-  if (launch && !cleanup) console.log(JSON.stringify({ cleanup: launch.close().outcome }));
+  if (launch && !cleanup) console.log(JSON.stringify({ cleanup: (await launch.close()).outcome }));
   const relative = path.relative(tempRoot, workspace);
   if (!/^flujo-mcp-probe-[A-Za-z0-9]+$/.test(relative)) throw new Error('Unsafe probe cleanup target');
   fs.rmSync(workspace, { recursive: true, force: true });
-}
+} })();

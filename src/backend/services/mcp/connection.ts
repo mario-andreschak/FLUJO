@@ -6,9 +6,10 @@ import { McpIsolationError } from '../security/isolatedMcp';
 import { resolveTrustedHostLaunch, trustedHostBrokerEnvironment, attachTrustedHost } from './trustedHost';
 import { trustedHostMcpApprovalAsync, TrustedHostMcpError } from '../security/trustedHostMcp';
 import { attachLocalHostLaunch } from './localHost';
+import { hostTerminalEnvironment } from './hostTerminalEnvironment';
 import {
   prepareMcpIsolation, isolatedSdkEnvironment, attachMcpIsolation, getManagedMcpIsolation, assertHostMcpLaunchAllowed,
-  type ManagedMcpIsolation,
+  settleMcpIsolationCleanup, type ManagedMcpIsolation,
 } from './isolation';
 import { isProtectedExecutionServer } from '@/backend/execution/extensions';
 import { assertExecutionServerConfig } from '@/backend/execution/extensions';
@@ -26,6 +27,10 @@ import {
   SSEClientTransport,
 } from "@modelcontextprotocol/sdk/client/sse.js";
 import { MCPSSEConfig } from "@/shared/types/mcp/mcp";
+import {
+  markClient, markTransport, isBetaClient, clientCapabilityKey, transportKind, transportStdioKey, transportHttpKey,
+  type TransportWithConfigKey,
+} from './sdkMarks';
 import fs from "fs/promises";
 import * as path from "path";
 import * as os from "os";
@@ -96,15 +101,7 @@ import {
   resolveGoalEnduranceFixtureToken,
 } from './goalEnduranceFixtureEnvironment';
 
-// We stash a capabilities key on the client so shouldRecreateClient can detect a change to
-// a client-declared MCP capability that is negotiated at connect time (the SDK doesn't
-// expose a client's own declared capabilities publicly). This includes the per-server
-// MCP Apps opt-in: turning it on/off must renegotiate the UI extension. Roots deliberately do NOT
-// participate: the roots capability is always declared and roots content is resolved
-// fresh per roots/list request (changes are announced via notifications/roots/
-// list_changed) — so no roots change may ever force a client rebuild (issue 46).
-interface ClientWithCapKey {
-  __flujoCapKey?: string;
+interface ClientWithProtectedFingerprint {
   __flujoProtectedConfigFingerprint?: string;
 }
 
@@ -122,10 +119,20 @@ export function protectedConfigFingerprint(config: MCPServerConfig): string {
 }
 
 export function clientProtectedConfigFingerprint(client: Client): string | undefined {
-  return (client as ClientWithCapKey).__flujoProtectedConfigFingerprint;
+  return (client as ClientWithProtectedFingerprint).__flujoProtectedConfigFingerprint;
 }
 
-/** Key of config that drives connect-time client capabilities. */
+/**
+ * Key of config that drives connect-time client capabilities. It is recorded on
+ * the client (markClient) so shouldRecreateClient can detect a change to a
+ * client-declared capability negotiated at connect time (the SDK does not expose
+ * a client's own declared capabilities). This includes the per-server MCP Apps
+ * opt-in: turning it on/off must renegotiate the UI extension. Roots deliberately
+ * do NOT participate: the roots capability is always declared and roots content is
+ * resolved fresh per roots/list request (changes are announced via
+ * notifications/roots/list_changed), so no roots change may ever force a client
+ * rebuild (issue 46).
+ */
 export function capabilityKey(config: MCPServerConfig): string {
   return [
     samplingConfigKey(config),
@@ -133,26 +140,6 @@ export function capabilityKey(config: MCPServerConfig): string {
     mcpAppsEnabled(config) ? "mcp-apps:on" : "mcp-apps:off",
     mcpSkillsEnabled(config) ? "mcp-skills:on" : "mcp-skills:off",
   ].join("|");
-}
-
-// We stash the RAW config key on the transport at creation time so
-// shouldRecreateClient can compare config-to-config (see stdioConfigKey /
-// httpConfigKey below). __flujoStdioKey covers stdio; __flujoHttpKey covers the
-// streamable/SSE (HTTP) auth material that the URL check alone cannot see.
-// __flujoKind identifies the transport type without instanceof so the check also
-// works for v2-beta transports (different classes, see betaClient.ts).
-export interface TransportWithConfigKey {
-  __flujoStdioKey?: string;
-  __flujoHttpKey?: string;
-  __flujoKind?: "stdio" | "streamable" | "sse" | "websocket";
-  /** Capability lease for one managed MCP Apps stdio process generation. */
-  __flujoRuntimeBrokerLeaseId?: string;
-  /** Opaque pending capability for this bundled FLUJO process generation. */
-  __flujoBundledWorkload?: PendingBundledFlujoWorkload;
-  /** Retires only the authority captured by this transport constructor. */
-  __flujoRetireRuntimeAuthority?: () => void;
-  /** Inner SDK transport when FLUJO applies a protocol decorator. */
-  __flujoInnerTransport?: unknown;
 }
 
 /** Process-wide authority uncertainty survives another service/module instance. */
@@ -179,12 +166,19 @@ export class McpRuntimeAuthorityRetirementError extends AggregateError {
 interface AuthorityRetirementQuarantine {
   owner: unknown;
   error: McpRuntimeAuthorityRetirementError;
+  /** Runs the same retirement again; success releases the quarantine. */
+  retry(): Promise<void>;
 }
 declare global {
   var __flujo_mcp_authority_retirement_quarantines: Map<string, AuthorityRetirementQuarantine> | undefined;
+  var __flujo_mcp_authority_retirements: Map<string, Set<Promise<void>>> | undefined;
 }
 function authorityRetirementQuarantines() {
   return globalThis.__flujo_mcp_authority_retirement_quarantines ??= new Map<string, AuthorityRetirementQuarantine>();
+}
+/** Retirements still running, including those started by a server that closed by itself. */
+function authorityRetirementsInFlight() {
+  return globalThis.__flujo_mcp_authority_retirements ??= new Map<string, Set<Promise<void>>>();
 }
 function authorityRetirementKey(serverName: string, workspace = getCurrentWorkspace()) {
   return `${workspace}\u0000${serverName}`;
@@ -193,25 +187,84 @@ export function assertMcpRuntimeAuthorityRetired(serverName: string): void {
   const failed = authorityRetirementQuarantines().get(authorityRetirementKey(serverName));
   if (failed) throw failed.error;
 }
-function noteAuthorityRetirement(serverName: string, workspace: string, owner: unknown, error?: McpRuntimeAuthorityRetirementError) {
+function noteAuthorityRetirement(serverName: string, workspace: string, owner: unknown,
+  failure?: Omit<AuthorityRetirementQuarantine, 'owner'>) {
   const failures = authorityRetirementQuarantines();
   const key = authorityRetirementKey(serverName, workspace);
-  if (error) failures.set(key, { owner, error });
+  if (failure) failures.set(key, { owner, ...failure });
   else if (failures.get(key)?.owner === owner) failures.delete(key);
+}
+function trackAuthorityRetirement(key: string, retirement: Promise<void>) {
+  const inFlight = authorityRetirementsInFlight();
+  const running = inFlight.get(key) ?? new Set<Promise<void>>();
+  running.add(retirement);
+  inFlight.set(key, running);
+  void retirement.catch(() => undefined).finally(() => {
+    running.delete(retirement);
+    if (running.size === 0 && inFlight.get(key) === running) inFlight.delete(key);
+  });
+}
+
+/**
+ * How long a launch waits for its predecessor's retirement. After that it goes
+ * on: the old token is already refused, and a retirement that fails later is
+ * quarantined and retried by the next launch.
+ */
+const AUTHORITY_RETIREMENT_WAIT_MS = 30_000;
+function withinRetirementWait(work: Promise<unknown>): Promise<void> {
+  return new Promise<void>(resolve => {
+    const timer = setTimeout(resolve, AUTHORITY_RETIREMENT_WAIT_MS);
+    timer.unref?.();
+    void work.catch(() => undefined).finally(() => { clearTimeout(timer); resolve(); });
+  });
 }
 
 export function retireMcpRuntimeAuthority(serverName: string, workspace: string,
   workload: PendingBundledFlujoWorkload | undefined,
-  runtimeBroker: ReturnType<typeof issueMcpAppRuntimeBrokerEnvironment> | undefined): void {
-    const errors: unknown[] = [];
-    try { if (workload) revokePendingWorkload(workload); } catch (error) { errors.push(error); }
-    try { revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId); } catch (error) { errors.push(error); }
+  runtimeBroker: ReturnType<typeof issueMcpAppRuntimeBrokerEnvironment> | undefined): Promise<void> {
+  const owner = workload ?? runtimeBroker;
+  const retirement = (async () => {
+    // Both revocations take effect before the first await; only the durable
+    // file retirement of the workload settles later.
+    const steps = await Promise.allSettled([
+      revokePendingWorkload(workload),
+      new Promise<void>(resolve => { revokeMcpAppRuntimeBrokerLease(runtimeBroker?.leaseId); resolve(); }),
+    ]);
+    const errors = steps.flatMap(step => step.status === 'rejected' ? [step.reason] : []);
     if (errors.length) {
       const failure = new McpRuntimeAuthorityRetirementError(errors, 'MCP runtime authority retirement failed.', { cause: errors[0] });
-      noteAuthorityRetirement(serverName, workspace, workload ?? runtimeBroker, failure);
+      noteAuthorityRetirement(serverName, workspace, owner, { error: failure,
+        retry: () => retireMcpRuntimeAuthority(serverName, workspace, workload, runtimeBroker) });
       throw failure;
     }
-    noteAuthorityRetirement(serverName, workspace, workload ?? runtimeBroker);
+    noteAuthorityRetirement(serverName, workspace, owner);
+  })();
+  trackAuthorityRetirement(authorityRetirementKey(serverName, workspace), retirement);
+  return retirement;
+}
+
+/**
+ * A launch waits for retirements of the same server that are still running,
+ * then retries one that failed, so a failed retirement heals on the next launch
+ * instead of blocking the server until FLUJO restarts.
+ */
+export async function settleMcpRuntimeAuthorityRetirement(serverName: string): Promise<void> {
+  const key = authorityRetirementKey(serverName);
+  const running = authorityRetirementsInFlight().get(key);
+  if (running?.size) await withinRetirementWait(Promise.allSettled([...running]));
+  const failed = authorityRetirementQuarantines().get(key);
+  if (failed) await withinRetirementWait(failed.retry());
+  assertMcpRuntimeAuthorityRetired(serverName);
+}
+
+/**
+ * The application's shutdown hook: finish every retirement and container
+ * removal still running, then retry the ones that failed, before the process exits.
+ */
+export async function settleMcpRuntimeRetirements(): Promise<void> {
+  const running = [...authorityRetirementsInFlight().values()].flatMap(retirements => [...retirements]);
+  await Promise.allSettled([...running, settleMcpIsolationCleanup()]);
+  await Promise.allSettled([...authorityRetirementQuarantines().values()].map(failed => failed.retry()));
 }
 
 /** Resolve through FLUJO-owned transport decorators without relying on SDK privates. */
@@ -225,12 +278,6 @@ export function getUnderlyingTransport(transport: unknown): unknown {
     current = inner;
   }
   return current;
-}
-
-// Marker stashed on clients built by the v2-beta path (betaClient.ts), so
-// shouldRecreateClient never reuses a v1 client as a beta client or vice versa.
-export interface ClientWithBetaMarker {
-  __flujoBeta?: boolean;
 }
 
 const log = createLogger("backend/services/mcp/connection");
@@ -272,12 +319,11 @@ export async function resolveConfigHeaders(
   if (config.transport !== "streamable" && config.transport !== "sse") {
     return resolvedConfig;
   }
-  const c = config as unknown as { headers?: Record<string, MCPHeaderValue> };
-  if (!c.headers || typeof c.headers !== "object") {
+  if (!config.headers || typeof config.headers !== "object") {
     return resolvedConfig;
   }
   const resolved = new Map<string, string>();
-  for (const [key, raw] of Object.entries(c.headers)) {
+  for (const [key, raw] of Object.entries(config.headers)) {
     if (!isMcpHeaderName(key)) continue;
     const value = ownMcpStringValue(raw);
     if (!value) continue;
@@ -328,56 +374,6 @@ function transformEnv(env?: Record<string, unknown>): Record<string, string> {
     }
   }
   return mcpStringDataRecord(transformed);
-}
-
-/**
- * Environment keys that locate the signed-in host account and its tool config.
- * If the host does not define one of these, a stale value persisted on the MCP
- * record must not resurrect it and redirect a CLI into a private/fake home.
- */
-const HOST_TERMINAL_ENV_KEYS = new Set([
-  'path', 'pathext',
-  'home', 'userprofile', 'homedrive', 'homepath',
-  'appdata', 'localappdata', 'programdata',
-  'xdg_config_home', 'xdg_cache_home', 'xdg_data_home',
-  'xdg_state_home', 'xdg_runtime_dir',
-  'tmp', 'temp', 'tmpdir',
-  'shell', 'comspec', 'systemroot', 'windir', 'systemdrive',
-  'programfiles', 'programfiles(x86)',
-  'gh_config_dir',
-]);
-
-function setEnvCaseInsensitively(
-  target: Record<string, string>,
-  key: string,
-  value: string | undefined,
-): void {
-  for (const existing of Object.keys(target)) {
-    if (existing.toLowerCase() === key.toLowerCase()) delete target[existing];
-  }
-  if (value !== undefined) target[key] = value;
-}
-
-/**
- * Give the bundled Bash server the actual environment of the FLUJO process.
- * Persisted per-server values remain available for explicit additions, while
- * the live host wins for existing keys. Host identity/config keys also mirror
- * absence, preventing an old GH_CONFIG_DIR/HOME workaround from surviving.
- */
-function hostTerminalEnvironment(configured: Record<string, string>): Record<string, string> {
-  const result = { ...configured };
-  const hostEntries = Object.entries(process.env).filter(
-    (entry): entry is [string, string] => typeof entry[1] === 'string',
-  );
-
-  for (const [key, value] of hostEntries) {
-    setEnvCaseInsensitively(result, key, value);
-  }
-  for (const key of HOST_TERMINAL_ENV_KEYS) {
-    const host = hostEntries.find(([name]) => name.toLowerCase() === key);
-    if (!host) setEnvCaseInsensitively(result, key, undefined);
-  }
-  return result;
 }
 
 /**
@@ -432,34 +428,22 @@ export function localLaunchFingerprint(config: MCPStdioConfig, isolateRuntimeHom
  * transport is keyed with these fields at creation time and compared raw-to-raw here.
  */
 export function httpConfigKey(config: MCPServerConfig): string {
-  // MCPStreamableConfig & MCPSSEConfig intersects to `never` (their `transport` literals
-  // conflict), so read the shared HTTP fields off an explicit optional shape instead.
-  const c = config as unknown as {
-    serverUrl?: string;
-    headers?: Record<string, string>;
-    requestInit?: unknown;
-    eventSourceInit?: unknown;
-    reconnectionOptions?: unknown;
-    sessionId?: string;
-    oauthClientId?: string;
-    oauthIssuer?: string;
-    oauthClientInformation?: unknown;
-    oauthClientSecret?: string;
-    oauthTokens?: unknown;
-  };
+  // A saved record may carry any of these fields whatever its transport, and the
+  // key must change with every one of them, so each is read as stored data.
+  const stored = (name: string): unknown => Reflect.get(config, name);
   return JSON.stringify({
     transport: config.transport,
-    url: c.serverUrl ?? "",
-    headers: c.headers ?? {},
-    requestInit: c.requestInit ?? {},
-    eventSourceInit: c.eventSourceInit ?? {},
-    reconnectionOptions: c.reconnectionOptions ?? {},
-    sessionId: c.sessionId ?? "",
-    oauthClientId: c.oauthClientId ?? "",
-    oauthIssuer: c.oauthIssuer ?? "",
-    oauthClientInformation: c.oauthClientInformation ?? {},
-    oauthClientSecret: c.oauthClientSecret ?? "",
-    oauthTokens: c.oauthTokens ?? {},
+    url: stored("serverUrl") ?? "",
+    headers: stored("headers") ?? {},
+    requestInit: stored("requestInit") ?? {},
+    eventSourceInit: stored("eventSourceInit") ?? {},
+    reconnectionOptions: stored("reconnectionOptions") ?? {},
+    sessionId: stored("sessionId") ?? "",
+    oauthClientId: stored("oauthClientId") ?? "",
+    oauthIssuer: stored("oauthIssuer") ?? "",
+    oauthClientInformation: stored("oauthClientInformation") ?? {},
+    oauthClientSecret: stored("oauthClientSecret") ?? "",
+    oauthTokens: stored("oauthTokens") ?? {},
   });
 }
 
@@ -472,7 +456,7 @@ export function createNewClient(config: MCPServerConfig): Client {
     assertExecutionServerConfig(config);
     // The configured private integration accepts only synchronous tool calls.
     const client = new CompleteToolDiscoveryClient({ name: `flujo-${config.name}-client`, version: '3.48.10' }, { capabilities: {} });
-    (client as unknown as ClientWithCapKey).__flujoCapKey = capabilityKey(config);
+    markClient(client, { __flujoCapKey: capabilityKey(config) });
     Object.defineProperty(client, '__flujoProtectedConfigFingerprint', {
       value: protectedConfigFingerprint(config), enumerable: false,
     });
@@ -536,7 +520,7 @@ export function createNewClient(config: MCPServerConfig): Client {
   if (elicitation) {
     registerElicitationHandler(client, config);
   }
-  (client as unknown as ClientWithCapKey).__flujoCapKey = capabilityKey(config);
+  markClient(client, { __flujoCapKey: capabilityKey(config) });
 
   return client;
 }
@@ -653,10 +637,9 @@ export async function createTransport(
       new URL(config.serverUrl),
       transportoptions,
     );
-    // Key the transport with the RAW auth/session material so shouldRecreateClient can
-    // detect a PAT / Bearer token / header change even when the URL is unchanged.
-    (transport as unknown as TransportWithConfigKey).__flujoHttpKey =
-      httpConfigKey(config);
+    // Key the transport with the RAW URL and auth/session material so shouldRecreateClient
+    // detects a changed address, PAT, Bearer token or header.
+    markTransport(transport, { __flujoHttpKey: httpConfigKey(config) });
     return transport;
   } else if (config.transport === "sse") {
     log.info(
@@ -706,10 +689,9 @@ export async function createTransport(
       new URL(config.serverUrl),
       transportoptions,
     );
-    // Key the transport with the RAW auth/session material so shouldRecreateClient can
-    // detect a PAT / Bearer token / header change even when the URL is unchanged.
-    (transport as unknown as TransportWithConfigKey).__flujoHttpKey =
-      httpConfigKey(config);
+    // Key the transport with the RAW URL and auth/session material so shouldRecreateClient
+    // detects a changed address, PAT, Bearer token or header.
+    markTransport(transport, { __flujoHttpKey: httpConfigKey(config) });
     return transport;
   } else if (config.transport === "websocket") {
     log.info(
@@ -1150,7 +1132,7 @@ export async function createStdioTransport(
 
   let transport: StdioClientTransport;
   try {
-    assertMcpRuntimeAuthorityRetired(config.name);
+    await settleMcpRuntimeAuthorityRetirement(config.name);
     workload = prepareBundledFlujoWorkload(config);
     runtimeBroker = options?.enableRuntimeBroker && mcpAppRuntimeBrokerEnabled(config)
       ? issueMcpAppRuntimeBrokerEnvironment(config.name) : undefined;
@@ -1180,23 +1162,19 @@ export async function createStdioTransport(
     }
   } catch (error) {
     const cleanupErrors: unknown[] = [];
-    try { isolation?.close(); } catch (cleanup) { cleanupErrors.push(cleanup); }
-    try { retireRuntimeAuthority(); } catch (cleanup) { cleanupErrors.push(cleanup); }
+    try { await isolation?.close(); } catch (cleanup) { cleanupErrors.push(cleanup); }
+    try { await retireRuntimeAuthority(); } catch (cleanup) { cleanupErrors.push(cleanup); }
     if (cleanupErrors.length) throw new McpRuntimeAuthorityRetirementError([error, ...cleanupErrors], 'MCP transport creation and authority retirement failed.', { cause: error });
     throw error;
   }
-  if (runtimeBroker) {
-    (transport as unknown as TransportWithConfigKey).__flujoRuntimeBrokerLeaseId =
-      runtimeBroker.leaseId;
-  }
-
-  (transport as unknown as TransportWithConfigKey).__flujoBundledWorkload = workload;
-  (transport as unknown as TransportWithConfigKey).__flujoRetireRuntimeAuthority = retireRuntimeAuthority;
-
-  // Key the transport with the RAW config so shouldRecreateClient can tell whether a
-  // later config is byte-identical, independent of the command/args rewrites above.
-  (transport as unknown as TransportWithConfigKey).__flujoStdioKey =
-    stdioConfigKey(config, options?.isolateRuntimeHome === true);
+  if (runtimeBroker) markTransport(transport, { __flujoRuntimeBrokerLeaseId: runtimeBroker.leaseId });
+  markTransport(transport, {
+    __flujoBundledWorkload: workload,
+    __flujoRetireRuntimeAuthority: retireRuntimeAuthority,
+    // Key the transport with the RAW config so shouldRecreateClient can tell whether a
+    // later config is byte-identical, independent of the command/args rewrites above.
+    __flujoStdioKey: stdioConfigKey(config, options?.isolateRuntimeHome === true),
+  });
 
   // Check if stderr is available
   if (transport.stderr) {
@@ -1239,8 +1217,7 @@ export function shouldRecreateClient(
   // Experimental v2-beta protocol toggle (betaClient.ts). Websocket configs always
   // stay on the v1 SDK (the v2 SDK has no websocket transport), so for them the
   // toggle is not a config change.
-  const clientIsBeta =
-    (client as unknown as ClientWithBetaMarker).__flujoBeta === true;
+  const clientIsBeta = isBetaClient(client);
   const wantBeta = useBetaProtocol && config.transport !== "websocket";
   if (clientIsBeta !== wantBeta) {
     return {
@@ -1254,10 +1231,8 @@ export function shouldRecreateClient(
   // A v2-beta client's transports are different classes, so the v1 instanceof checks
   // below cannot see them. Its transports carry the same raw config keys plus an
   // explicit kind marker (stashed in betaClient.ts), so compare those instead.
-  const betaTransport = clientIsBeta
-    ? client.transport as unknown as TransportWithConfigKey | undefined
-    : undefined;
-  if (clientIsBeta && betaTransport?.__flujoKind !== config.transport) {
+  const betaTransport = clientIsBeta ? client.transport : undefined;
+  if (clientIsBeta && transportKind(betaTransport) !== config.transport) {
     return {
       needsNewClient: true,
       reason: `Transport type changed to ${config.transport}`,
@@ -1269,8 +1244,7 @@ export function shouldRecreateClient(
   // request handlers close over. Roots are exempt by design (issue 46): the capability
   // is always declared and content changes are served live by the roots/list handler +
   // announced via notifications/roots/list_changed — never a rebuild.
-  const currentCapKey =
-    (client as unknown as ClientWithCapKey).__flujoCapKey ?? "";
+  const currentCapKey = clientCapabilityKey(client) ?? "";
   if (currentCapKey !== capabilityKey(config)) {
     return {
       needsNewClient: true,
@@ -1281,7 +1255,7 @@ export function shouldRecreateClient(
   if (betaTransport) {
     if (config.transport === "stdio") {
       if (
-        betaTransport.__flujoStdioKey !==
+        transportStdioKey(betaTransport) !==
         stdioConfigKey(config, options?.isolateRuntimeHome === true)
       ) {
         return {
@@ -1289,7 +1263,7 @@ export function shouldRecreateClient(
           reason: "Connection parameters changed",
         };
       }
-    } else if (betaTransport.__flujoHttpKey !== httpConfigKey(config)) {
+    } else if (transportHttpKey(betaTransport) !== httpConfigKey(config)) {
       return {
         needsNewClient: true,
         reason: `${config.transport} auth/connection parameters changed`,
@@ -1321,24 +1295,11 @@ export function shouldRecreateClient(
       };
     }
 
-    // Check if the server URL has changed
-    const transport = client.transport as StreamableHTTPClientTransport;
-    const currentUrl = (
-      transport as unknown as { _url?: URL }
-    )._url?.toString();
-    if (
-      currentUrl !== undefined &&
-      currentUrl !== new URL(config.serverUrl).toString()
-    ) {
-      return { needsNewClient: true, reason: "Streamable server URL changed" };
-    }
-
-    // The URL alone cannot reveal a changed PAT / Bearer token or custom header (same URL,
-    // new auth). Compare the RAW auth/session key stashed at creation so a token update
-    // rebuilds the client instead of silently reusing the stale-token connection — the
-    // direct cause of the planned execution's `unauthorized` after a PAT update.
-    const existingHttpKey = (transport as unknown as TransportWithConfigKey)
-      .__flujoHttpKey;
+    // Compare the RAW URL and auth/session key recorded at creation. The URL alone
+    // cannot reveal a changed PAT / Bearer token or custom header, and a token update
+    // must rebuild the client instead of silently reusing the stale-token connection
+    // (the direct cause of the planned execution's `unauthorized` after a PAT update).
+    const existingHttpKey = transportHttpKey(client.transport);
     if (!existingHttpKey) {
       return {
         needsNewClient: true,
@@ -1348,7 +1309,7 @@ export function shouldRecreateClient(
     if (existingHttpKey !== httpConfigKey(config)) {
       return {
         needsNewClient: true,
-        reason: "Streamable auth/connection parameters changed",
+        reason: "Streamable server URL, auth or connection parameters changed",
       };
     }
   } else if (config.transport === "sse") {
@@ -1360,23 +1321,9 @@ export function shouldRecreateClient(
       };
     }
 
-    // Check if the server URL has changed
-    const sseConfig = config as MCPSSEConfig;
-    const transport = client.transport as SSEClientTransport;
-    const currentUrl = (
-      transport as unknown as { _url?: URL }
-    )._url?.toString();
-    if (
-      currentUrl !== undefined &&
-      currentUrl !== new URL(sseConfig.serverUrl).toString()
-    ) {
-      return { needsNewClient: true, reason: "SSE server URL changed" };
-    }
-
-    // Same as streamable: detect a changed PAT / Bearer token or custom header behind an
-    // unchanged URL by comparing the RAW auth/session key stashed at creation time.
-    const existingHttpKey = (transport as unknown as TransportWithConfigKey)
-      .__flujoHttpKey;
+    // Same as streamable: the RAW key recorded at creation covers the URL, a PAT /
+    // Bearer token and custom headers.
+    const existingHttpKey = transportHttpKey(client.transport);
     if (!existingHttpKey) {
       return {
         needsNewClient: true,
@@ -1386,7 +1333,7 @@ export function shouldRecreateClient(
     if (existingHttpKey !== httpConfigKey(config)) {
       return {
         needsNewClient: true,
-        reason: "SSE auth/connection parameters changed",
+        reason: "SSE server URL, auth or connection parameters changed",
       };
     }
   } else {
@@ -1411,8 +1358,7 @@ export function shouldRecreateClient(
     // REWRITTEN command/args (.bat -> cmd.exe, bare node -> absolute path), so for e.g.
     // command "node" they never matched the raw config and every reconnect attempt
     // needlessly killed and respawned a healthy server (the restart death-spiral).
-    const existingKey = (client.transport as unknown as TransportWithConfigKey)
-      .__flujoStdioKey;
+    const existingKey = transportStdioKey(client.transport);
     if (!existingKey) {
       // Transport predates the config-key mechanism (only possible for a client adopted
       // across a dev hot-reload via the global recovery map) — we cannot prove the
@@ -1502,7 +1448,7 @@ export async function safelyCloseClient(
   let forced = false;
   const rawTransport = getUnderlyingTransport(client.transport);
   const isolation = getManagedMcpIsolation(rawTransport);
-  let isolationCleanup: ReturnType<ManagedMcpIsolation['close']> | undefined;
+  let isolationCleanup: Awaited<ReturnType<ManagedMcpIsolation['close']>> | undefined;
   const child: ChildProcess | undefined = (
     rawTransport as { _process?: ChildProcess } | undefined
   )?._process;
@@ -1574,14 +1520,14 @@ export async function safelyCloseClient(
     log.warn(`Error closing client for ${serverName}:`, error);
     // We continue even if close fails
   } finally {
-    try { isolationCleanup = isolation?.close(); } catch (error) { retirementErrors.push(error); }
+    try { isolationCleanup = await isolation?.close(); } catch (error) { retirementErrors.push(error); }
     const retire = (rawTransport as TransportWithConfigKey | undefined)?.__flujoRetireRuntimeAuthority;
     if (retire) {
-      try { retire(); } catch (error) { retirementErrors.push(error); }
+      try { await retire(); } catch (error) { retirementErrors.push(error); }
     } else {
       try {
         const workload = (rawTransport as TransportWithConfigKey | undefined)?.__flujoBundledWorkload;
-        if (workload) revokePendingWorkload(workload);
+        if (workload) await revokePendingWorkload(workload);
       } catch (error) { retirementErrors.push(error); }
       try {
         revokeMcpAppRuntimeBrokerLease((rawTransport as TransportWithConfigKey | undefined)?.__flujoRuntimeBrokerLeaseId);

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import { useUiPreference } from '@/frontend/hooks/useUiPreference';
+import { useLater } from './timing';
 
 /**
  * Auto-focus a search `TextField` on mount (and whenever `enabled` flips
@@ -54,17 +55,13 @@ export function useAutoFocusSearch(
   const [preferenceEnabled] = useUiPreference<boolean>('flujo-ui:search:autoFocus', true);
 
   const ref = useRef<HTMLInputElement | null>(null);
+  const focusLater = useLater();
 
   useEffect(() => {
     if (!enabled || !preferenceEnabled) return;
     if (typeof window === 'undefined') return;
 
-    let rafId: number | null = null;
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
-    let cancelled = false;
-
     const runFocus = () => {
-      if (cancelled) return;
       const input = ref.current;
       if (!input) return;
 
@@ -88,19 +85,10 @@ export function useAutoFocusSearch(
       if (selectOnFocus) input.select();
     };
 
-    if (delayMs > 0) {
-      timeoutId = setTimeout(runFocus, delayMs);
-    } else {
-      rafId = window.requestAnimationFrame(runFocus);
-    }
-
-    return () => {
-      cancelled = true;
-      if (rafId !== null) window.cancelAnimationFrame(rafId);
-      if (timeoutId !== null) clearTimeout(timeoutId);
-    };
+    focusLater(runFocus, delayMs > 0 ? delayMs : 'frame');
+    return focusLater.cancel;
     // Re-run (and thus re-focus) whenever `enabled` flips, e.g. a dialog re-opening.
-  }, [enabled, preferenceEnabled, delayMs, selectOnFocus, skipOnCoarsePointer]);
+  }, [enabled, preferenceEnabled, delayMs, selectOnFocus, skipOnCoarsePointer, focusLater]);
 
   return ref;
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import {
   Alert,
   Box,
@@ -49,15 +49,26 @@ export default function ConvertProcessToSubflowDialog({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!open) return;
+  const [seededFrom, setSeededFrom] = useState<{
+    processNodeId: string | null;
+    nodes: typeof parentFlow.nodes;
+    t: typeof t;
+  } | null>(null);
+  const seedChanged = !seededFrom
+    || seededFrom.processNodeId !== processNodeId
+    || seededFrom.nodes !== parentFlow.nodes
+    || seededFrom.t !== t;
+  if (open && seedChanged) {
+    setSeededFrom({ processNodeId, nodes: parentFlow.nodes, t });
     const process = parentFlow.nodes.find(node => node.id === processNodeId);
     const suggested = `${String(process?.data?.label || t('flows.convert.processDefault')).replace(/[^\w-]+/g, '_')}_subflow`;
     setName(suggested);
     setDraft(null);
     setSaving(false);
     setSaveError(null);
-  }, [open, processNodeId, parentFlow.nodes, t]);
+  } else if (!open && seededFrom) {
+    setSeededFrom(null);
+  }
 
   const buildPreview = () => {
     if (!processNodeId) return;

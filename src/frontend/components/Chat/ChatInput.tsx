@@ -54,6 +54,8 @@ import {
 } from '@/utils/shared/promptRefs';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { PointerDragShield, usePointerDrag } from './floatingPanel';
+import { useKeyedState } from './hooks/useKeyedState';
+import { useInterval } from '@/frontend/hooks/timing';
 import {
   SLASH_COMMANDS,
   filterSlashCommands,
@@ -68,6 +70,27 @@ import SlashCommandMenu, { SLASH_MENU_ID, SlashCommandNoticeBanner, slashOptionI
 
 const COMPOSER_HEIGHT_KEY = 'flujo-chat-composer-height';
 const MIN_EDITOR_HEIGHT = 24;
+
+function readSavedComposerHeight(): number | null {
+  try {
+    const saved = Number(window.localStorage.getItem(COMPOSER_HEIGHT_KEY));
+    return Number.isFinite(saved) && saved >= MIN_EDITOR_HEIGHT ? saved : null;
+  } catch {
+    return null; // Resizing still works when browser storage is unavailable.
+  }
+}
+
+// Agent tickets (#379): "Ask FLUJO" on a dashboard ticket card routes here and
+// hands over a one-shot composer draft through sessionStorage. The composer
+// starts with it, and clears it once it has mounted, so a later reload starts empty.
+function readTicketDraft(): string {
+  try {
+    return sessionStorage.getItem(ticketDraftStorageKey()) ?? '';
+  } catch (error) {
+    log.debug('Could not read ticket draft from sessionStorage', { error });
+    return '';
+  }
+}
 
 interface ChatInputProps {
   onSendMessage: (content: string, attachments: Attachment[]) => void;
@@ -160,24 +183,16 @@ const ChatInput: React.FC<ChatInputProps> = ({
       .sort((a, b) => a.localeCompare(b)),
     [globalEnvVars],
   );
-  const [message, setMessage] = useState('');
+  const [message, setMessage] = useState(readTicketDraft);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const attachmentsPending = attachments.some(attachment => attachment.pending);
   const composerRef = useRef<HTMLDivElement>(null);
-  const [preferredEditorHeight, setPreferredEditorHeight] = useState<number | null>(null);
+  const [preferredEditorHeight, setPreferredEditorHeight] = useState<number | null>(readSavedComposerHeight);
   const [editorMetrics, setEditorMetrics] = useState({ height: MIN_EDITOR_HEIGHT, maxHeight: 240 });
   const { activeCursor, startPointerDrag } = usePointerDrag();
   const editorHeight = resizable && preferredEditorHeight !== null
     ? Math.min(editorMetrics.maxHeight, Math.max(MIN_EDITOR_HEIGHT, preferredEditorHeight))
     : undefined;
-
-  useEffect(() => {
-    if (!resizable) return;
-    try {
-      const saved = Number(window.localStorage.getItem(COMPOSER_HEIGHT_KEY));
-      if (Number.isFinite(saved) && saved >= MIN_EDITOR_HEIGHT) setPreferredEditorHeight(saved);
-    } catch { /* Resizing still works when browser storage is unavailable. */ }
-  }, [resizable]);
 
   useEffect(() => {
     if (!resizable) return;
@@ -220,23 +235,17 @@ const ChatInput: React.FC<ChatInputProps> = ({
     try { window.localStorage.removeItem(COMPOSER_HEIGHT_KEY); } catch { /* Optional preference. */ }
   };
 
-  // Agent tickets (#379): "Ask FLUJO" on a dashboard ticket card routes here and
-  // hands over a one-shot composer draft through sessionStorage. The draft is
-  // consumed (and cleared) exactly once so a later reload starts empty.
   useEffect(() => {
     try {
-      const key = ticketDraftStorageKey();
-      const draft = sessionStorage.getItem(key);
-      if (!draft) return;
-      sessionStorage.removeItem(key);
-      setMessage((current) => (current ? current : draft));
+      sessionStorage.removeItem(ticketDraftStorageKey());
     } catch (error) {
-      log.debug('Could not read ticket draft from sessionStorage', { error });
+      log.debug('Could not clear ticket draft from sessionStorage', { error });
     }
   }, []);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
-  const recordingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // The recording clock ticks while recording.
+  useInterval(() => setRecordingTime((previous) => previous + 1), isRecording ? 1000 : null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const editorRef = useRef<GlobalReferenceEditorRef>(null);
   const dragDepthRef = useRef(0);
@@ -247,6 +256,12 @@ const ChatInput: React.FC<ChatInputProps> = ({
   const recordingStreamRef = useRef<MediaStream | null>(null);
   const transcriptionAbortRef = useRef<AbortController | null>(null);
   const pendingAudioBlobRef = useRef<Blob | null>(null);
+  // Whether a recording can be sent for transcription again; the blob itself stays out of render.
+  const [hasPendingAudio, setHasPendingAudio] = useState(false);
+  const rememberPendingAudio = (blob: Blob | null) => {
+    pendingAudioBlobRef.current = blob;
+    setHasPendingAudio(blob !== null);
+  };
   const recordingAttemptRef = useRef(0);
   const mountedRef = useRef(true);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -257,11 +272,6 @@ const ChatInput: React.FC<ChatInputProps> = ({
     return () => {
       mountedRef.current = false;
       recordingAttemptRef.current += 1;
-
-      if (recordingIntervalRef.current) {
-        clearInterval(recordingIntervalRef.current);
-        recordingIntervalRef.current = null;
-      }
 
       const recorder = mediaRecorderRef.current;
       mediaRecorderRef.current = null;
@@ -303,7 +313,43 @@ const ChatInput: React.FC<ChatInputProps> = ({
     else onSelectNode?.(nodeId);
   };
 
-  const [referenceSuggestions, setReferenceSuggestions] = useState<PromptReferenceSuggestion[]>([]);
+  // The MCP servers wired to the process node the next message goes to, and the
+  // tools and resources each one allows.
+  const referenceContexts = useMemo(() => {
+    if (!flow) return [];
+    const startNode = flow.nodes.find((candidate) => (candidate.data?.type ?? candidate.type) === 'start');
+    const startTargetId = startNode
+      ? flow.edges.find((edge) => edge.source === startNode.id && edge.data?.edgeType !== 'mcp')?.target
+      : undefined;
+    const processNodeId = pickerSelectedId
+      ?? startTargetId
+      ?? flow.nodes.find((candidate) => (candidate.data?.type ?? candidate.type) === 'process')?.id;
+    if (!processNodeId) return [];
+
+    const mcpNodeIds = new Set(flow.edges
+      .filter((edge) => edge.data?.edgeType === 'mcp'
+        && (edge.source === processNodeId || edge.target === processNodeId))
+      .map((edge) => edge.source === processNodeId ? edge.target : edge.source));
+    return flow.nodes
+      .filter((candidate) => (candidate.data?.type ?? candidate.type) === 'mcp' && mcpNodeIds.has(candidate.id))
+      .map((candidate) => ({
+        server: candidate.data.properties?.boundServer as string | undefined,
+        enabledTools: Array.isArray(candidate.data.properties?.enabledTools)
+          ? candidate.data.properties.enabledTools.filter((tool): tool is string => typeof tool === 'string')
+          : [],
+        enabledResources: candidate.data.properties?.enabledResources as string[] | 'all' | undefined,
+      }))
+      .filter((context): context is {
+        server: string;
+        enabledTools: string[];
+        enabledResources: string[] | 'all' | undefined;
+      } => !!context.server);
+  }, [flow, pickerSelectedId]);
+  const referenceContextsKey = JSON.stringify(referenceContexts);
+  const [referenceSuggestions, setReferenceSuggestions] = useKeyedState<PromptReferenceSuggestion[]>(
+    referenceContextsKey,
+    [],
+  );
   const editorSuggestions = useMemo<PromptReferenceSuggestion[]>(() => [
     ...referenceSuggestions,
     ...(flow?.nodes ?? []).map(node => ({
@@ -314,51 +360,10 @@ const ChatInput: React.FC<ChatInputProps> = ({
   ], [flow, referenceSuggestions]);
 
   useEffect(() => {
+    if (referenceContexts.length === 0) return undefined;
     let cancelled = false;
-    if (!flow) {
-      setReferenceSuggestions([]);
-      return () => { cancelled = true; };
-    }
-
-    const startNode = flow.nodes.find((candidate) => (candidate.data?.type ?? candidate.type) === 'start');
-    const startTargetId = startNode
-      ? flow.edges.find((edge) => edge.source === startNode.id && edge.data?.edgeType !== 'mcp')?.target
-      : undefined;
-    const processNodeId = pickerSelectedId
-      ?? startTargetId
-      ?? flow.nodes.find((candidate) => (candidate.data?.type ?? candidate.type) === 'process')?.id;
-    if (!processNodeId) {
-      setReferenceSuggestions([]);
-      return () => { cancelled = true; };
-    }
-
-    const mcpNodeIds = new Set(flow.edges
-      .filter((edge) => edge.data?.edgeType === 'mcp'
-        && (edge.source === processNodeId || edge.target === processNodeId))
-      .map((edge) => edge.source === processNodeId ? edge.target : edge.source));
-    const contexts = flow.nodes
-      .filter((candidate) => (candidate.data?.type ?? candidate.type) === 'mcp' && mcpNodeIds.has(candidate.id))
-      .map((candidate) => ({
-        server: candidate.data.properties?.boundServer as string | undefined,
-        enabledTools: new Set<string>(
-          Array.isArray(candidate.data.properties?.enabledTools)
-            ? candidate.data.properties.enabledTools.filter((tool): tool is string => typeof tool === 'string')
-            : [],
-        ),
-        enabledResources: candidate.data.properties?.enabledResources as string[] | 'all' | undefined,
-      }))
-      .filter((context): context is {
-        server: string;
-        enabledTools: Set<string>;
-        enabledResources: string[] | 'all' | undefined;
-      } => !!context.server);
-
-    if (contexts.length === 0) {
-      setReferenceSuggestions([]);
-      return () => { cancelled = true; };
-    }
-
-    void Promise.all(contexts.map(async ({ server, enabledTools, enabledResources }) => {
+    void Promise.all(referenceContexts.map(async ({ server, enabledTools: enabledToolNames, enabledResources }) => {
+      const enabledTools = new Set(enabledToolNames);
       const suggestions: PromptReferenceSuggestion[] = [];
       try {
         const result = await mcpService.listServerTools(server);
@@ -403,7 +408,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
     });
 
     return () => { cancelled = true; };
-  }, [flow, pickerSelectedId]);
+  }, [referenceContextsKey]);
 
   // Dialog state
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -772,7 +777,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
 
       log.debug('Audio stream obtained successfully');
       recordingStreamRef.current = stream;
-      pendingAudioBlobRef.current = null;
+      rememberPendingAudio(null);
       audioChunksRef.current = [];
 
       // Prefer formats accepted directly by OpenAI-compatible transcription
@@ -831,10 +836,6 @@ const ChatInput: React.FC<ChatInputProps> = ({
           recordingAttemptRef.current === attemptId
         ) {
           recordingAttemptRef.current += 1;
-          if (recordingIntervalRef.current) {
-            clearInterval(recordingIntervalRef.current);
-            recordingIntervalRef.current = null;
-          }
           setRecordingTime(0);
           setIsRecording(false);
           setIsProcessing(false);
@@ -875,7 +876,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
         setDialogOpen(true);
 
         if (audioBlob.size === 0) {
-          pendingAudioBlobRef.current = null;
+          rememberPendingAudio(null);
           setPendingAudioMimeType(undefined);
           setTranscriptionStatus(t('chat.input.noAudioData'));
           setTranscriptionState('error');
@@ -883,7 +884,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
           return;
         }
 
-        pendingAudioBlobRef.current = audioBlob;
+        rememberPendingAudio(audioBlob);
 
         try {
           const audioDataUrl = await readFileAsDataUrl(audioBlob);
@@ -904,10 +905,6 @@ const ChatInput: React.FC<ChatInputProps> = ({
 
       mediaRecorder.start();
       setIsRecording(true);
-
-      recordingIntervalRef.current = setInterval(() => {
-        setRecordingTime((previous) => previous + 1);
-      }, 1000);
     } catch (error) {
       if (!mountedRef.current || recordingAttemptRef.current !== attemptId) return;
 
@@ -941,12 +938,6 @@ const ChatInput: React.FC<ChatInputProps> = ({
       } finally {
         stopRecordingResources();
         setIsRecording(false);
-
-        if (recordingIntervalRef.current) {
-          clearInterval(recordingIntervalRef.current);
-          recordingIntervalRef.current = null;
-        }
-
         setRecordingTime(0);
       }
     }
@@ -973,7 +964,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
       recordingAttemptRef.current += 1;
       transcriptionAbortRef.current?.abort();
       transcriptionAbortRef.current = null;
-      pendingAudioBlobRef.current = null;
+      rememberPendingAudio(null);
       stopRecordingResources();
       setIsProcessing(false);
       setTranscriptionState('cancelled');
@@ -1005,7 +996,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
     setAttachments(prev => [...prev, newAttachment]);
     transcriptionAbortRef.current?.abort();
     transcriptionAbortRef.current = null;
-    pendingAudioBlobRef.current = null;
+    rememberPendingAudio(null);
     setPendingAudioDataUrl(null);
     setPendingAudioMimeType(undefined);
     setTranscriptionState('idle');
@@ -1597,7 +1588,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
           {dialogType === 'audio' &&
             !isProcessing &&
             (transcriptionState === 'empty' || transcriptionState === 'error') &&
-            pendingAudioBlobRef.current !== null && (
+            hasPendingAudio && (
               <Button onClick={handleRetryTranscription}>
                 {t('chat.input.retryTranscription')}
               </Button>

@@ -151,40 +151,39 @@ export default function PersonaSettings({
   const [confirmation, setConfirmation] = useState('');
   const [archivePolicy, setArchivePolicy] =
     useState<PersonaDeletionArchivePolicy>('anonymize');
-  const personaIdRef = useRef(detail.persona.id);
-  const latestServerUpdatedAtRef = useRef(detail.persona.updatedAt);
+  const [syncedPersona, setSyncedPersona] = useState({
+    id: detail.persona.id,
+    updatedAt: detail.persona.updatedAt,
+  });
   const [pendingNavigation, setPendingNavigation] = useState<HTMLElement | null>(null);
   const navigationTrigger = useRef<HTMLElement | null>(null);
 
   const dirty = normalized(form) !== normalized(baseline);
   const dirtyRef = useRef(dirty);
-  dirtyRef.current = dirty;
+  useEffect(() => {
+    dirtyRef.current = dirty;
+  }, [dirty]);
   const valid = form.name.trim().length > 0 && form.name.trim().length <= 160;
 
-  useEffect(() => {
-    if (personaIdRef.current !== detail.persona.id) {
-      personaIdRef.current = detail.persona.id;
-      latestServerUpdatedAtRef.current = detail.persona.updatedAt;
-      const next = draftFromPersona(detail.persona);
-      setBaseline(next);
-      setForm(next);
-      setConflict(false);
-      setSaveError(null);
-      setSaveNotice(null);
-      return;
-    }
-    if (detail.persona.updatedAt === latestServerUpdatedAtRef.current) return;
-    latestServerUpdatedAtRef.current = detail.persona.updatedAt;
+  if (syncedPersona.id !== detail.persona.id) {
+    setSyncedPersona({ id: detail.persona.id, updatedAt: detail.persona.updatedAt });
     const next = draftFromPersona(detail.persona);
-    if (dirty) {
-      setBaseline(next);
-      setConflict(true);
-      setSaveError(t('personas.settings.conflict'));
-      return;
-    }
     setBaseline(next);
     setForm(next);
-  }, [detail.persona, dirty, t]);
+    setConflict(false);
+    setSaveError(null);
+    setSaveNotice(null);
+  } else if (detail.persona.updatedAt !== syncedPersona.updatedAt) {
+    setSyncedPersona({ id: detail.persona.id, updatedAt: detail.persona.updatedAt });
+    const next = draftFromPersona(detail.persona);
+    setBaseline(next);
+    if (dirty) {
+      setConflict(true);
+      setSaveError(t('personas.settings.conflict'));
+    } else {
+      setForm(next);
+    }
+  }
 
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => {
@@ -213,21 +212,33 @@ export default function PersonaSettings({
     };
   }, []);
 
-  const loadOptions = async () => {
+  const fetchOptions = (isCurrent: () => boolean = () => true) => personaSettingsService
+    .options()
+    .then((next) => {
+      if (isCurrent()) setOptions(next);
+    })
+    .catch((cause) => {
+      if (isCurrent()) {
+        setOptionsError(cause instanceof Error
+          ? cause.message
+          : t('personas.settings.optionsFailed'));
+      }
+    })
+    .finally(() => {
+      if (isCurrent()) setOptionsLoading(false);
+    });
+
+  const loadOptions = () => {
     setOptionsLoading(true);
     setOptionsError(null);
-    try {
-      setOptions(await personaSettingsService.options());
-    } catch (cause) {
-      setOptionsError(cause instanceof Error
-        ? cause.message
-        : t('personas.settings.optionsFailed'));
-    } finally {
-      setOptionsLoading(false);
-    }
+    return fetchOptions();
   };
 
-  useEffect(() => { void loadOptions(); }, []);
+  useEffect(() => {
+    let current = true;
+    void fetchOptions(() => current);
+    return () => { current = false; };
+  }, []);
 
   const set = <K extends keyof SettingsDraft>(
     key: K,
@@ -252,9 +263,9 @@ export default function PersonaSettings({
         lifecycleState: form.lifecycleState,
         autonomyLevel: form.autonomyLevel,
         interruptionPolicy: form.interruptionPolicy,
-        expectedUpdatedAt: latestServerUpdatedAtRef.current,
+        expectedUpdatedAt: syncedPersona.updatedAt,
       });
-      latestServerUpdatedAtRef.current = saved.updatedAt;
+      setSyncedPersona({ id: saved.id, updatedAt: saved.updatedAt });
       const next = draftFromPersona(saved);
       setBaseline(next);
       setForm(next);
@@ -279,7 +290,7 @@ export default function PersonaSettings({
     setSaveError(null);
     try {
       const fresh = await personaSettingsService.get(detail.persona.id);
-      latestServerUpdatedAtRef.current = fresh.persona.updatedAt;
+      setSyncedPersona({ id: fresh.persona.id, updatedAt: fresh.persona.updatedAt });
       const next = draftFromPersona(fresh.persona);
       setBaseline(next);
       setForm(next);

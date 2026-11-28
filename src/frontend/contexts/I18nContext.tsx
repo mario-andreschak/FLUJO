@@ -19,6 +19,7 @@ import {
   type LocaleInfo,
   type SupportedLocale,
 } from '@/frontend/i18n/locales';
+import { useBrowserValue } from '@/frontend/hooks/useBrowserValue';
 
 interface I18nContextValue {
   locale: SupportedLocale;
@@ -56,7 +57,9 @@ function initialBrowserLocale(): SupportedLocale {
 export function I18nProvider({ children }: { children: React.ReactNode }) {
   // English is deterministic for SSR. Browser detection runs immediately after
   // hydration, avoiding a server/client markup mismatch on first load.
-  const [locale, setLocaleState] = useState<SupportedLocale>(DEFAULT_LOCALE);
+  const browserLocale = useBrowserValue(initialBrowserLocale, DEFAULT_LOCALE);
+  const [chosenLocale, setLocaleState] = useState<SupportedLocale | null>(null);
+  const locale = chosenLocale ?? browserLocale;
 
   const setLocale = useCallback((nextLocale: SupportedLocale) => {
     setLocaleState(nextLocale);
@@ -65,10 +68,6 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
     } catch {
       // The UI can still change language when storage is blocked or unavailable.
     }
-  }, []);
-
-  useEffect(() => {
-    setLocaleState(initialBrowserLocale());
   }, []);
 
   useEffect(() => {

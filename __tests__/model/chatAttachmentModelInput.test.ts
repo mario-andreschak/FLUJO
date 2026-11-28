@@ -205,7 +205,9 @@ describe('sound files for models that cannot listen (#1224)', () => {
       format: 'Audio',
       note: { code: 'audio' },
     };
-    return [{ role: 'user', content: buildApiContent({ role: 'user', content: 'What is this?', attachments: [attachment] } as Parameters<typeof buildApiContent>[0]) }];
+    // The chat sends FLUJO's audio parts, which the model adapters read but OpenAI's types do not list.
+    const content = buildApiContent({ role: 'user', content: 'What is this?', attachments: [attachment] } as Parameters<typeof buildApiContent>[0]);
+    return [{ role: 'user', content: content as OpenAI.ChatCompletionUserMessageParam['content'] }];
   }
 
   it('knows which models listen', () => {

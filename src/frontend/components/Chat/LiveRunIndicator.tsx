@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
+import { useInterval } from '@/frontend/hooks/timing';
 import { Box, Button, Chip, CircularProgress, Collapse, IconButton, Tooltip, Typography } from '@mui/material';
 import PauseCircleOutlineIcon from '@mui/icons-material/PauseCircleOutlined';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
@@ -153,10 +154,7 @@ const LiveRunIndicator: React.FC<LiveRunIndicatorProps> = ({ liveStats, onStop, 
   const [mountedAt] = useState<number>(() => Date.now());
   const [compactExpanded, setCompactExpanded] = useState(false);
 
-  useEffect(() => {
-    const timer = setInterval(() => setNowTick(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, []);
+  useInterval(() => setNowTick(Date.now()), 1000);
 
   const elapsed = liveStats ? Math.max(0, Math.round((nowTick - liveStats.startedAt) / 1000)) : 0;
   const sinceLast = liveStats ? Math.round((nowTick - liveStats.lastEventAt) / 1000) : 0;

@@ -1,6 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useState } from 'react';
+import { useResetOnChange } from './useResetOnChange';
+import { useTimeout } from './timing';
 
 export interface UseAutoHideOnIdleOptions {
   /**
@@ -29,42 +31,16 @@ export interface UseAutoHideOnIdleResult {
  */
 export function useAutoHideOnIdle({ enabled, idleMs = 2500 }: UseAutoHideOnIdleOptions): UseAutoHideOnIdleResult {
   const [hidden, setHidden] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [pokes, setPokes] = useState(0);
 
-  const clear = useCallback(() => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-  }, []);
-
-  const arm = useCallback(() => {
-    clear();
-    timerRef.current = setTimeout(() => {
-      timerRef.current = null;
-      setHidden(true);
-    }, idleMs);
-  }, [clear, idleMs]);
+  // Turning auto-hide on or off, or a new idle time, shows the controls again.
+  useResetOnChange(`${enabled}:${idleMs}`, () => setHidden(false));
+  useTimeout(() => setHidden(true), enabled && !hidden ? idleMs : null, pokes);
 
   const poke = useCallback(() => {
     setHidden(false);
-    if (!enabled) {
-      clear();
-      return;
-    }
-    arm();
-  }, [arm, clear, enabled]);
-
-  useEffect(() => {
-    if (!enabled) {
-      clear();
-      setHidden(false);
-      return clear;
-    }
-    setHidden(false);
-    arm();
-    return clear;
-  }, [enabled, idleMs, arm, clear]);
+    setPokes((count) => count + 1);
+  }, []);
 
   return { visible: !enabled || !hidden, poke };
 }

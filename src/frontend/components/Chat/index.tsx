@@ -1,7 +1,7 @@
 "use client";
 import { cancelPendingElicitation, clearPendingQuestion, shouldHydratePendingInputs } from './elicitationState';
 
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'; // Added useCallback
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { useRouter } from 'next/navigation';
 import { Box, Paper, Typography, Divider, CircularProgress, Alert, Button, Chip, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, Drawer, IconButton, Tooltip, TextField, ToggleButton, ToggleButtonGroup, useMediaQuery } from '@mui/material';
 import { useTheme } from '@mui/material/styles';
@@ -24,6 +24,11 @@ import ChatBubbleOutlineRoundedIcon from '@mui/icons-material/ChatBubbleOutlineR
 import DataObjectRoundedIcon from '@mui/icons-material/DataObjectRounded';
 import { useLocalStorage, StorageKey } from '@/utils/storage';
 import ChatHistory from './ChatHistory';
+import { LocalOnlyConversationIds } from './localOnlyConversations';
+import { startSidebarRefresh } from './sidebarRefresh';
+import { withDeadline } from './deadline';
+import { useBatchedCallback, useTimeout } from '@/frontend/hooks/timing';
+import { useKeyChange, useKeyedState } from './hooks/useKeyedState';
 import { readWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
 import { CONVERSATION_PINS_PREFERENCE } from '@/utils/shared/conversationPins';
 import ChatMessages from './ChatMessages';
@@ -175,7 +180,7 @@ function useStableCallback<Args extends unknown[], Result>(
   callback: (...args: Args) => Result,
 ): (...args: Args) => Result {
   const callbackRef = useRef(callback);
-  callbackRef.current = callback;
+  useLayoutEffect(() => { callbackRef.current = callback; });
   return useCallback((...args: Args) => callbackRef.current(...args), []);
 }
 
@@ -348,6 +353,7 @@ const sameConversationLists = (a: ConversationListItem[], b: ConversationListIte
  *  message "Execution cancelled by user." (mapped to a 500 by the OpenAI-shaped
  *  route). Recognise it from any error shape the SDK/REST layers throw so a
  *  deliberate Stop is never surfaced as a provider failure. */
+const NO_KEYS: ReadonlySet<string> = new Set();
 const SIDEBAR_PAGE_SIZE = 50;
 const MODEL_DELTA_COMMIT_INTERVAL_MS = 125;
 const TOOL_PROGRESS_COMMIT_INTERVAL_MS = 100;
@@ -408,8 +414,9 @@ const Chat: React.FC = () => {
   );
   const currentConversationIdRef = useRef<string | null>(currentConversationId);
   const [loadedMcpSkills, setLoadedMcpSkills] = useState<McpLoadedSkill[]>([]);
-  const [selectedMcpSkillKeys, setSelectedMcpSkillKeys] = useState<ReadonlySet<string>>(
-    () => new Set(),
+  const [selectedMcpSkillKeys, setSelectedMcpSkillKeys] = useKeyedState<ReadonlySet<string>>(
+    currentConversationId,
+    NO_KEYS,
   );
   const selectedMcpSkillSelections = useMemo<McpSkillSelection[]>(() => (
     loadedMcpSkills
@@ -426,7 +433,6 @@ const Chat: React.FC = () => {
   ), [loadedMcpSkills, selectedMcpSkillKeys]);
   useEffect(() => {
     setActiveMcpSkillConversation(currentConversationId);
-    setSelectedMcpSkillKeys(new Set());
     const sync = () => setLoadedMcpSkills(
       currentConversationId ? getConversationMcpSkills(currentConversationId) : [],
     );
@@ -434,15 +440,14 @@ const Chat: React.FC = () => {
     return subscribeMcpSkillSession(sync);
   }, [currentConversationId]);
   const personaCreationPendingRef = useRef(false);
-  const [capturedResourcesByToolCall, setCapturedResourcesByToolCall] = useState<
+  const [capturedResourcesByToolCall, setCapturedResourcesByToolCall] = useKeyedState<
     Record<string, CapturedToolResource>
-  >({});
-  useEffect(() => {
-    setCapturedResourcesByToolCall({});
-  }, [currentConversationId]);
+  >(currentConversationId, {});
   const observedMcpAppResultIdsRef = useRef<Map<string, Set<string>>>(new Map());
-  const [autoOpenMcpAppResultIds, setAutoOpenMcpAppResultIds] = useState<ReadonlySet<string>>(
-    () => new Set(),
+  // Ids only count while the shown details belong to the selected conversation.
+  const [autoOpenMcpAppResultIds, setAutoOpenMcpAppResultIds] = useKeyedState<ReadonlySet<string>>(
+    detailedConversation?.id === currentConversationId ? currentConversationId : null,
+    NO_KEYS,
   );
   const [mcpAppDismissalVersion, setMcpAppDismissalVersion] = useState(0);
   const dismissedMcpAppKeys = useMemo<ReadonlySet<string>>(() => (
@@ -544,8 +549,8 @@ const Chat: React.FC = () => {
   // in flight (issue #177). Keyed by conversation id; drained one-at-a-time by
   // the drain effect once the conversation is idle and unblocked.
   const [queuedMessages, setQueuedMessages] = useState<QueueMap>({});
-  // Guards the drain effect against re-entrancy (one dequeue per idle window).
-  const drainingRef = useRef<boolean>(false);
+  // True while a queued message is being sent (one dequeue per idle window).
+  const [queueDraining, setQueueDraining] = useState(false);
   // Keep this failure as a key so changing language also updates a visible
   // pending-input error. Its recovery belongs to the current input controls.
   const pendingInputErrorKeys = {
@@ -564,7 +569,20 @@ const Chat: React.FC = () => {
   // small additive diff across a ~5100-line file. `error` (the plain string)
   // keeps driving any existing consumer; `errorInfo` feeds ChatErrorDetails.
   const [errorInfo, setErrorInfo] = useState<NormalizedChatError | null>(null);
-  const [subflowRecoveryOptions, setSubflowRecoveryOptions] = useState<SubflowRecoveryOptions | null>(null);
+  // #216: the conversation-level docked MCP Apps canvas.
+  const [canvasState, setCanvasState] = useState<CanvasState>(emptyCanvasState);
+  const [canvasStateOwnerId, setCanvasStateOwnerId] = useState<string | null>(
+    currentConversationId,
+  );
+  const [canvasDockLayout, setCanvasDockLayout] = useState<CanvasDockLayout>({
+    placement: 'bottom',
+    reservedWidth: 0,
+    reservedHeight: 0,
+  });
+  const [subflowRecoveryOptions, setSubflowRecoveryOptions] = useKeyedState<SubflowRecoveryOptions | null>(
+    detailedConversation?.status === 'error' ? detailedConversation.id : null,
+    null,
+  );
   const [subflowRecoveryScope, setSubflowRecoveryScope] = useState<SubflowRecoveryScope | null>(null);
 
   // Other states
@@ -665,9 +683,7 @@ const Chat: React.FC = () => {
     }
   }, [debuggerExpanded]);
 
-  useEffect(() => {
-    wirePreviewAbortRef.current?.abort();
-    wirePreviewRequestRef.current += 1;
+  useKeyChange(currentConversationId, () => {
     setTranscriptView('chat');
     setDebuggerSelectedStepIndex(-1);
     setDebuggerModelCallIndex(0);
@@ -682,19 +698,23 @@ const Chat: React.FC = () => {
     setModelTurnError(null);
     setModelTurnRetry(0);
     setModelTurnFollowLive(true);
-    modelTurnFollowLiveRef.current = true;
     setUnseenModelTurnCount(0);
+  });
+  useEffect(() => {
+    wirePreviewAbortRef.current?.abort();
+    wirePreviewRequestRef.current += 1;
+    modelTurnFollowLiveRef.current = true;
     modelTurnDetailCacheRef.current.clear();
     modelTurnIdsRef.current.clear();
     modelTurnsRef.current = [];
   }, [currentConversationId]);
 
-  useEffect(() => {
+  useKeyChange(Boolean(debugState), () => {
     if (debugState) return;
     setTranscriptView('chat');
     setDebuggerSelectedStepIndex(-1);
     setDebuggerModelCallIndex(0);
-  }, [debugState]);
+  });
 
   useEffect(() => {
     if (!currentConversationId) return;
@@ -899,14 +919,21 @@ const Chat: React.FC = () => {
   // Refs
   const openaiRef = useRef<OpenAI | null>(null);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const stopPolling = () => {
+    if (pollingIntervalRef.current) {
+      log.debug('Stopping polling interval');
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+    }
+  };
   const eventSourceRef = useRef<EventSource | null>(null);
-  const pendingModelDeltasRef = useRef<ModelDeltaEvent[]>([]);
-  const modelDeltaFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const flushModelDeltasRef = useRef<() => void>(() => undefined);
   const eventStreamGenerationRef = useRef(0);
-  const eventStreamRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingToolProgressRef = useRef<Extract<ExecutionEvent, { type: 'tool:progress' }> | null>(null);
-  const toolProgressFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // After the server resets a stream, reconnect a few seconds later from this position.
+  const [streamRecovery, setStreamRecovery] = useState<{
+    conversationId: string;
+    nextSeq: number;
+    generation: number;
+  } | null>(null);
   // The debugger toggle is defined before handleDebugClose (it is handed to the
   // composer); this ref lets it call the latest close/detach implementation.
   const handleDebugCloseRef = useRef<(() => Promise<void>) | null>(null);
@@ -923,7 +950,17 @@ const Chat: React.FC = () => {
   // Conversations that exist only in this client (a split that hasn't been sent
   // yet): the periodic list refresh must not wipe them, and detail fetches for
   // them would 404. Ids drop out as soon as the backend starts returning them.
-  const localOnlyConversationIdsRef = useRef<Set<string>>(new Set());
+  const localOnlyConversationIdsRef = useRef(new LocalOnlyConversationIds());
+  const subscribeLocalOnlyConversations = useCallback(
+    (listener: () => void) => localOnlyConversationIdsRef.current.subscribe(listener),
+    [],
+  );
+  const readLocalOnlyConversationCount = useCallback(() => localOnlyConversationIdsRef.current.size, []);
+  const localOnlyConversationCount = useSyncExternalStore(
+    subscribeLocalOnlyConversations,
+    readLocalOnlyConversationCount,
+    readLocalOnlyConversationCount,
+  );
   // Silent sidebar refreshes share one request. If an event arrives while that
   // request is in flight, coalesce all such events into one trailing refresh
   // rather than overlapping list scans or losing the latest state.
@@ -1183,92 +1220,12 @@ const Chat: React.FC = () => {
     fetchConversations();
   }, []); // Empty array ensures this runs only once on mount
 
-  // Keep the sidebar live from the server's filtered global lifecycle stream.
-  // A slow timeout remains as a safety net for non-execution changes (for
-  // example, another tab creating or renaming an idle conversation). Unlike an
-  // interval, it schedules only after the previous request settles, and all
-  // refreshes pause while the tab is hidden.
-  useEffect(() => {
-    const FALLBACK_REFRESH_MS = 30_000;
-    const EVENT_DEBOUNCE_MS = 200;
-    const MIN_EVENT_REFRESH_MS = 5_000;
-    let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
-    let eventTimer: ReturnType<typeof setTimeout> | null = null;
-    let sidebarEvents: EventSource | null = null;
-    let disposed = false;
-    let lastRefreshStartedAt = 0;
-
-    const clearTimers = () => {
-      if (fallbackTimer) clearTimeout(fallbackTimer);
-      if (eventTimer) clearTimeout(eventTimer);
-      fallbackTimer = null;
-      eventTimer = null;
-    };
-    const scheduleFallback = () => {
-      if (fallbackTimer) clearTimeout(fallbackTimer);
-      if (disposed || document.visibilityState !== 'visible') return;
-      fallbackTimer = setTimeout(() => {
-        fallbackTimer = null;
-        lastRefreshStartedAt = Date.now();
-        void fetchConversations(undefined, { silent: true }).finally(scheduleFallback);
-      }, FALLBACK_REFRESH_MS);
-    };
-    const refreshFromEvent = () => {
-      if (disposed || document.visibilityState !== 'visible') return;
-      // One scheduled refresh represents every lifecycle event in its window.
-      // This preserves the old five-second worst-case cadence under a large
-      // subflow queue instead of turning each child start/done into a scan.
-      if (eventTimer) return;
-      const sinceLastRefresh = Date.now() - lastRefreshStartedAt;
-      const delay = Math.max(EVENT_DEBOUNCE_MS, MIN_EVENT_REFRESH_MS - sinceLastRefresh);
-      eventTimer = setTimeout(() => {
-        eventTimer = null;
-        lastRefreshStartedAt = Date.now();
-        void fetchConversations(undefined, { silent: true }).finally(scheduleFallback);
-      }, delay);
-    };
-    const connect = () => {
-      if (sidebarEvents || disposed || document.visibilityState !== 'visible') return;
-      sidebarEvents = chatService.subscribeToSidebarEvents({
-        onEvent: refreshFromEvent,
-        onReset: () => {
-          if (disposed) return;
-          clearTimers();
-          disconnect();
-          lastRefreshStartedAt = Date.now();
-          void fetchConversations(undefined, { silent: true }).finally(() => {
-            if (disposed || document.visibilityState !== 'visible' || sidebarEvents) return;
-            eventTimer = setTimeout(() => { eventTimer = null; connect(); scheduleFallback(); }, 3000);
-          });
-        },
-      });
-    };
-    const disconnect = () => {
-      sidebarEvents?.close();
-      sidebarEvents = null;
-    };
-    const onVisibilityChange = () => {
-      if (document.visibilityState !== 'visible') {
-        clearTimers();
-        disconnect();
-        return;
-      }
-      connect();
-      lastRefreshStartedAt = Date.now();
-      void fetchConversations(undefined, { silent: true }).finally(scheduleFallback);
-    };
-
-    lastRefreshStartedAt = Date.now(); // the mount effect just started the initial list load
-    connect();
-    scheduleFallback();
-    document.addEventListener('visibilitychange', onVisibilityChange);
-    return () => {
-      disposed = true;
-      clearTimers();
-      disconnect();
-      document.removeEventListener('visibilitychange', onVisibilityChange);
-    };
-  }, [fetchConversations]);
+  // Keep the sidebar live from the server's filtered global lifecycle stream
+  // (sidebarRefresh.ts says how often and when it pauses).
+  useEffect(() => startSidebarRefresh({
+    refresh: () => fetchConversations(undefined, { silent: true }),
+    subscribe: (handlers) => chatService.subscribeToSidebarEvents(handlers),
+  }), [fetchConversations]);
 
   const hydratePendingInputs = useCallback((id: string, snapshot: PendingInputSnapshot | undefined, generation: number) => {
     if (!snapshot || generation !== pendingInputSnapshotGenerationRef.current || stoppedConversationIdsRef.current.has(id)) return;
@@ -1449,26 +1406,27 @@ const Chat: React.FC = () => {
     }
   }, [isLoadingFullTranscript, t]);
 
-  useEffect(() => {
-    // Switching conversations: drop any approval prompt belonging to the previous
-    // one so it can't linger on the newly-viewed conversation. The correct prompt
-    // re-appears from the (replayed) event stream if the now-viewed conversation
-    // is itself awaiting approval.
+  // Switching conversations: drop any approval prompt belonging to the previous
+  // one so it can't linger on the newly-viewed conversation. The correct prompt
+  // re-appears from the (replayed) event stream if the now-viewed conversation
+  // is itself awaiting approval.
+  useKeyChange(currentConversationId, () => {
     setPendingToolCalls(null);
     setPendingQuestion(null);
     setPendingElicitation(null);
-    pendingInputSnapshotGenerationRef.current++;
-    pendingInputPositionRef.current = { conversationId: currentConversationId, seq: -1 };
     // A manual node pick belongs to the conversation it was made in.
     setNodeOverride(null);
-    if (currentConversationId) {
-      fetchDetailedConversation(currentConversationId);
-    } else {
+    if (!currentConversationId) {
       // Clear details if no conversation is selected
       setDetailedConversation(null);
       setIsLoadingDetails(false);
       setDetailsError(null);
     }
+  });
+  useEffect(() => {
+    pendingInputSnapshotGenerationRef.current++;
+    pendingInputPositionRef.current = { conversationId: currentConversationId, seq: -1 };
+    if (currentConversationId) fetchDetailedConversation(currentConversationId);
   }, [currentConversationId, fetchDetailedConversation]); // Trigger fetch when selection changes
 
   // Treat the first message snapshot for a conversation as passive hydration.
@@ -1476,10 +1434,7 @@ const Chat: React.FC = () => {
   // auto-open policy, so revisiting/reloading history cannot resurrect Apps.
   useEffect(() => {
     const conversationId = detailedConversation?.id;
-    if (!conversationId || conversationId !== currentConversationId) {
-      setAutoOpenMcpAppResultIds((current) => current.size === 0 ? current : new Set());
-      return;
-    }
+    if (!conversationId || conversationId !== currentConversationId) return;
 
     const fresh = observeNewMcpAppResultIds(
       observedMcpAppResultIdsRef.current,
@@ -1495,11 +1450,11 @@ const Chat: React.FC = () => {
 
   // The child latches the positive auto-launch command. Retire transient ids so
   // a later render-window remount cannot replay the same historical launch.
-  useEffect(() => {
-    if (autoOpenMcpAppResultIds.size === 0) return undefined;
-    const timer = window.setTimeout(() => setAutoOpenMcpAppResultIds(new Set()), 1_500);
-    return () => window.clearTimeout(timer);
-  }, [autoOpenMcpAppResultIds]);
+  useTimeout(
+    () => setAutoOpenMcpAppResultIds(NO_KEYS),
+    autoOpenMcpAppResultIds.size === 0 ? null : 1_500,
+    autoOpenMcpAppResultIds,
+  );
 
   const recoveryParentSummary = detailedConversation?.parentConversationId
     ? conversationList.find((conversation) => conversation.id === detailedConversation.parentConversationId)
@@ -1511,10 +1466,7 @@ const Chat: React.FC = () => {
       conversationId &&
       detailedConversation?.status === 'error',
     );
-    if (!shouldLoad || !conversationId) {
-      setSubflowRecoveryOptions(null);
-      return;
-    }
+    if (!shouldLoad || !conversationId) return;
     let disposed = false;
     const controller = new AbortController();
     void chatService.getSubflowRecoveryOptions(conversationId, controller.signal)
@@ -1538,10 +1490,12 @@ const Chat: React.FC = () => {
   // Reflect the viewed conversation's persisted "Require Tool Approval" setting in
   // the checkbox. Keyed on the conversation id so it only re-syncs on a switch, not
   // on every content refresh (which would clobber a just-toggled value mid-run).
+  useKeyChange(detailedConversation?.id, () => {
+    if (detailedConversation) setRequireApproval(detailedConversation.requireApproval ?? false);
+  });
   useEffect(() => {
     if (detailedConversation) {
       savedApprovalRef.current = { conversationId: detailedConversation.id, value: detailedConversation.requireApproval === true };
-      setRequireApproval(detailedConversation.requireApproval ?? false);
     }
   }, [detailedConversation?.id]);
 
@@ -1697,10 +1651,10 @@ const Chat: React.FC = () => {
   // Reset the SSE-accumulated visited set when the viewed conversation changes
   // so a previous conversation's executed nodes never bleed into another
   // (issue #243). Same-conversation refetches keep the same id and don't clear.
-  useEffect(() => {
+  useKeyChange(detailedConversation?.id, () => {
     setSseVisitedNodeIds(new Set());
     setDebuggerEvents([]);
-  }, [detailedConversation?.id]);
+  });
 
   // The node the NEXT message will be processed on, for the chat input's node
   // pill: a manual pick wins, then the server's currentNodeId, then the most
@@ -2029,14 +1983,8 @@ const Chat: React.FC = () => {
 
   // Clear the highlight a couple of seconds after landing so it doesn't linger
   // forever, and reset it whenever the viewed conversation changes.
-  useEffect(() => {
-    if (!anchorMessageId) return;
-    const timeout = window.setTimeout(() => setAnchorMessageId(null), 4000);
-    return () => window.clearTimeout(timeout);
-  }, [anchorMessageId]);
-  useEffect(() => {
-    setAnchorMessageId(null);
-  }, [currentConversationId]);
+  useTimeout(() => setAnchorMessageId(null), anchorMessageId ? 4000 : null, anchorMessageId);
+  useKeyChange(currentConversationId, () => setAnchorMessageId(null));
 
   // --- Quick Chat (issue #61): a model + optional MCP servers, no saved flow ---
   const [quickChatOpen, setQuickChatOpen] = useState<boolean>(false);
@@ -2105,14 +2053,9 @@ const Chat: React.FC = () => {
   }, []);
 
   // --- Live execution event stream (SSE) ---
-  const flushToolProgress = useCallback(() => {
-    if (toolProgressFlushTimerRef.current !== null) {
-      clearTimeout(toolProgressFlushTimerRef.current);
-      toolProgressFlushTimerRef.current = null;
-    }
-    const event = pendingToolProgressRef.current;
-    pendingToolProgressRef.current = null;
-    if (!event) return;
+  // Tool progress commits at most every TOOL_PROGRESS_COMMIT_INTERVAL_MS; the newest event wins.
+  const enqueueToolProgress = useBatchedCallback<Extract<ExecutionEvent, { type: 'tool:progress' }>>((events) => {
+    const event = events[events.length - 1];
     if (event.laneIndex != null) {
       setLiveLanes(prev => applyLaneEvent(prev, event));
     }
@@ -2123,35 +2066,37 @@ const Chat: React.FC = () => {
       startedAt: prev?.startedAt ?? Date.now(),
       lastEventAt: Date.now(),
     }));
-  }, []);
+  }, TOOL_PROGRESS_COMMIT_INTERVAL_MS);
+  const flushToolProgress = enqueueToolProgress.flush;
 
-  const enqueueToolProgress = useCallback((event: Extract<ExecutionEvent, { type: 'tool:progress' }>) => {
-    pendingToolProgressRef.current = event;
-    if (toolProgressFlushTimerRef.current !== null) return;
-    toolProgressFlushTimerRef.current = setTimeout(
-      flushToolProgress,
-      TOOL_PROGRESS_COMMIT_INTERVAL_MS,
-    );
-  }, [flushToolProgress]);
+  // Cap transcript reconciliation at 10 fps while preserving every byte of
+  // the streamed response. The final/non-delta event flushes synchronously,
+  // so this introduces no ordering gap at model or run completion.
+  const enqueueModelDelta = useBatchedCallback<ModelDeltaEvent>((pending) => {
+    setDetailedConversation(prev => prev ? applyModelDeltaBatch(prev, pending) : prev);
+    setLiveStats(prev => ({
+      totalTokens: prev?.totalTokens ?? 0,
+      ...(prev?.tokensNotReported ? { tokensNotReported: true } : {}),
+      activeNode: prev?.activeNode ?? null,
+      startedAt: prev?.startedAt ?? Date.now(),
+      lastEventAt: Date.now(),
+    }));
+  }, MODEL_DELTA_COMMIT_INTERVAL_MS);
+  const flushModelDeltas = enqueueModelDelta.flush;
 
   const closeEventStream = useCallback(() => {
     eventStreamGenerationRef.current++;
-    if (eventStreamRetryTimerRef.current !== null) clearTimeout(eventStreamRetryTimerRef.current);
-    eventStreamRetryTimerRef.current = null;
+    setStreamRecovery(null);
     // Preserve any final delta-only burst even when navigation/unmount closes
     // the stream before a terminal non-delta event arrives.
-    flushModelDeltasRef.current();
-    if (toolProgressFlushTimerRef.current !== null) {
-      clearTimeout(toolProgressFlushTimerRef.current);
-      toolProgressFlushTimerRef.current = null;
-    }
-    pendingToolProgressRef.current = null;
+    flushModelDeltas();
+    enqueueToolProgress.cancel();
     if (eventSourceRef.current) {
       log.debug('Closing execution event stream');
       eventSourceRef.current.close();
       eventSourceRef.current = null;
     }
-  }, []);
+  }, [enqueueToolProgress, flushModelDeltas]);
 
   // Patch one conversation's sidebar status in place. No re-sort: a status
   // change alone must not reshuffle the list; identity is kept when unchanged.
@@ -2167,38 +2112,6 @@ const Chat: React.FC = () => {
     },
     []
   );
-
-  const flushModelDeltas = useCallback(() => {
-    if (modelDeltaFlushTimerRef.current !== null) {
-      clearTimeout(modelDeltaFlushTimerRef.current);
-      modelDeltaFlushTimerRef.current = null;
-    }
-    const pending = pendingModelDeltasRef.current;
-    if (pending.length === 0) return;
-    pendingModelDeltasRef.current = [];
-
-    setDetailedConversation(prev => prev ? applyModelDeltaBatch(prev, pending) : prev);
-    setLiveStats(prev => ({
-      totalTokens: prev?.totalTokens ?? 0,
-      ...(prev?.tokensNotReported ? { tokensNotReported: true } : {}),
-      activeNode: prev?.activeNode ?? null,
-      startedAt: prev?.startedAt ?? Date.now(),
-      lastEventAt: Date.now(),
-    }));
-  }, []);
-  flushModelDeltasRef.current = flushModelDeltas;
-
-  const enqueueModelDelta = useCallback((event: ModelDeltaEvent) => {
-    pendingModelDeltasRef.current.push(event);
-    if (modelDeltaFlushTimerRef.current !== null) return;
-    // Cap transcript reconciliation at 10 fps while preserving every byte of
-    // the streamed response. The final/non-delta event flushes synchronously,
-    // so this introduces no ordering gap at model or run completion.
-    modelDeltaFlushTimerRef.current = setTimeout(
-      flushModelDeltas,
-      MODEL_DELTA_COMMIT_INTERVAL_MS,
-    );
-  }, [flushModelDeltas]);
 
   // Apply a single execution event from the SSE stream to local UI state.
   const applyExecutionEvent = useCallback((event: ExecutionEvent) => {
@@ -2695,7 +2608,8 @@ const Chat: React.FC = () => {
     // Lane rows are rebuilt from the replay; without this, rows from a
     // previously-viewed conversation would merge with the replayed ones.
     setLiveLanes(EMPTY_LIVE_LANES);
-    return new Promise<void>((resolve) => {
+    // Safety: never block the run for more than ~1.5s waiting to connect.
+    return withDeadline(new Promise<void>((resolve) => {
       let settled = false;
       const settle = () => {
         if (!settled) {
@@ -2730,25 +2644,30 @@ const Chat: React.FC = () => {
               const recoveryGeneration = eventStreamGenerationRef.current;
               void fetchDetailedConversation(conversationId).then(() => {
                 if (eventStreamGenerationRef.current !== recoveryGeneration || currentConversationIdRef.current !== conversationId) return;
-                eventStreamRetryTimerRef.current = setTimeout(() => {
-                  eventStreamRetryTimerRef.current = null;
-                  if (eventStreamGenerationRef.current !== recoveryGeneration || currentConversationIdRef.current !== conversationId) return;
-                  void openEventStream(conversationId, control.nextSeq, { activityOnly: true });
-                }, 3000);
+                setStreamRecovery({ conversationId, nextSeq: control.nextSeq, generation: recoveryGeneration });
               }).catch(err => log.warn('Failed to recover execution snapshot', { conversationId, err }));
             },
           },
           fromSeq,
           replayOptions,
         );
-        // Safety: never block the run for more than ~1.5s waiting to connect.
-        setTimeout(settle, 1500);
       } catch (err) {
         log.error('Failed to open execution event stream', { conversationId, err });
         settle();
       }
-    });
+    }), 1500, () => undefined);
   }, [applyExecutionEvent, closeEventStream, fetchDetailedConversation, refreshPendingInputs]);
+
+  useTimeout(() => {
+    const recovery = streamRecovery;
+    setStreamRecovery(null);
+    if (
+      !recovery
+      || eventStreamGenerationRef.current !== recovery.generation
+      || currentConversationIdRef.current !== recovery.conversationId
+    ) return;
+    void openEventStream(recovery.conversationId, recovery.nextSeq, { activityOnly: true });
+  }, streamRecovery ? 3000 : null, streamRecovery);
 
   // Re-attach to a run that is still in progress on the backend — e.g. after
   // navigating to another page (which unmounts Chat and tears down the stream)
@@ -3122,6 +3041,9 @@ const Chat: React.FC = () => {
     },
   ) => {
     if (!content.trim() && attachments.length === 0) return;
+    // One time for everything this send creates (steering, queued or new message).
+    // eslint-disable-next-line react-hooks/purity -- this handler runs only when a message is sent; the compiler cannot follow this long handler and treats it as render code
+    const sentAt = Date.now();
     if (!detailedConversation) {
        log.error("Cannot send message, detailed conversation not loaded.");
        setError(t('chat.page.detailsMissing'));
@@ -3159,7 +3081,7 @@ const Chat: React.FC = () => {
             id: messageId,
             role: 'user',
             content,
-            timestamp: Date.now(),
+            timestamp: sentAt,
           };
           updateDetailedConversationState({
             ...detailedConversation,
@@ -3182,7 +3104,7 @@ const Chat: React.FC = () => {
           // Capture the one-shot node pick now so it applies only to THIS message.
           nodeOverride: nodeOverride ?? null,
           mcpSkillSelections: selectedMcpSkillSelections,
-          timestamp: Date.now(),
+          timestamp: sentAt,
         };
         setQueuedMessages(prev => enqueueMsg(prev, convId, queued));
         setNodeOverride(null);
@@ -3270,7 +3192,7 @@ const Chat: React.FC = () => {
       id: uuidv4(),
       role: 'user',
       content,
-      timestamp: Date.now(),
+      timestamp: sentAt,
       attachments: attachments.length > 0 ? attachments : undefined,
       processNodeId: nodeIdToAssign // Assign the determined processNodeId
     };
@@ -3510,14 +3432,6 @@ const Chat: React.FC = () => {
 
 
   // Function to stop polling (legacy interval; live updates now use SSE)
-  const stopPolling = () => {
-    if (pollingIntervalRef.current) {
-      log.debug('Stopping polling interval');
-      clearInterval(pollingIntervalRef.current);
-      pollingIntervalRef.current = null;
-    }
-  };
-
   // The live event stream is opened imperatively at run start (see
   // sendToChatCompletions / debug handlers) so it is connected before events
   // are emitted. Here we only ensure it is torn down when the component unmounts.
@@ -3868,8 +3782,8 @@ const Chat: React.FC = () => {
   // #97: stable MCP App -> conversation return channels. ui/message starts a
   // follow-up user turn. ui/update-model-context is deliberately separate: it
   // only replaces that app's wire context for a future turn.
-  const handleSendMessageRef = useRef(handleSendMessage);
-  handleSendMessageRef.current = handleSendMessage;
+  const handleSendMessageRef = useRef<typeof handleSendMessage | null>(null);
+  useLayoutEffect(() => { handleSendMessageRef.current = handleSendMessage; });
   useEffect(() => {
     const listener = (event: Event) => {
       if (!isBigTutorialEvent(event) || event.detail.type !== 'send-example') return;
@@ -3878,8 +3792,10 @@ const Chat: React.FC = () => {
         emitBigTutorialEvent({ type: 'chat-run-status', conversationId, status: 'error' });
         return;
       }
+      const send = handleSendMessageRef.current;
+      if (!send) return;
       emitBigTutorialEvent({ type: 'chat-run-status', conversationId, status: 'running' });
-      void handleSendMessageRef.current(message).catch(() => {
+      void send(message).catch(() => {
         emitBigTutorialEvent({ type: 'chat-run-status', conversationId, status: 'error' });
       });
     };
@@ -3892,7 +3808,9 @@ const Chat: React.FC = () => {
       !appCallbackConversationId
       || currentConversationIdRef.current !== appCallbackConversationId
     ) return false;
-    void handleSendMessageRef.current(text);
+    const send = handleSendMessageRef.current;
+    if (!send) return false;
+    void send(text);
     return true;
   }, [appCallbackConversationId]);
   const handleAppModelContext = useCallback((
@@ -3925,15 +3843,7 @@ const Chat: React.FC = () => {
   }, [appCallbackConversationId]);
 
   // --- #216: conversation-level docked MCP Apps canvas ---------------------
-  const [canvasState, setCanvasState] = useState<CanvasState>(emptyCanvasState);
-  const [canvasStateOwnerId, setCanvasStateOwnerId] = useState<string | null>(
-    currentConversationId,
-  );
-  const [canvasDockLayout, setCanvasDockLayout] = useState<CanvasDockLayout>({
-    placement: 'bottom',
-    reservedWidth: 0,
-    reservedHeight: 0,
-  });
+  // (its state is declared with the other screen state above)
   const handleCanvasLayoutChange = useCallback((next: CanvasDockLayout) => {
     setCanvasDockLayout((current) => (
       current.placement === next.placement
@@ -4053,11 +3963,11 @@ const Chat: React.FC = () => {
   }, [appCallbackConversationId, setMcpAppDismissed]);
 
   // Reset the canvas when switching conversations (per-conversation surface).
-  useEffect(() => {
+  useKeyChange(currentConversationId, () => {
     setCanvasStateOwnerId(currentConversationId);
     setCanvasState(emptyCanvasState);
     setCanvasDockLayout({ placement: 'bottom', reservedWidth: 0, reservedHeight: 0 });
-  }, [currentConversationId]);
+  });
 
   // Later results replace an already-open canvas View. New apps remain inline
   // until a pip-capable View/user explicitly requests the canvas transition.
@@ -4099,6 +4009,7 @@ const Chat: React.FC = () => {
       }
     }
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- updateCanvasApp stamps each refreshed View with the current time, which rendering may not read
     setCanvasState((prev) => {
       let next = prev;
       for (const key of next.order) {
@@ -4553,11 +4464,9 @@ const Chat: React.FC = () => {
   };
 
   // Keep local breakpoints in sync with the authoritative debug state.
-  useEffect(() => {
-    if (debugState) {
-      setBreakpoints(debugState.breakpoints ?? []);
-    }
-  }, [debugState]);
+  useKeyChange(debugState, () => {
+    if (debugState) setBreakpoints(debugState.breakpoints ?? []);
+  });
 
   // Replace the whole breakpoint set (context-menu actions: clear all, arm/
   // disarm the `tool:*` tool breakpoint, …). Optimistic, reverts on failure.
@@ -4863,13 +4772,6 @@ const Chat: React.FC = () => {
     currentConversationSummary?.status,
   ]);
 
-  // --- Add logging for Edit button prop ---
-  log.debug('Rendering Chat component', {
-    currentConversationId,
-    isHandleEditMessageDefined: typeof handleEditMessage === 'function'
-  });
-  // --- End logging ---
-
   // The debugger panel stays open for the whole debug session (not just while
   // paused), so it doesn't flicker shut while a step/continue is executing.
   // It ALSO opens the instant the user presses the Debugger button — before any
@@ -4962,11 +4864,11 @@ const Chat: React.FC = () => {
     [modelTurnSnapshot],
   );
 
+  useKeyChange(Boolean(selectedModelTurn), () => {
+    if (!selectedModelTurn) setModelTurnLoading(false);
+  });
   useEffect(() => {
-    if (!selectedModelTurn) {
-      setModelTurnLoading(false);
-      return;
-    }
+    if (!selectedModelTurn) return undefined;
     const cacheKey = `${selectedModelTurn.conversationId}:${selectedModelTurn.id}`;
     const cached = modelTurnDetailCacheRef.current.get(cacheKey);
     if (cached) {
@@ -5003,19 +4905,26 @@ const Chat: React.FC = () => {
   // Fetch only while the user is looking at the predictive wire view. Cleanup
   // aborts view-close, node-change, conversation-change, and unmount requests;
   // the monotonic id also rejects responses that race with cancellation.
+  const wirePreviewWanted = Boolean(showingCurrentPreview && currentConversationId && selectedPreviewNodeId);
+  useKeyChange(
+    JSON.stringify([wirePreviewWanted, currentConversationId, selectedPreviewNodeId, wirePreviewRetry]),
+    () => {
+      if (!wirePreviewWanted) {
+        setWirePreviewLoading(false);
+        return;
+      }
+      setWirePreview(null);
+      setWirePreviewError(null);
+      setWirePreviewLoading(true);
+    },
+  );
   useEffect(() => {
     wirePreviewAbortRef.current?.abort();
     const requestId = ++wirePreviewRequestRef.current;
-    if (!showingCurrentPreview || !currentConversationId || !selectedPreviewNodeId) {
-      setWirePreviewLoading(false);
-      return;
-    }
+    if (!showingCurrentPreview || !currentConversationId || !selectedPreviewNodeId) return undefined;
 
     const controller = new AbortController();
     wirePreviewAbortRef.current = controller;
-    setWirePreview(null);
-    setWirePreviewError(null);
-    setWirePreviewLoading(true);
 
     void chatService.getWirePreview(
       currentConversationId,
@@ -5080,36 +4989,37 @@ const Chat: React.FC = () => {
   // and unblocked (issue #177). FIFO, one run at a time: pop the head and push
   // it through the normal send path. Never drains while a run is in flight,
   // awaiting tool approval, paused in the debugger, ended in error, or was just
-  // stopped by the user. `drainingRef` guards against re-entrancy so a single
+  // stopped by the user. `queueDraining` guards against re-entrancy so a single
   // idle window sends exactly one queued message; the next drains after that
-  // run's run:done flips runningConvs back off.
-  useEffect(() => {
+  // run's run:done flips runningConvs back off. `queueDraining` is state, so
+  // the end of a send is itself a reason to look at the queue again.
+  // Sending relies on detailedConversation being the viewed conversation.
+  const queueHead = currentConversationId && detailedConversation?.id === currentConversationId
+    ? peekMsgQueue(queuedMessages, currentConversationId)
+    : undefined;
+  const queueDrainable = !queueDraining && !!queueHead && !!currentConversationId && canDrainQueue({
+    running: runningConvs.has(currentConversationId),
+    pendingApproval: !!pendingToolCalls,
+    debugPaused: isDebugPaused,
+    hasError: currentConversationSummary?.status === 'error',
+    stopped: viewedConversationStopped,
+  });
+  useTimeout(() => {
     const convId = currentConversationId;
-    if (!convId || drainingRef.current) return;
-    // Sending relies on detailedConversation being the viewed conversation.
-    if (!detailedConversation || detailedConversation.id !== convId) return;
-    const head = peekMsgQueue(queuedMessages, convId);
-    if (!head) return;
-    const eligible = canDrainQueue({
-      running: runningConvs.has(convId),
-      pendingApproval: !!pendingToolCalls,
-      debugPaused: isDebugPaused,
-      hasError: currentConversationSummary?.status === 'error',
-      stopped: viewedConversationStopped,
-    });
-    if (!eligible) return;
-    drainingRef.current = true;
+    const send = handleSendMessageRef.current;
+    if (!convId || !queueHead || !queueDrainable || !send) return;
+    setQueueDraining(true);
     // Non-lossy drain (#221): peek the head first; only remove it from the queue
     // AFTER the send has committed the optimistic bubble. On failure, re-enqueue
     // at the front so the message is retried and never silently dropped.
-    const capturedHead = head; // close over the identity
-    const timer = setTimeout(async () => {
+    const capturedHead = queueHead; // close over the identity
+    void (async () => {
       try {
         // Dequeue by id (not position) just before we send, so the pending
         // bubble disappears from the "synthetic" layer and gets promoted to a
         // real optimistic bubble inside handleSendMessage.
         setQueuedMessages(prev => removeQueuedMsg(prev, convId, capturedHead.id));
-        await handleSendMessage(capturedHead.content, capturedHead.attachments, {
+        await send(capturedHead.content, capturedHead.attachments, {
           fromQueue: true,
           nodeOverride: capturedHead.nodeOverride,
           queuedId: capturedHead.id,
@@ -5119,25 +5029,10 @@ const Chat: React.FC = () => {
         // Send failed — put it back at the front so it is the next to drain.
         setQueuedMessages(prev => requeueFrontMsg(prev, convId, capturedHead));
       } finally {
-        drainingRef.current = false;
+        setQueueDraining(false);
       }
-    }, 0);
-    return () => clearTimeout(timer);
-    // handleSendMessage is intentionally omitted (stable behavior; including it
-    // would re-run this effect every render on its fresh identity).
-  }, [
-    currentConversationId,
-    detailedConversation,
-    queuedMessages,
-    runningConvs,
-    pendingToolCalls,
-    isDebugPaused,
-    currentConversationSummary?.status,
-    viewedConversationStopped,
-  ]);
-
-  // ChatHistory is memoized because this parent updates for every streamed chat
-  // event. These wrappers keep its action props stable while always invoking
+    })();
+  }, queueDrainable ? 0 : null, queuedMessages);
   // the latest implementation/closure.
   const sidebarDeleteConversation = useStableCallback(deleteConversation);
   const sidebarBulkDeleteConversations = useStableCallback(bulkDeleteConversations);
@@ -5267,7 +5162,7 @@ const Chat: React.FC = () => {
   ) : (
     <ChatHistory
       conversations={conversationList}
-      totalConversations={conversationPagination.total + localOnlyConversationIdsRef.current.size}
+      totalConversations={conversationPagination.total + localOnlyConversationCount}
       hasMoreConversations={conversationPagination.hasMore}
       isLoadingMore={isLoadingMoreHistory}
       onLoadMore={loadMoreConversations}

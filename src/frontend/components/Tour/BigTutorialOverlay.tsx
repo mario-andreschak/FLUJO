@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Alert,
@@ -28,6 +28,8 @@ import {
   type BigTutorialStep,
 } from './bigTutorialSteps';
 import { emitBigTutorialEvent } from './bigTutorialEvents';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
+import { useInterval, useLater, useTimeout } from '@/frontend/hooks/timing';
 
 const SPOTLIGHT_PADDING = 8;
 const CARD_WIDTH = 390;
@@ -109,7 +111,11 @@ export default function BigTutorialOverlay() {
   const mainSteps = useMemo(() => BIG_TUTORIAL_STEPS.filter(candidate => !candidate.nested), []);
   const mainIndex = step ? Math.max(0, mainSteps.findIndex(candidate => candidate.id === step.id)) : 0;
 
-  useEffect(() => { setFailedRunStep(null); }, [step?.id]);
+  useResetOnChange(step?.id, () => setFailedRunStep(null));
+  // A failed answer run stays failed for its step, even if the live status moves on.
+  const waitingForAnswer = Boolean(step?.waitFor) && pathname === step?.path
+    && (step.id === 'wait-for-first-answer' || step.id === 'wait-for-second-answer');
+  if (waitingForAnswer && step && bigTutorialRunStatus === 'error' && failedRunStep !== step.id) setFailedRunStep(step.id);
 
   useEffect(() => {
     if (!step) return;
@@ -119,9 +125,9 @@ export default function BigTutorialOverlay() {
     if (routeChanged) router.push(destination);
   }, [bigTutorialProgress, pathname, router, step]);
 
-  useEffect(() => {
-    if (!step?.onEnter || pathname !== step.path) return;
-    const timer = window.setTimeout(() => {
+  // A step's page action runs shortly after the page opened, once it settled.
+  useTimeout(() => {
+    if (!step?.onEnter) return;
       if (step.onEnter === 'filter-chat-agent') {
         emitBigTutorialEvent({ type: 'filter-agent-search', query: 'Chat' });
       } else if (step.onEnter === 'open-chat-flow-picker') {
@@ -139,16 +145,13 @@ export default function BigTutorialOverlay() {
       } else if (step.onEnter === 'open-app-marketplace') {
         emitBigTutorialEvent({ type: 'open-app-marketplace' });
       }
-    }, 350);
-    return () => window.clearTimeout(timer);
-  }, [bigTutorialProgress.recommendedServerName, pathname, step]);
+  }, step?.onEnter && pathname === step.path ? 350 : null, `${step?.id}:${pathname}:${bigTutorialProgress.recommendedServerName}`);
 
+  // The spotlight follows its target: measured at once, then every 200 ms.
+  const remeasure = useRef<(() => void) | undefined>(undefined);
+  const spotlightActive = Boolean(step && pathname === step.path && target);
   useLayoutEffect(() => {
-    if (!step || pathname !== step.path || !target) {
-      setRect(null);
-      return;
-    }
-    let timer = 0;
+    if (!step || pathname !== step.path || !target) return;
     let scrolled = false;
     const measure = () => {
       const elements = visibleTargets(target);
@@ -157,11 +160,15 @@ export default function BigTutorialOverlay() {
         scrolled = true;
       }
       setRect(unionRect(elements));
-      timer = window.setTimeout(measure, 200);
     };
     measure();
-    return () => window.clearTimeout(timer);
+    remeasure.current = measure;
+    return () => { remeasure.current = undefined; };
   }, [pathname, step, target]);
+  useInterval(() => remeasure.current?.(), spotlightActive ? 200 : null);
+
+  // A click on the target reaches it first; the tutorial moves on afterwards.
+  const advanceLater = useLater();
 
   useEffect(() => {
     if (!step?.advanceOnTargetClick || pathname !== step.path || !target) return;
@@ -177,14 +184,28 @@ export default function BigTutorialOverlay() {
         void nextBigTutorial();
         return;
       }
-      window.setTimeout(() => void nextBigTutorial(), 0);
+      advanceLater(() => void nextBigTutorial(), 0);
     };
     document.addEventListener('click', handler, { capture: true });
     return () => document.removeEventListener('click', handler, { capture: true });
-  }, [nextBigTutorial, pathname, step, target]);
+  }, [advanceLater, nextBigTutorial, pathname, step, target]);
+
+  // Waiting steps look again every 200 ms until what they wait for shows up.
+  // Live events own app connections and in-flight or finished answer runs.
+  const recheckWait = useRef<(() => void) | undefined>(undefined);
+  const answerStep = step?.id === 'wait-for-first-answer' || step?.id === 'wait-for-second-answer';
+  const waitPolling = Boolean(step?.waitFor) && pathname === step?.path && step?.id !== 'wait-for-app-connection'
+    && !(answerStep && bigTutorialRunStatus !== null);
+  useInterval(() => recheckWait.current?.(), waitPolling ? 200 : null);
 
   useEffect(() => {
     if (!step?.waitFor || pathname !== step.path) return;
+    const stopWaiting = () => { recheckWait.current = undefined; };
+    const waitFor = (check: () => void) => {
+      recheckWait.current = check;
+      check();
+      return stopWaiting;
+    };
     if (
       step.id === 'wait-for-app-connection'
       && bigTutorialConnectedServer === bigTutorialProgress.recommendedServerName
@@ -201,10 +222,7 @@ export default function BigTutorialOverlay() {
       return;
     }
     if (step.id === 'wait-for-first-answer' || step.id === 'wait-for-second-answer') {
-      if (bigTutorialRunStatus === 'error') {
-        setFailedRunStep(step.id);
-        return;
-      }
+      if (bigTutorialRunStatus === 'error') return;
       // Live events own an in-flight run. Only use durable DOM status when
       // restoring a tutorial; a previous answer must not finish the new run.
       if (bigTutorialRunStatus === 'running') return;
@@ -212,26 +230,24 @@ export default function BigTutorialOverlay() {
       // reload or when settings persistence and the chat response finish in the
       // same render. The Chat root exposes its durable status, so use that as a
       // fallback instead of leaving the tutorial on "Waiting" forever.
-      let timer = 0;
       const checkChat = () => {
         const chat = Array.from(document.querySelectorAll('[data-tutorial-chat-status]')).find(element =>
           element.getAttribute('data-tutorial-conversation-id') === bigTutorialProgress.conversationId,
         );
         const status = chat?.getAttribute('data-tutorial-chat-status');
+        if (status !== 'completed' && status !== 'error') return;
+        stopWaiting();
         if (status === 'completed') void nextBigTutorial();
-        else if (status === 'error') setFailedRunStep(step.id);
-        else timer = window.setTimeout(checkChat, 200);
+        else setFailedRunStep(step.id);
       };
-      checkChat();
-      return () => window.clearTimeout(timer);
+      return waitFor(checkChat);
     }
-    let timer = 0;
     const check = () => {
-      if (document.querySelector(step.waitFor!)) void nextBigTutorial();
-      else timer = window.setTimeout(check, 200);
+      if (!document.querySelector(step.waitFor!)) return;
+      stopWaiting();
+      void nextBigTutorial();
     };
-    check();
-    return () => window.clearTimeout(timer);
+    return waitFor(check);
   }, [
     bigTutorialConnectedServer,
     bigTutorialProgress.recommendedServerName,
@@ -245,7 +261,8 @@ export default function BigTutorialOverlay() {
   if (!isBigTutorialActive || !step) return null;
 
   const onRightPage = pathname === step.path;
-  const showSpotlight = onRightPage && rect !== null;
+  // The measured spotlight only belongs to a step whose target is on this page.
+  const showSpotlight = onRightPage && Boolean(target) && rect !== null;
   const position = cardPosition(showSpotlight ? rect : null, step.placement);
   const hasBack = !!step.back;
   const waiting = !!step.waitFor;

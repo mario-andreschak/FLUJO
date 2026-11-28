@@ -18,6 +18,7 @@ import CredentialMigrationSettings from './CredentialMigrationSettings';
 import SystemKeySettings, { parseSystemKeyStatus, STORE_NAME_KEYS, type SystemKeyStatus } from './SystemKeySettings';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useLater } from '@/frontend/hooks/timing';
 
 export default function EncryptionSettings() {
   const { setKey, changeKey, verifyKey } = useStorage();
@@ -49,11 +50,9 @@ export default function EncryptionSettings() {
   // After setting or changing the custom password the encryption state changes
   // app-wide (lock screen, status chip, session flags). Reload the page once so
   // every consumer re-evaluates from a clean load instead of leaving stale UI.
-  const scheduleReload = () => {
-    if (typeof window !== 'undefined') {
-      setTimeout(() => window.location.reload(), 800);
-    }
-  };
+  // The short wait lets the success message show first.
+  const reloadLater = useLater();
+  const scheduleReload = () => reloadLater(() => window.location.reload(), 800);
 
   useEffect(() => {
     const checkEncryption = async () => {

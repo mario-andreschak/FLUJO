@@ -27,6 +27,7 @@ import { useI18n } from '@/frontend/contexts/I18nContext';
 import { chatService } from '@/frontend/services/chat';
 import type { ConversationChainNode } from '@/shared/types/conversationChain';
 import { formatChainToolName } from './presentation';
+import { useLater } from '@/frontend/hooks/timing';
 
 export interface InlineTranscriptStep {
   id: string;
@@ -356,14 +357,16 @@ export default function ChainTranscriptPopover({
     [conversation?.messages, loadedNodeId, node?.id],
   );
 
+  // The popper lays its content out on the next frame; scroll to the newest step then.
+  const scrollLater = useLater();
   useEffect(() => {
     if (displayState !== 'ready') return;
-    const frame = window.requestAnimationFrame(() => {
+    scrollLater(() => {
       const element = scrollRef.current;
       if (element) element.scrollTop = element.scrollHeight;
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [displayState, node?.id, steps.length]);
+    }, 'frame');
+    return scrollLater.cancel;
+  }, [displayState, node?.id, steps.length, scrollLater]);
 
   const title = node?.title?.trim() || t('chainChat.untitled');
 

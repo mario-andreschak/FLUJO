@@ -19,15 +19,12 @@ export default function RoleDetail({ roleId }: { roleId: string }) {
   const [impact, setImpact] = useState<RoleImpactPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    try {
-      const [nextRole, nextImpact] = await Promise.all([rolesService.get(roleId), rolesService.impact(roleId)]);
+  const load = useCallback(() => Promise.all([rolesService.get(roleId), rolesService.impact(roleId)])
+    .then(([nextRole, nextImpact]) => {
       setRole(nextRole);
       setImpact(nextImpact);
-    } catch {
-      setError(t('roles.loadFailed'));
-    }
-  }, [roleId, t]);
+    })
+    .catch(() => setError(t('roles.loadFailed'))), [roleId, t]);
 
   useEffect(() => { void load(); }, [load]);
 

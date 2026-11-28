@@ -225,7 +225,7 @@ async function processChatCompletionInternal(
   }
 
   // --- Success (Final, Tool Call, Stay, or Awaiting Approval) ---
-  const responseMessage: OpenAI.ChatCompletionAssistantMessageParam = {
+  const responseMessage: OpenAI.ChatCompletionAssistantMessageParam & { media?: ModelMediaPart[] } = {
     role: 'assistant',
     content: result.outputText,
     tool_calls: result.toolCalls,
@@ -240,7 +240,7 @@ async function processChatCompletionInternal(
     if (latestAssistantMedia && latestModelUsage) break;
   }
   if (latestAssistantMedia?.length) {
-    (responseMessage as unknown as { media?: ModelMediaPart[] }).media = latestAssistantMedia;
+    responseMessage.media = latestAssistantMedia;
   }
 
   // Determine finish reason. Order matters: awaiting_tool_approval reports as a
@@ -408,7 +408,7 @@ function personaCompletionResponse(
       completion_tokens: completionTokens,
       total_tokens: promptTokens + completionTokens,
     },
-    messages: [...data.messages, responseMessage] as unknown as FlujoChatMessage[],
+    messages: [...data.messages, responseMessage],
     conversation_id: record.outcome?.conversationId ?? conversationId,
     status: record.outcome?.status ?? 'completed',
     dispatch_id: record.id,

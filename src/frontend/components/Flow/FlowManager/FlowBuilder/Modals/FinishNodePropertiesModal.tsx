@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -32,14 +32,17 @@ export const FinishNodePropertiesModal = ({ open, node, onClose, onSave }: Finis
     properties: Record<string, unknown>;
   } | null>(null);
 
-  useEffect(() => {
+  const seedDeps = [node, open];
+  const [seededFor, setSeededFor] = useState<readonly unknown[] | null>(null);
+  if (!seededFor || seedDeps.some((dep, index) => dep !== seededFor[index])) {
+    setSeededFor(seedDeps);
     if (node) {
       setNodeData({
         ...node.data,
         properties: { ...node.data.properties }
       });
     }
-  }, [node, open]);
+  }
 
   const handleSave = () => {
     if (node && nodeData) {

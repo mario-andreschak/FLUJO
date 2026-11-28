@@ -25,6 +25,7 @@ import {
   type RevertPreview,
 } from '@/frontend/services/chat';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useKeyChange } from './hooks/useKeyedState';
 
 interface Props {
   open: boolean;
@@ -36,20 +37,26 @@ interface Props {
 
 export default function RevertPreviewDialog({ open, conversationId, messageId, onClose, onReverted }: Props) {
   const { t } = useI18n();
+  const requestKey = open && messageId ? `${conversationId}\u0000${messageId}` : null;
   const [preview, setPreview] = useState<RevertPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(requestKey !== null);
   const [confirming, setConfirming] = useState(false);
   const [operationId, setOperationId] = useState<string | null>(null);
   const [mode, setMode] = useState<RestoreMode>('chat-and-files');
 
-  useEffect(() => {
-    if (!open || !messageId) return;
-    let cancelled = false;
+  // Every opening starts from a clean preview; closing keeps it for the exit animation.
+  useKeyChange(requestKey, () => {
+    if (requestKey === null) return;
     setPreview(null);
     setError(null);
     setOperationId(null);
     setLoading(true);
+  });
+
+  useEffect(() => {
+    if (!open || !messageId) return;
+    let cancelled = false;
     chatService.previewRevert(conversationId, messageId)
       .then(value => {
         if (cancelled) return;

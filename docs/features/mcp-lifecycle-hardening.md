@@ -46,6 +46,25 @@ timers first so a pending retry cannot re-fork a server mid-shutdown.
 `shutdownBackendServices()` in `src/backend/init.ts` runs it for every workspace and
 is armed on `SIGINT`/`SIGTERM`/`SIGHUP` (POSIX) with a 20s cap before force exit.
 
+Cleanup of a sandbox and its authority never blocks the event loop (#1423). When a
+server stops by itself, the MCP SDK reports it synchronously, so its cleanup
+(container removal, control folder, bundled workload token files) starts in the
+background and its token is refused at once. A new launch of the same server
+waits for that cleanup (up to 30 seconds for the token files, then it goes on,
+because the old token is already refused) and retries one that failed, so a
+failure heals on the next launch. `shutdownBackendServices()` finishes every
+cleanup still running, and retries failed ones, before the process exits.
+
+If FLUJO itself crashes, no cleanup can run, and the stopped container keeps the
+server's name. The next start of that server removes such a stopped leftover and
+its control folder (the container carries the folder name in the
+`co.flujo.mcp-control` label). It removes without `--force`, so Docker refuses a
+container that is still running, and a live owner's sandbox is never touched.
+A start refused because another container holds the name removes its own control
+folder. `__tests__/mcp/sandboxShutdownPaths.test.ts` drives normal exit, Ctrl+C,
+a crashed server, a crashed FLUJO process and a restart through these paths with
+real processes.
+
 ### Stdio runtime-home isolation is opt-in
 
 Ordinary stdio MCP servers use the host home and configured environment by default.

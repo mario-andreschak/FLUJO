@@ -5,6 +5,7 @@ import { getSelectedWorkspace } from '@/frontend/utils/workspaceSelection';
 import { AVATAR_PANEL_PROTOCOL, panelRoute } from './AvatarPanelBridge';
 import type { WorldLocale } from './copy';
 import { DEFAULT_LOCALE } from '@/vendor/avatar/client/locale';
+import { useLatest } from '@/frontend/hooks/useLatest';
 
 export function useWorldPanel(onAsk: () => void, locale: WorldLocale = DEFAULT_LOCALE) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -13,8 +14,8 @@ export function useWorldPanel(onAsk: () => void, locale: WorldLocale = DEFAULT_L
   const ready = useRef(false);
   const queued = useRef<string | null>(null);
   const pending = useRef(new Map<string, { resolve: (value: unknown) => void; timeout: ReturnType<typeof setTimeout> }>());
-  const askRef = useRef(onAsk); askRef.current = onAsk;
-  const localeRef = useRef(locale); localeRef.current = locale;
+  const askRef = useLatest(onAsk);
+  const localeRef = useLatest(locale);
   const request = useCallback((action: string, extra: Record<string, unknown> = {}): Promise<unknown> => {
     if (!ready.current || !iframeRef.current?.contentWindow) return Promise.resolve(null);
     const id = crypto.randomUUID();
@@ -39,7 +40,7 @@ export function useWorldPanel(onAsk: () => void, locale: WorldLocale = DEFAULT_L
     window.addEventListener('message', receive);
     const waiters = pending.current;
     return () => { window.removeEventListener('message', receive); for (const waiter of waiters.values()) { clearTimeout(waiter.timeout); waiter.resolve(null); } waiters.clear(); };
-  }, [request]);
+  }, [request, askRef, localeRef]);
   useEffect(() => { if (ready.current) void request('locale', { locale }); }, [locale, request]);
   const navigate = useCallback((path: string) => {
     const route = panelRoute(path, window.location.origin, getSelectedWorkspace());

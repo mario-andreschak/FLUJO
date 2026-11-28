@@ -140,7 +140,7 @@ export default function PersonaCreationWizard({
   const [roleVersionId, setRoleVersionId] = useState('');
   const [coreFlowRef, setCoreFlowRef] = useState('');
   const [behaviorFlowRefs, setBehaviorFlowRefs] = useState<string[]>([]);
-  const [appRefs, setAppRefs] = useState<string[]>([]);
+  const [pickedAppRefs, setPickedAppRefs] = useState<string[]>([]);
   const [appsEdited, setAppsEdited] = useState(false);
   const [memories, setMemories] = useState(['']);
   const [idempotencyKey, setIdempotencyKey] = useState(() => uuidv4());
@@ -163,7 +163,6 @@ export default function PersonaCreationWizard({
     controller: null,
   });
   const lastRoleRefreshAtRef = useRef(0);
-  const hydratingDraftIdRef = useRef<string | null>(null);
   const resumedDraftRef = useRef<{ id: string; workspaceId: string } | null>(null);
 
   useEffect(() => {
@@ -187,6 +186,13 @@ export default function PersonaCreationWizard({
   ], [t]);
 
   const selectedRole = roles?.roleVersions.find((role) => role.id === roleVersionId);
+  // Until the user edits the App list, it follows the role's suggestions.
+  const suggestedAppRefs = useMemo(() => {
+    const preferred = new Set(suggestedMcpServerRefs(selectedRole));
+    const eligible = new Set(appServers.map((server) => server.name));
+    return [...preferred].filter((ref) => eligible.has(ref));
+  }, [appServers, selectedRole]);
+  const appRefs = appsEdited ? pickedAppRefs : suggestedAppRefs;
   const draftPinnedRoleVersionId = draft?.payload.roleVersionId === roleVersionId
     ? roleVersionId
     : '';
@@ -219,7 +225,7 @@ export default function PersonaCreationWizard({
     setRoleVersionId('');
     setCoreFlowRef('');
     setBehaviorFlowRefs([]);
-    setAppRefs([]);
+    setPickedAppRefs([]);
     setAppsEdited(false);
     setMemories(['']);
     setReadiness({});
@@ -229,7 +235,6 @@ export default function PersonaCreationWizard({
     setRoleRefreshError(null);
     setSetupCheck(null);
     setDraftRecord(null);
-    hydratingDraftIdRef.current = null;
     resumedDraftRef.current = null;
     setIdempotencyKey(uuidv4());
   };
@@ -246,9 +251,6 @@ export default function PersonaCreationWizard({
     // Restore once per editing session. Locale changes and background draft
     // refreshes must preserve local edits and the revision used for conflicts.
     resumedDraftRef.current = { id: draft.id, workspaceId: draft.workspaceId };
-    // Effects below still see the pre-hydration render. Mark this draft before
-    // restoring state so default App synchronization skips that stale pass.
-    hydratingDraftIdRef.current = draft.id;
     setDraftRecord(draft);
     // Older seven-step drafts map safely into the five-step default flow.
     setStep(Math.min(draft.payload.step, 4));
@@ -258,29 +260,21 @@ export default function PersonaCreationWizard({
     setRoleVersionId(draft.payload.roleVersionId);
     setCoreFlowRef(draft.payload.coreFlowRef);
     setBehaviorFlowRefs(draft.payload.behaviorFlowRefs);
-    setAppRefs(draft.payload.appRefs);
+    setPickedAppRefs(draft.payload.appRefs);
     setAppsEdited(draft.payload.appsEdited);
     setMemories(draft.payload.memories.length ? draft.payload.memories : ['']);
     setIdempotencyKey(draft.payload.idempotencyKey);
     setStatus('personas.create.draftResumed');
   }, [draft, open]);
 
-  const refreshRoles = useCallback(async (
-    initialize = false,
-    force = false,
-  ): Promise<void> => {
-    const now = Date.now();
-    if (!force && !initialize && now - lastRoleRefreshAtRef.current < 250) return;
-    lastRoleRefreshAtRef.current = now;
-
+  const requestRoles = useCallback((initialize: boolean): Promise<void> => {
+    lastRoleRefreshAtRef.current = Date.now();
     roleRequestRef.current.controller?.abort();
     const controller = new AbortController();
     const sequence = roleRequestRef.current.sequence + 1;
     roleRequestRef.current = { sequence, controller };
-    setRoleRefreshError(null);
 
-    try {
-      const nextRoles = await personasService.roles(controller.signal);
+    return personasService.roles(controller.signal).then((nextRoles) => {
       if (
         controller.signal.aborted
         || sequence !== roleRequestRef.current.sequence
@@ -289,15 +283,34 @@ export default function PersonaCreationWizard({
       if (initialize) {
         setRoleVersionId((current) => current || rolePickerVersions(nextRoles)[0]?.id || '');
       }
-    } catch (cause) {
+    }, (cause) => {
       if (controller.signal.aborted) return;
       const message = cause instanceof Error
         ? cause.message
         : tRef.current('personas.create.refreshRolesFailed');
       setRoleRefreshError(message);
       throw cause;
-    }
+    });
   }, []);
+
+  const refreshRoles = useCallback(async (
+    initialize = false,
+    force = false,
+  ): Promise<void> => {
+    if (!force && !initialize && Date.now() - lastRoleRefreshAtRef.current < 250) return;
+    setRoleRefreshError(null);
+    await requestRoles(initialize);
+  }, [requestRoles]);
+
+  const [loadedOpen, setLoadedOpen] = useState(false);
+  if (open !== loadedOpen) {
+    setLoadedOpen(open);
+    if (open) {
+      setLoading(true);
+      setError(null);
+      setRoleRefreshError(null);
+    }
+  }
 
   useEffect(() => {
     if (!open) {
@@ -306,10 +319,8 @@ export default function PersonaCreationWizard({
     }
 
     let cancelled = false;
-    setLoading(true);
-    setError(null);
     void Promise.all([
-      refreshRoles(true),
+      requestRoles(true),
       flowService.loadFlows(),
     ])
       .then(([, nextFlows]) => {
@@ -331,7 +342,7 @@ export default function PersonaCreationWizard({
       cancelled = true;
       roleRequestRef.current.controller?.abort();
     };
-  }, [open, refreshRoles]);
+  }, [open, requestRoles]);
 
   useEffect(() => {
     if (!open) return;
@@ -349,27 +360,6 @@ export default function PersonaCreationWizard({
     };
   }, [open, refreshRoles]);
 
-  useEffect(() => {
-    if (!open) return;
-    if (draft && hydratingDraftIdRef.current === draft.id) {
-      // Strict Mode can replay the stale opening effects before restored state
-      // is rendered. Keep the guard until that state is actually visible here.
-      if (draftRecord?.id === draft.id && draftRecord.workspaceId === draft.workspaceId) {
-        hydratingDraftIdRef.current = null;
-      }
-      return;
-    }
-    if (appsEdited) return;
-    const preferred = new Set(suggestedMcpServerRefs(selectedRole));
-    const eligible = new Set(appServers.map((server) => server.name));
-    const next = [...preferred].filter((ref) => eligible.has(ref));
-    setAppRefs((current) => (
-      current.length === next.length
-      && current.every((ref, index) => ref === next[index])
-        ? current
-        : next
-    ));
-  }, [appServers, appsEdited, draft, draftRecord, open, selectedRole]);
 
   const wasOnAppsStepRef = useRef(false);
   useEffect(() => {
@@ -383,11 +373,19 @@ export default function PersonaCreationWizard({
     [behaviorFlowRefs, coreFlowRef],
   );
 
+  const readinessDeps = [open, refsToCheck, setupRefresh, t];
+  const [readinessFor, setReadinessFor] = useState<readonly unknown[] | null>(null);
+  if (!readinessFor || readinessDeps.some((dep, index) => dep !== readinessFor[index])) {
+    setReadinessFor(readinessDeps);
+    if (open) {
+      setReadiness({});
+      setLoadingReadiness(new Set(refsToCheck));
+    }
+  }
+
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    setReadiness({});
-    setLoadingReadiness(new Set(refsToCheck));
     void Promise.all(refsToCheck.map(async (ref) => {
       try {
         return [ref, await personasService.flowReadiness(ref, {
@@ -450,9 +448,12 @@ export default function PersonaCreationWizard({
 
   const toggleApp = (name: string) => {
     setAppsEdited(true);
-    setAppRefs((current) => current.includes(name)
-      ? current.filter((ref) => ref !== name)
-      : [...current, name]);
+    setPickedAppRefs((picked) => {
+      const current = appsEdited ? picked : suggestedAppRefs;
+      return current.includes(name)
+        ? current.filter((ref) => ref !== name)
+        : [...current, name];
+    });
   };
 
   const flowReady = (ref: string) => readiness[ref]?.state === 'ready';

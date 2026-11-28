@@ -1,6 +1,6 @@
 "use client";
 
-import React, { Suspense, useEffect, useState } from 'react';
+import React, { Suspense } from 'react';
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import LivingWorldGate from './AmbientWorld/LivingWorldGate';
@@ -16,6 +16,7 @@ import { AllowanceProvider } from '@/frontend/contexts/AllowanceContext';
 import PhoneHostBoundary from './PhoneHostBoundary';
 import AvatarPanelBridge from './AvatarWorld/AvatarPanelBridge';
 import './AvatarWorld/embed.css';
+import { useBrowserValue } from '@/frontend/hooks/useBrowserValue';
 
 const log = createLogger('frontend/components/AppWrapper');
 
@@ -98,14 +99,15 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, Error
     if (!failure) return this.props.children;
     return (
       <>
-        <AppErrorFallback />
+        <AppErrorFallback healing={isChunkLoadError(failure.error)} />
         {isChunkLoadError(failure.error) && <HealAfterChunkFailure onHealed={this.healed} />}
       </>
     );
   }
 }
 
-function AppErrorFallback() {
+/** `healing`: the page brings the workspace back by itself, and says so. */
+export function AppErrorFallback({ healing }: { healing: boolean }) {
   const { t } = useI18n();
   return (
     <div className="app-loading">
@@ -125,7 +127,7 @@ function AppErrorFallback() {
           {t('shell.error.title')}
         </h2>
         <p style={{ margin: '0 auto 24px', maxWidth: 380, color: 'var(--text-secondary)' }}>
-          {t('shell.error.body')}
+          {t(healing ? 'shell.error.healing' : 'shell.error.body')}
         </p>
         <button
           onClick={() => window.location.reload()}
@@ -185,14 +187,13 @@ export default function AppWrapper({ children, phoneHost = false }: AppWrapperPr
   );
 }
 
+const isAvatarPanelFrame = () => window.frameElement?.getAttribute('data-flujo-avatar-panel') === 'true';
+
 function LocalizedAppShell({ children }: { children: React.ReactNode }) {
   const { t } = useI18n();
   const pathname = usePathname();
-  const [embedded, setEmbedded] = useState(false);
+  const embedded = useBrowserValue(isAvatarPanelFrame, false);
   const world = pathname === '/world';
-  useEffect(() => {
-    setEmbedded(window.frameElement?.getAttribute('data-flujo-avatar-panel') === 'true');
-  }, []);
   useCompactAppChrome();
 
   return (

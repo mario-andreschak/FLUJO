@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import {
   Alert,
   Box,
@@ -124,30 +124,33 @@ export const MCPNodePropertiesModal = ({
     retryLoadTools,
   } = useServerTools(selectedServer);
 
-  useEffect(() => {
-    if (!node) return;
-    setNodeData({
-      ...node.data,
-      properties: { ...node.data.properties } as MCPNodeProperties,
-    });
-    const hasServer = !!node.data.properties?.boundServer;
-    setActiveCompactTab(hasServer ? 'tools' : 'server');
-    setActiveDesktopTab('tools');
-    setServerPickerOpen(serverPickerInitiallyOpen && !hasServer);
-    setInitializeToolsForServer(null);
-  }, [node, open, serverPickerInitiallyOpen]);
+  const seedDeps = [node, open, serverPickerInitiallyOpen];
+  const [seededFor, setSeededFor] = useState<readonly unknown[] | null>(null);
+  if (!seededFor || seedDeps.some((dep, index) => dep !== seededFor[index])) {
+    setSeededFor(seedDeps);
+    if (node) {
+      setNodeData({
+        ...node.data,
+        properties: { ...node.data.properties } as MCPNodeProperties,
+      });
+      const hasServer = !!node.data.properties?.boundServer;
+      setActiveCompactTab(hasServer ? 'tools' : 'server');
+      setActiveDesktopTab('tools');
+      setServerPickerOpen(serverPickerInitiallyOpen && !hasServer);
+      setInitializeToolsForServer(null);
+    }
+  }
 
   // A newly selected server starts with all of its tools enabled, matching the
   // existing add-and-connect flow. An explicitly saved empty list is left alone
   // so "Deactivate all" remains durable after reopening the modal.
-  useEffect(() => {
-    if (
-      !initializeToolsForServer
-      || initializeToolsForServer !== selectedServer
-      || toolsServerName !== initializeToolsForServer
-      || isLoadingTools
-      || toolsError
-    ) return;
+  if (
+    initializeToolsForServer
+    && initializeToolsForServer === selectedServer
+    && toolsServerName === initializeToolsForServer
+    && !isLoadingTools
+    && !toolsError
+  ) {
     setNodeData((previous) => previous ? {
       ...previous,
       properties: {
@@ -156,7 +159,7 @@ export const MCPNodePropertiesModal = ({
       },
     } : null);
     setInitializeToolsForServer(null);
-  }, [initializeToolsForServer, isLoadingTools, mcpTools, selectedServer, toolsError, toolsServerName]);
+  }
 
   const handlePropertyChange = (key: string, value: unknown) => {
     setNodeData((previous) => previous ? {

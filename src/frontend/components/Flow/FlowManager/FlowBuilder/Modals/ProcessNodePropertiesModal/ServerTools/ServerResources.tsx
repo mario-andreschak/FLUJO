@@ -1,4 +1,4 @@
-import React, { RefObject, useState, useEffect, useCallback } from 'react';
+import React, { RefObject, useState, useEffect } from 'react';
 import {
   Box,
   Typography,
@@ -50,47 +50,51 @@ const ServerResources: React.FC<ServerResourcesProps> = ({
   promptBuilderRef,
 }) => {
   const { t } = useI18n();
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [pickedNodeId, setPickedNodeId] = useState<string | null>(null);
   const [resources, setResources] = useState<MCPResource[]>([]);
   const [templates, setTemplates] = useState<MCPResourceTemplate[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [searchQuery, setSearchQuery] = useState('');
 
+  // Until the user picks one, the first connected node is selected.
+  const selectedNodeId = pickedNodeId ?? connectedMcpNodes[0]?.nodeId ?? null;
   const selectedNode = connectedMcpNodes.find((n) => n.nodeId === selectedNodeId);
   const selectedServer = selectedNode?.serverName;
 
-  // Auto-select the first connected node.
-  useEffect(() => {
-    if (connectedMcpNodes.length > 0 && !selectedNodeId) {
-      setSelectedNodeId(connectedMcpNodes[0].nodeId);
-    }
-  }, [connectedMcpNodes, selectedNodeId]);
-
-  const load = useCallback(async (serverName: string) => {
-    setIsLoading(true);
-    setError(undefined);
-    try {
-      const result = await mcpService.listServerResources(serverName);
-      setResources(result.resources || []);
-      setTemplates(result.resourceTemplates || []);
-      setError(result.error);
-    } catch (e) {
-      log.warn(`Failed to load resources for ${serverName}`, e);
-      setError(e instanceof Error ? e.message : t('flows.serverResources.loadFailed'));
-    } finally {
-      setIsLoading(false);
-    }
-  }, [t]);
-
-  useEffect(() => {
+  const [loadedFor, setLoadedFor] = useState<string | undefined>(undefined);
+  if (selectedServer !== loadedFor) {
+    setLoadedFor(selectedServer);
     if (selectedServer) {
-      load(selectedServer);
+      setIsLoading(true);
+      setError(undefined);
     } else {
       setResources([]);
       setTemplates([]);
     }
-  }, [selectedServer, load]);
+  }
+
+  useEffect(() => {
+    if (!selectedServer) return;
+    let current = true;
+    const load = async () => {
+      try {
+        const result = await mcpService.listServerResources(selectedServer);
+        if (!current) return;
+        setResources(result.resources || []);
+        setTemplates(result.resourceTemplates || []);
+        setError(result.error);
+      } catch (e) {
+        if (!current) return;
+        log.warn(`Failed to load resources for ${selectedServer}`, e);
+        setError(e instanceof Error ? e.message : t('flows.serverResources.loadFailed'));
+      } finally {
+        if (current) setIsLoading(false);
+      }
+    };
+    void load();
+    return () => { current = false; };
+  }, [selectedServer, t]);
 
   const matchesQuery = (text: string) => text.toLowerCase().includes(searchQuery.toLowerCase().trim());
   const filteredResources = searchQuery.trim()
@@ -128,7 +132,7 @@ const ServerResources: React.FC<ServerResourcesProps> = ({
         <Box sx={{ display: 'flex', flexDirection: 'column', flexGrow: 1, height: 'calc(100% - 40px)' }}>
           <Tabs
             value={selectedNodeId || connectedMcpNodes[0]?.nodeId || ''}
-            onChange={(_, value) => setSelectedNodeId(value)}
+            onChange={(_, value) => setPickedNodeId(value)}
             variant="scrollable"
             scrollButtons="auto"
             sx={{ mb: 2, borderBottom: 1, borderColor: 'divider' }}

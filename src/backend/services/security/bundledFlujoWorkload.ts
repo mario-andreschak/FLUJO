@@ -11,7 +11,7 @@ import { realpath } from '@/utils/realpath';
 import { assertCredentialStoreReady } from '@/utils/encryption/credentialMigrationState';
 import { ownerPolicySchema } from './ownerCredentials';
 import { ownerPolicyRevision } from './ownerPolicy';
-import { readPrivateApproval, readPrivateApprovalAsync, readPrivateApprovalSetAsync, sameTrustedHostConsent, trustedHostEnvironment,
+import { readPrivateApprovalAsync, readPrivateApprovalSetAsync, sameTrustedHostConsent, trustedHostEnvironment,
   trustedHostApprovalsSchema, trustedHostMcpApprovalAsync, trustedHostMcpPolicyDigestAsync, trustedHostMcpPolicySchema, verifyTrustedHostMcp } from './trustedHostMcp';
 import { canonicalWorkloadJson, computeBundledFlujoWorkloadDefinitions, computeBundledFlujoWorkloadInventory,
   type WorkloadAction } from '../mcp/bundledFlujoWorkloadInventory';
@@ -28,12 +28,6 @@ function traceAsync<T>(stage: GuardStage, operation: () => Promise<T>): Promise<
   const started = performance.now();
   console.info('[workload-guard]', stage, 'start');
   return operation().finally(() => console.info('[workload-guard]', stage, 'settled', Math.round(performance.now() - started)));
-}
-function traceSync<T>(stage: GuardStage, operation: () => T): T {
-  if (process.env.FLUJO_MCP_WORKLOAD_TRACE !== '1') return operation();
-  const started = performance.now();
-  console.info('[workload-guard]', stage, 'start');
-  try { return operation(); } finally { console.info('[workload-guard]', stage, 'settled', Math.round(performance.now() - started)); }
 }
 const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 const identityFields = ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'gid', 'nlink'] as const;
@@ -56,7 +50,9 @@ declare const capsuleBrand: unique symbol;
 export interface PendingBundledFlujoWorkload { readonly [capsuleBrand]: true }
 interface Pending { config: MCPStdioConfig; token: string; audience: string; workspace: string; ledger: string;
   ownerFile: string; state: 'inactive' | 'activating' | 'active' | 'retired' | 'uncertain'; generation?: string;
-  record?: OwnedFile; marker?: OwnedFile; durablyRevoked?: boolean }
+  record?: OwnedFile; marker?: OwnedFile; durablyRevoked?: boolean;
+  /** Activation and retirement take turns on the owned descriptors; neither runs inside the other. */
+  files: Promise<void>; retiring?: Promise<void> }
 const capsules = new WeakMap<object, Pending>();
 const principals = new WeakSet<object>();
 // Reuse only this graph's opaque request binding. Every action/effect still
@@ -81,6 +77,12 @@ const requestCarrier = processObject(requestCarrierKey, () => new AsyncLocalStor
   (value): value is AsyncLocalStorage<Request> => value instanceof AsyncLocalStorage);
 const errorProvenance = processObject(errorProvenanceKey, () => new WeakSet<object>(),
   (value): value is WeakSet<object> => value instanceof WeakSet);
+// A token stops working the moment its retirement is requested, in every
+// server graph, while the durable revocation of its files finishes.
+const revokingKey = Symbol.for('FLUJO:bundled-flujo-workload-revoking:v1');
+const revoking = processObject(revokingKey, () => new Set<string>(),
+  (value): value is Set<string> => value instanceof Set);
+const isRevoking = (key: string) => Set.prototype.has.call(revoking, key);
 function originalWorkloadRequest(): Request | undefined {
   const value: unknown = AsyncLocalStorage.prototype.getStore.call(requestCarrier);
   if (value !== undefined && !(value instanceof Request)) throw new BundledFlujoWorkloadError();
@@ -129,7 +131,7 @@ export function prepareBundledFlujoWorkload(config: MCPStdioConfig): PendingBund
   if (!ledger || !ownerFile) throw new BundledFlujoWorkloadError();
   const value = Object.freeze({}) as PendingBundledFlujoWorkload;
   capsules.set(value, { config: structuredClone(config), token: `flo_mcp1_${randomBytes(32).toString('base64url')}`,
-    audience: target, workspace: selected, ledger, ownerFile, state: 'inactive' });
+    audience: target, workspace: selected, ledger, ownerFile, state: 'inactive', files: Promise.resolve() });
   return value;
 }
 export function getPendingWorkloadEnvironment(config: MCPStdioConfig, value: PendingBundledFlujoWorkload | undefined): Readonly<Record<string, string>> {
@@ -138,43 +140,68 @@ export function getPendingWorkloadEnvironment(config: MCPStdioConfig, value: Pen
   if (!sameTrustedHostConsent(config, pending.config)) throw new BundledFlujoWorkloadError();
   return Object.freeze({ [BUNDLED_FLUJO_WORKLOAD_TOKEN_ENV]: pending.token, [BUNDLED_FLUJO_WORKLOAD_AUDIENCE_ENV]: pending.audience });
 }
-function writeAll(fd: number, bytes: Buffer) {
+/**
+ * Descriptor calls keep raw descriptor numbers: an ambiguous close is settled
+ * only by an authoritative EBADF for that exact number, never by a handle.
+ */
+function descriptorCall<T>(start: (done: (error: NodeJS.ErrnoException | null, value?: T) => void) => void): Promise<T> {
+  return new Promise<T>((resolve, reject) => { start((error, value) => error ? reject(error) : resolve(value as T)); });
+}
+const openDescriptor = (filename: string, flags: number, mode?: number) =>
+  descriptorCall<number>(done => fs.open(filename, flags, mode, done));
+const describeDescriptor = (fd: number) => descriptorCall<fs.BigIntStats>(done => fs.fstat(fd, { bigint: true }, done));
+const probeDescriptor = (fd: number) => descriptorCall<fs.Stats>(done => fs.fstat(fd, done));
+const readDescriptor = (fd: number, bytes: Buffer, position: number) =>
+  descriptorCall<number>(done => fs.read(fd, bytes, 0, bytes.length, position, done));
+const writeDescriptor = (fd: number, bytes: Buffer, offset: number) =>
+  descriptorCall<number>(done => fs.write(fd, bytes, offset, bytes.length - offset, offset, done));
+const truncateDescriptor = (fd: number, length: number) => descriptorCall<void>(done => fs.ftruncate(fd, length, done));
+const syncDescriptor = (fd: number) => descriptorCall<void>(done => fs.fsync(fd, done));
+const closeDescriptor = (fd: number) => descriptorCall<void>(done => fs.close(fd, done));
+const lstatExact = (filename: string) => fs.promises.lstat(filename, { bigint: true });
+/** Every owned file step waits for the step before it on the same capsule. */
+function exclusive<T>(pending: Pending, operation: () => Promise<T>): Promise<T> {
+  const run = pending.files.then(operation);
+  pending.files = run.then(() => undefined, () => undefined);
+  return run;
+}
+async function writeAll(fd: number, bytes: Buffer) {
   let offset = 0;
-  while (offset < bytes.length) { const count = fs.writeSync(fd, bytes, offset, bytes.length - offset, offset); if (!count) throw new BundledFlujoWorkloadError(); offset += count; }
-  fs.ftruncateSync(fd, bytes.length); fs.fsyncSync(fd);
+  while (offset < bytes.length) { const count = await writeDescriptor(fd, bytes, offset); if (!count) throw new BundledFlujoWorkloadError(); offset += count; }
+  await truncateDescriptor(fd, bytes.length); await syncDescriptor(fd);
 }
 function descriptor(file: OwnedFile): number {
   if (file.fd === undefined || file.uncertainDescriptor !== undefined) throw new BundledFlujoWorkloadError();
   return file.fd;
 }
-function assertOwnedParent(file: OwnedFile) {
-  const parent = path.dirname(file.filename), current = fs.lstatSync(parent, { bigint: true });
+async function assertOwnedParent(file: OwnedFile) {
+  const parent = path.dirname(file.filename), current = await lstatExact(parent);
   if (!current.isDirectory() || current.isSymbolicLink() || current.dev !== file.parentIdentity.dev
       || current.ino !== file.parentIdentity.ino || current.mode !== file.parentIdentity.mode
       || current.uid !== file.parentIdentity.uid || current.gid !== file.parentIdentity.gid
-      || path.relative(fs.realpathSync(parent), parent) !== '') throw new BundledFlujoWorkloadError();
+      || path.relative(await realpath(parent), parent) !== '') throw new BundledFlujoWorkloadError();
 }
-function readExact(file: OwnedFile, requireNamed = true) {
-  const fd = descriptor(file), before = fs.fstatSync(fd, { bigint: true });
+async function readExact(file: OwnedFile) {
+  const fd = descriptor(file), before = await describeDescriptor(fd);
   if (!same(before, file.identity) || !before.isFile() || before.nlink !== BigInt(file.removed ? 0 : 1)) throw new BundledFlujoWorkloadError();
-  if (requireNamed && !same(before, fs.lstatSync(file.filename, { bigint: true }))) throw new BundledFlujoWorkloadError();
+  if (!same(before, await lstatExact(file.filename))) throw new BundledFlujoWorkloadError();
   const bytes = Buffer.alloc(file.bytes.length + 1);
   try {
-    const count = fs.readSync(fd, bytes, 0, bytes.length, 0);
-    if (count !== file.bytes.length || !bytes.subarray(0, count).equals(file.bytes) || !same(before, fs.fstatSync(fd, { bigint: true }))
-        || (requireNamed && !same(before, fs.lstatSync(file.filename, { bigint: true })))) throw new BundledFlujoWorkloadError();
+    const count = await readDescriptor(fd, bytes, 0);
+    if (count !== file.bytes.length || !bytes.subarray(0, count).equals(file.bytes) || !same(before, await describeDescriptor(fd))
+        || !same(before, await lstatExact(file.filename))) throw new BundledFlujoWorkloadError();
   } finally { bytes.fill(0); }
 }
-function createFile(filename: string): OwnedFile {
-  const parentIdentity = fs.lstatSync(path.dirname(filename), { bigint: true });
-  const fd = fs.openSync(filename, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0), 0o600);
-  return { fd, filename, bytes: Buffer.alloc(0), identity: fs.fstatSync(fd, { bigint: true }), parentIdentity };
+async function createFile(filename: string): Promise<OwnedFile> {
+  const parentIdentity = await lstatExact(path.dirname(filename));
+  const fd = await openDescriptor(filename, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0), 0o600);
+  return { fd, filename, bytes: Buffer.alloc(0), identity: await describeDescriptor(fd), parentIdentity };
 }
-function fillFile(file: OwnedFile, value: unknown) {
+async function fillFile(file: OwnedFile, value: unknown) {
   const bytes = Buffer.from(JSON.stringify(value));
   if (bytes.length > 64 * 1024) throw new BundledFlujoWorkloadError();
-  readExact(file); writeAll(descriptor(file), bytes); file.bytes.fill(0); file.bytes = bytes; file.identity = fs.fstatSync(descriptor(file), { bigint: true });
-  readExact(file); readPrivateApproval(file.filename);
+  await readExact(file); await writeAll(descriptor(file), bytes); file.bytes.fill(0); file.bytes = bytes; file.identity = await describeDescriptor(descriptor(file));
+  await readExact(file); await readPrivateApprovalAsync(file.filename);
 }
 /** Activation accepts only the private start proof minted by the genuine host guard. */
 export async function activatePendingWorkload(value: PendingBundledFlujoWorkload, proof: unknown): Promise<void> {
@@ -202,37 +229,46 @@ export async function activatePendingWorkload(value: PendingBundledFlujoWorkload
     const key = hash(pending.token);
     // The authoritative name stays absent until every activation guard passes.
     const publishedName = path.join(parent, `${key}.json`);
-    pending.record = createFile(path.join(parent, `${key}.pending`));
-    pending.marker = createFile(path.join(parent, `${key}.lease`));
-    traceSync('activation-marker', () => fillFile(pending.marker!, { version: 1, generation: verified.generation, state: 'active',
-      recordDev: String(pending.record!.identity.dev), recordIno: String(pending.record!.identity.ino) }));
-    const now = Date.now();
-    const record = recordSchema.parse({ version: 1, purpose: 'bundled-flujo-control-v1', tokenHash: key, generation: verified.generation,
-      ownerId: owner.ownerId, ownerRevision: ownerPolicyRevision(owner), workspace: pending.workspace, serverName: pending.config.name,
-      audience: pending.audience, policyDigest: authority.digest, issuedAt: now, expiresAt: Math.min(now + 5 * 60_000, authority.expiresAt),
-      markerIdentity: stamp(pending.marker.identity), markerDigest: hash(pending.marker.bytes), inventory });
-    assertPending(pending); verified.assertLive();
-    traceSync('activation-record', () => fillFile(pending.record!, record));
+    const record = await exclusive(pending, async () => {
+      assertPending(pending); verified.assertLive();
+      pending.record = await createFile(path.join(parent, `${key}.pending`));
+      pending.marker = await createFile(path.join(parent, `${key}.lease`));
+      await traceAsync('activation-marker', () => fillFile(pending.marker!, { version: 1, generation: verified.generation, state: 'active',
+        recordDev: String(pending.record!.identity.dev), recordIno: String(pending.record!.identity.ino) }));
+      const now = Date.now();
+      const created = recordSchema.parse({ version: 1, purpose: 'bundled-flujo-control-v1', tokenHash: key, generation: verified.generation,
+        ownerId: owner.ownerId, ownerRevision: ownerPolicyRevision(owner), workspace: pending.workspace, serverName: pending.config.name,
+        audience: pending.audience, policyDigest: authority.digest, issuedAt: now, expiresAt: Math.min(now + 5 * 60_000, authority.expiresAt),
+        markerIdentity: stamp(pending.marker.identity), markerDigest: hash(pending.marker.bytes), inventory });
+      assertPending(pending); verified.assertLive();
+      await traceAsync('activation-record', () => fillFile(pending.record!, created));
+      return created;
+    });
     if (ownerPolicyRevision(ownerPolicySchema.parse(await traceAsync('activation-owner-final', () => readPrivateApprovalAsync(pending.ownerFile)))) !== record.ownerRevision) throw new BundledFlujoWorkloadError();
     const final = await traceAsync('activation-grant-final', () => trustedHostMcpApprovalAsync(pending.config)); assertPending(pending); verified.assertLive();
     if (final.digest !== record.policyDigest || final.ownerId !== record.ownerId || record.expiresAt <= Date.now()) throw new BundledFlujoWorkloadError();
-    readExact(pending.marker); readExact(pending.record);
-    if (await pathExists(publishedName)) throw new BundledFlujoWorkloadError();
-    assertPending(pending); verified.assertLive();
-    // Exclusive publication cannot overwrite an unknown replacement.
-    await fs.promises.link(pending.record.filename, publishedName);
-    const pendingName = await fs.promises.lstat(pending.record.filename, { bigint: true });
-    const published = await fs.promises.lstat(publishedName, { bigint: true });
-    const linked = fs.fstatSync(descriptor(pending.record), { bigint: true });
-    if (linked.nlink !== BigInt(2) || !same(linked, pendingName) || !same(linked, published)) throw new BundledFlujoWorkloadError();
-    await fs.promises.unlink(pending.record.filename);
-    pending.record.filename = publishedName;
-    fs.fsyncSync(descriptor(pending.record));
-    pending.record.identity = fs.fstatSync(descriptor(pending.record), { bigint: true });
-    readExact(pending.record);
-    pending.state = 'active';
+    await exclusive(pending, async () => {
+      const marker = pending.marker!, published = pending.record!;
+      await readExact(marker); await readExact(published);
+      if (await pathExists(publishedName)) throw new BundledFlujoWorkloadError();
+      assertPending(pending); verified.assertLive();
+      // Exclusive publication cannot overwrite an unknown replacement.
+      await fs.promises.link(published.filename, publishedName);
+      const pendingName = await lstatExact(published.filename);
+      const publishedIdentity = await lstatExact(publishedName);
+      const linked = await describeDescriptor(descriptor(published));
+      if (linked.nlink !== BigInt(2) || !same(linked, pendingName) || !same(linked, publishedIdentity)) throw new BundledFlujoWorkloadError();
+      await fs.promises.unlink(published.filename);
+      published.filename = publishedName;
+      await syncDescriptor(descriptor(published));
+      published.identity = await describeDescriptor(descriptor(published));
+      await readExact(published);
+      // A retirement requested while publishing wins over activation.
+      assertPending(pending);
+      pending.state = 'active';
+    });
   } catch (cause) {
-    try { revokePendingWorkload(value); } catch (cleanup) { throw new AggregateError([cause, cleanup], 'Workload activation and durable retirement failed.', { cause }); }
+    try { await revokePendingWorkload(value); } catch (cleanup) { throw new AggregateError([cause, cleanup], 'Workload activation and durable retirement failed.', { cause }); }
     throw cause;
   }
 }
@@ -240,47 +276,47 @@ async function pathExists(filename: string): Promise<boolean> {
   try { await fs.promises.lstat(filename); return true; }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error; }
 }
-function settleDescriptor(file: { uncertainDescriptor?: number }) {
+async function settleDescriptor(file: { uncertainDescriptor?: number }) {
   if (file.uncertainDescriptor === undefined) return;
   // Metadata probing cannot close or mutate a descriptor that may have been
   // recycled. Only authoritative EBADF settles the uncertainty.
-  try { fs.fstatSync(file.uncertainDescriptor); }
+  try { await probeDescriptor(file.uncertainDescriptor); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'EBADF') { file.uncertainDescriptor = undefined; return; }
     throw error;
   }
   throw new BundledFlujoWorkloadError();
 }
-function settleAcquisition(file: OwnedFile) {
+async function settleAcquisition(file: OwnedFile) {
   if (!file.recoveryWriter) return;
-  settleDescriptor(file.recoveryWriter);
+  await settleDescriptor(file.recoveryWriter);
   if (file.recoveryWriter.fd !== undefined) throw new BundledFlujoWorkloadError();
   file.recoveryWriter = undefined;
 }
-function closeOwnedFile(file: OwnedFile) {
+async function closeOwnedFile(file: OwnedFile) {
   // Both retry and independent close refuse an unresolved acquisition before
   // allocating any replacement witness or overwriting its private evidence.
-  settleAcquisition(file);
-  settleDescriptor(file);
+  await settleAcquisition(file);
+  await settleDescriptor(file);
   if (file.fd === undefined) return;
   // Keep a genuine original-file witness across our own writable close. Windows
   // finalizes ctime on close; a later named reopen alone cannot prove that change.
   let witness: number | undefined;
   if (!file.removed) {
-    assertOwnedParent(file); readExact(file);
-    if (file.bytes.length) readPrivateApproval(file.filename);
-    witness = fs.openSync(file.filename, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+    await assertOwnedParent(file); await readExact(file);
+    if (file.bytes.length) await readPrivateApprovalAsync(file.filename);
+    witness = await openDescriptor(file.filename, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
     const acquired = { fd: witness as number | undefined, uncertainDescriptor: undefined as number | undefined };
     file.recoveryWriter = acquired;
     try {
-      if (!same(file.identity, fs.fstatSync(witness, { bigint: true }))) throw new BundledFlujoWorkloadError();
-      readExact(file); assertOwnedParent(file);
+      if (!same(file.identity, await describeDescriptor(witness))) throw new BundledFlujoWorkloadError();
+      await readExact(file); await assertOwnedParent(file);
     } catch (error) {
       // This freshly opened witness is owned independently of the writer.
       acquired.fd = undefined;
-      try { fs.closeSync(witness); } catch (cleanup) {
+      try { await closeDescriptor(witness); } catch (cleanup) {
         acquired.uncertainDescriptor = witness;
-        try { settleDescriptor(acquired); } catch { /* Preserve ambiguous witness ownership. */ }
+        try { await settleDescriptor(acquired); } catch { /* Preserve ambiguous witness ownership. */ }
         throw new AggregateError([error, cleanup], 'Workload close witness failed.', { cause: error });
       }
       file.recoveryWriter = undefined;
@@ -291,22 +327,22 @@ function closeOwnedFile(file: OwnedFile) {
   const before = file.identity;
   const fd = file.fd; file.fd = undefined;
   let closeError: unknown;
-  try { fs.closeSync(fd); }
+  try { await closeDescriptor(fd); }
   catch (error) {
     closeError = error;
     file.uncertainDescriptor = fd;
-    try { settleDescriptor(file); } catch { /* Retain uncertainty without touching a possibly recycled descriptor. */ }
+    try { await settleDescriptor(file); } catch { /* Retain uncertainty without touching a possibly recycled descriptor. */ }
   }
   if (witness !== undefined) {
     file.fd = witness; file.readOnlyWitness = true;
     try { if (file.uncertainDescriptor === undefined) {
-      const after = fs.fstatSync(witness, { bigint: true });
-      // Only this synchronous, witnessed, owned close transition may finalize
+      const after = await describeDescriptor(witness);
+      // Only this exclusive, witnessed, owned close transition may finalize
       // ctime. Every other field and exact bytes must remain unchanged; subsequent
       // guards compare the entire refreshed identity, including ctime.
       if (!identityFields.filter(field => field !== 'ctimeNs').every(field => before[field] === after[field])) throw new BundledFlujoWorkloadError();
       const previous = file.identity; file.identity = after;
-      try { readExact(file); assertOwnedParent(file); if (file.bytes.length) readPrivateApproval(file.filename); readExact(file); }
+      try { await readExact(file); await assertOwnedParent(file); if (file.bytes.length) await readPrivateApprovalAsync(file.filename); await readExact(file); }
       catch (error) { file.identity = previous; throw error; }
     } } catch (error) {
       if (closeError !== undefined) throw new AggregateError([closeError, error], 'Workload close and witness verification failed.', { cause: closeError });
@@ -315,31 +351,31 @@ function closeOwnedFile(file: OwnedFile) {
   }
   if (closeError !== undefined) throw closeError;
 }
-function recoverOwnedFile(file: OwnedFile) {
-  settleAcquisition(file);
-  settleDescriptor(file); assertOwnedParent(file);
+async function recoverOwnedFile(file: OwnedFile) {
+  await settleAcquisition(file);
+  await settleDescriptor(file); await assertOwnedParent(file);
   if (file.removed) {
-    try { fs.lstatSync(file.filename); }
+    try { await fs.promises.lstat(file.filename); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error; }
     throw new BundledFlujoWorkloadError();
   }
   if (file.fd !== undefined) {
-    readExact(file);
+    await readExact(file);
     if (file.readOnlyWitness) {
-      if (file.bytes.length) readPrivateApproval(file.filename);
+      if (file.bytes.length) await readPrivateApprovalAsync(file.filename);
       const reader = file.fd;
-      const writer = fs.openSync(file.filename, constants.O_RDWR | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+      const writer = await openDescriptor(file.filename, constants.O_RDWR | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
       const acquired = { fd: writer as number | undefined, uncertainDescriptor: undefined as number | undefined };
       file.recoveryWriter = acquired;
       try {
-        if (!same(file.identity, fs.fstatSync(writer, { bigint: true }))) throw new BundledFlujoWorkloadError();
-        readExact(file); assertOwnedParent(file);
+        if (!same(file.identity, await describeDescriptor(writer))) throw new BundledFlujoWorkloadError();
+        await readExact(file); await assertOwnedParent(file);
       } catch (error) {
         acquired.fd = undefined;
-        try { fs.closeSync(writer); }
+        try { await closeDescriptor(writer); }
         catch (cleanup) {
           acquired.uncertainDescriptor = writer;
-          try { settleDescriptor(acquired); } catch { /* Retain ambiguous writer ownership. */ }
+          try { await settleDescriptor(acquired); } catch { /* Retain ambiguous writer ownership. */ }
           throw new AggregateError([error, cleanup], 'Workload retry writer verification and cleanup failed.', { cause: error });
         }
         file.recoveryWriter = undefined;
@@ -347,59 +383,71 @@ function recoverOwnedFile(file: OwnedFile) {
       }
       file.fd = writer; file.readOnlyWitness = false;
       file.recoveryWriter = undefined;
-      try { fs.closeSync(reader); }
-      catch (error) { file.uncertainDescriptor = reader; try { settleDescriptor(file); } catch { /* Preserve ambiguous reader ownership. */ } throw error; }
-      readExact(file); assertOwnedParent(file);
+      try { await closeDescriptor(reader); }
+      catch (error) { file.uncertainDescriptor = reader; try { await settleDescriptor(file); } catch { /* Preserve ambiguous reader ownership. */ } throw error; }
+      await readExact(file); await assertOwnedParent(file);
     }
     return;
   }
-  if (!same(file.identity, fs.lstatSync(file.filename, { bigint: true }))) throw new BundledFlujoWorkloadError();
-  if (file.bytes.length) readPrivateApproval(file.filename);
-  file.fd = fs.openSync(file.filename, constants.O_RDWR | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
-  readExact(file); assertOwnedParent(file);
+  if (!same(file.identity, await lstatExact(file.filename))) throw new BundledFlujoWorkloadError();
+  if (file.bytes.length) await readPrivateApprovalAsync(file.filename);
+  file.fd = await openDescriptor(file.filename, constants.O_RDWR | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  await readExact(file); await assertOwnedParent(file);
 }
-/** Completed durable invalidation, with private proof retained for safe retry. */
-export function revokePendingWorkload(value: PendingBundledFlujoWorkload | undefined): void {
+/**
+ * Completed durable invalidation, with private proof retained for safe retry.
+ * The token is refused from the moment of the call. Callers that arrive while
+ * an attempt runs share it; a call after a failed attempt starts a fresh one.
+ */
+export async function revokePendingWorkload(value: PendingBundledFlujoWorkload | undefined): Promise<void> {
   if (!value) return;
   const pending = capsule(value);
+  if (pending.state === 'retired') return;
+  pending.state = 'uncertain';
+  Set.prototype.add.call(revoking, hash(pending.token));
+  pending.retiring ??= exclusive(pending, () => retire(pending)).finally(() => { pending.retiring = undefined; });
+  return pending.retiring;
+}
+async function retire(pending: Pending): Promise<void> {
   if (pending.state === 'retired') return;
   pending.state = 'uncertain';
   const errors: unknown[] = [];
   const marker = pending.marker;
   if (marker) try {
-    recoverOwnedFile(marker);
+    await recoverOwnedFile(marker);
     if (!pending.durablyRevoked) {
       if (marker.removed) throw new BundledFlujoWorkloadError();
-      if (marker.bytes.length) readPrivateApproval(marker.filename);
-      readExact(marker);
+      if (marker.bytes.length) await readPrivateApprovalAsync(marker.filename);
+      await readExact(marker);
       const revoked = Buffer.from(JSON.stringify({ version: 1, generation: pending.generation, state: 'revoked' }));
-      writeAll(descriptor(marker), revoked);
+      await writeAll(descriptor(marker), revoked);
       marker.bytes.fill(0); marker.bytes = revoked;
-      marker.identity = fs.fstatSync(descriptor(marker), { bigint: true });
-      readExact(marker); assertOwnedParent(marker);
+      marker.identity = await describeDescriptor(descriptor(marker));
+      await readExact(marker); await assertOwnedParent(marker);
       pending.durablyRevoked = true;
     }
   } catch (error) { errors.push(error); }
   for (const file of [pending.record, pending.marker]) if (file) {
     try {
-      recoverOwnedFile(file);
+      await recoverOwnedFile(file);
       if (!file.removed) {
-        if (file.bytes.length) readPrivateApproval(file.filename);
-        readExact(file); assertOwnedParent(file);
-        fs.unlinkSync(file.filename);
-        const removed = fs.fstatSync(descriptor(file), { bigint: true });
+        if (file.bytes.length) await readPrivateApprovalAsync(file.filename);
+        await readExact(file); await assertOwnedParent(file);
+        await fs.promises.unlink(file.filename);
+        const removed = await describeDescriptor(descriptor(file));
         if (removed.dev !== file.identity.dev || removed.ino !== file.identity.ino || removed.nlink !== BigInt(0)
             || removed.mode !== file.identity.mode || removed.uid !== file.identity.uid || removed.gid !== file.identity.gid) throw new BundledFlujoWorkloadError();
         file.identity = removed; file.removed = true;
-        fs.fsyncSync(descriptor(file));
+        await syncDescriptor(descriptor(file));
       }
     } catch (error) { errors.push(error); }
-    try { closeOwnedFile(file); } catch (error) { errors.push(error); }
+    try { await closeOwnedFile(file); } catch (error) { errors.push(error); }
   }
   if (errors.length) throw new AggregateError(errors, 'Workload retirement remains uncertain.');
   if (marker && !pending.durablyRevoked) throw new BundledFlujoWorkloadError();
   for (const file of [pending.record, pending.marker]) file?.bytes.fill(0);
   pending.state = 'retired';
+  Set.prototype.delete.call(revoking, hash(pending.token));
 }
 
 export interface BundledFlujoWorkloadAuthorization {
@@ -472,6 +520,7 @@ async function evidence(request: Request) {
   const ledger = process.env.FLUJO_MCP_TRUSTED_HOST_FILE, ownerFile = process.env.FLUJO_OWNER_AUTH_FILE;
   if (!ledger || !ownerFile) throw new BundledFlujoWorkloadError();
   const key = hash(match[1]), filename = path.join(directory(ledger), `${key}.json`), markerFilename = path.join(directory(ledger), `${key}.lease`);
+  if (isRevoking(key)) throw new BundledFlujoWorkloadError();
   phase = 'private-files';
   const recordBefore = await fs.promises.lstat(filename, { bigint: true });
   const markerBefore = await fs.promises.lstat(markerFilename, { bigint: true });
@@ -544,7 +593,7 @@ async function evidence(request: Request) {
   phase = 'final-file-fences';
   const recordAfter = await fs.promises.lstat(filename, { bigint: true });
   const markerAfter = await fs.promises.lstat(markerFilename, { bigint: true });
-  if (!same(recordBefore, recordAfter) || !same(markerBefore, markerAfter)
+  if (!same(recordBefore, recordAfter) || !same(markerBefore, markerAfter) || isRevoking(key)
       || ledger !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE || ownerFile !== process.env.FLUJO_OWNER_AUTH_FILE
       || audience(process.env.FLUJO_BASE_URL) !== record.audience || record.expiresAt <= Date.now()) throw new BundledFlujoWorkloadError();
   request.signal.throwIfAborted();

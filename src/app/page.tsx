@@ -45,6 +45,7 @@ import {
   type DashboardCardId,
 } from '@/shared/types/storage';
 import { createLogger } from '@/utils/logger';
+import { useReloadWhenServerReturns } from '@/frontend/hooks/useReloadWhenServerReturns';
 
 const log = createLogger('app/page');
 
@@ -82,6 +83,8 @@ export default function HomePage() {
   const [updateInfo, setUpdateInfo] = useState<{ behindBy: number; branch: string } | null>(null);
   const [updateNotice, setUpdateNotice] = useState<{ message: string; pinned: boolean } | null>(null);
   const [updating, setUpdating] = useState(false);
+  const [restarting, setRestarting] = useState(false);
+  useReloadWhenServerReturns(restarting);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [workspaceStatus, setWorkspaceStatus] = useState<WorkspaceStatus>({
     models: null,
@@ -181,20 +184,7 @@ export default function HomePage() {
         return;
       }
       if (data.restarting) {
-        let sawDown = false;
-        const poll = async () => {
-          try {
-            const ping = await fetch('/api/cwd', { cache: 'no-store' });
-            if (ping.ok && sawDown) {
-              window.location.reload();
-              return;
-            }
-          } catch {
-            sawDown = true;
-          }
-          setTimeout(poll, 3000);
-        };
-        setTimeout(poll, 5000);
+        setRestarting(true);
       } else {
         setUpdating(false);
         setUpdateInfo(null);

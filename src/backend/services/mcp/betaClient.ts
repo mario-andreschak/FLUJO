@@ -28,16 +28,15 @@ import {
   httpConfigKey,
   resolveStdioLaunch,
   McpRuntimeAuthorityRetirementError,
-  assertMcpRuntimeAuthorityRetired,
+  settleMcpRuntimeAuthorityRetirement,
   retireMcpRuntimeAuthority,
   stdioConfigKey,
   capabilityKey,
   attachShippedWorkspaceReadiness,
   attachHostAccessCheck,
-  ClientWithBetaMarker,
-  TransportWithConfigKey,
   type TransportCreationOptions,
 } from "./connection";
+import { isBetaClient, markClient, markTransport } from "./sdkMarks";
 import { createOAuthClientProvider } from "./oauth";
 import { rejectRepeatedToolCursors } from "./toolDiscovery";
 import { McpIsolationError } from '../security/isolatedMcp';
@@ -72,15 +71,14 @@ import {
 // `initialize` handshake for every older server. Remote servers use the SDK's
 // `auto` mode; stdio servers are asked on their own process (stdioNegotiation.ts).
 //
-// The v2 Client is method-compatible with every call FLUJO makes on a v1
-// Client (connect/listTools/callTool/listResources/readResource/
-// listResourceTemplates/listPrompts/getPrompt/sendRootsListChanged/close, plus
-// the `transport` getter), so the instance is returned typed as the v1 Client
-// and the rest of the MCP service stays untouched. The ONE deliberate
-// signature difference is callTool (v1: (params, resultSchema?, options?);
-// v2: (params, options?)) — call sites branch on isBetaClient() for it (see
-// tools.ts). The marker fields below let shouldRecreateClient() and the call
-// sites tell the generations apart.
+// The v2 Client answers every call FLUJO makes on a v1 Client (see
+// STORED_CLIENT_CALLS), so once servesStoredClientCalls() has checked that,
+// the instance lives in the shared connection map as a v1 Client and the rest
+// of the MCP service stays untouched. The ONE deliberate signature difference
+// is callTool (v1: (params, resultSchema?, options?); v2: (params, options?)):
+// call sites branch on isBetaClient() for it (see tools.ts). The marks recorded
+// below (sdkMarks.ts) let shouldRecreateClient() and the call sites tell the
+// generations apart.
 // ---------------------------------------------------------------------------
 
 const log = createLogger("backend/services/mcp/betaClient");
@@ -95,9 +93,18 @@ export function usesNegotiatingClient(config: Pick<MCPServerConfig, 'transport'>
   return !protectedServer && config.transport !== "websocket";
 }
 
-/** Whether a client (as stored in the connection map) was built by the beta path. */
-export function isBetaClient(client: Client): boolean {
-  return (client as unknown as ClientWithBetaMarker).__flujoBeta === true;
+export { isBetaClient };
+
+/** Every call FLUJO makes on a client stored in the connection map. */
+const STORED_CLIENT_CALLS = [
+  'connect', 'close', 'ping', 'request', 'notification', 'setRequestHandler', 'setNotificationHandler',
+  'getServerCapabilities', 'getServerVersion', 'listTools', 'callTool', 'listResources', 'readResource',
+  'listResourceTemplates', 'subscribeResource', 'listPrompts', 'getPrompt', 'sendRootsListChanged',
+] as const;
+
+/** Checks that a client of either SDK answers every call FLUJO makes on a stored v1 Client. */
+function servesStoredClientCalls(client: object): client is Client {
+  return 'transport' in client && STORED_CLIENT_CALLS.every(call => typeof Reflect.get(client, call) === 'function');
 }
 
 /**
@@ -109,8 +116,8 @@ export function isBetaClient(client: Client): boolean {
  * `setRequestHandler` takes a method string instead of a schema, but the
  * handler bodies are shared with the v1 registration (roots.ts/sampling.ts).
  *
- * Returned typed as the v1 Client so it can live in the shared connection map;
- * see the module comment for why that cast is sound.
+ * Returned as the v1 Client so it can live in the shared connection map, after
+ * servesStoredClientCalls() has checked it answers every call made there.
  */
 export function createNewBetaClient(
   config: MCPServerConfig,
@@ -159,6 +166,8 @@ export function createNewBetaClient(
       versionNegotiation: config.transport === "stdio" ? stdioVersionNegotiation(config) : { mode: "auto" },
     },
   ));
+  const stored: object = client;
+  if (!servesStoredClientCalls(stored)) throw new Error('The MCP client package lacks a call FLUJO makes on every connection.');
 
   const rootsHandler = createRootsListHandler(config, client);
   const samplingHandler = serverHasSampling ? createSamplingHandler(config) : undefined;
@@ -187,7 +196,7 @@ export function createNewBetaClient(
 
   // Register the declared host identity before discovery. Only connections
   // that negotiated 2026-07-28 can later create the raw extension channel.
-  const isAuthorityCurrent = bindToCurrentWorkspace(async () => liveClient(config.name) === (client as unknown as Client));
+  const isAuthorityCurrent = bindToCurrentWorkspace(async () => liveClient(config.name) === stored);
   registerTasksExtensionClient(client, {
     endpointId: workspaceCacheKey(config.name), clientInfo, clientCapabilities,
     authorizeLateTaskCancellation: isAuthorityCurrent,
@@ -209,16 +218,14 @@ export function createNewBetaClient(
     }),
   });
 
-  (client as unknown as ClientWithBetaMarker).__flujoBeta = true;
-  // Same capability key the v1 factory stamps (see connection.ts ClientWithCapKey):
+  // Same capability key the v1 factory records (see connection.ts capabilityKey):
   // shouldRecreateClient compares it before its beta branch, so a beta client
   // without it would be needlessly rebuilt on every connect once sampling is on.
-  (client as unknown as { __flujoCapKey?: string }).__flujoCapKey =
-    capabilityKey(config);
+  markClient(client, { __flujoBeta: true, __flujoCapKey: capabilityKey(config) });
   log.info(
     `Created split-SDK MCP client for ${config.name} (version negotiation: ${config.transport === "stdio" ? stdioVersionNegotiation(config).mode : "auto"})`,
   );
-  return client as unknown as Client;
+  return stored;
 }
 
 /** Handlers for notifications outside the core protocol, by method. */
@@ -325,9 +332,7 @@ export async function createBetaTransport(
       new URL(streamableConfig.serverUrl),
       options,
     );
-    const keyed = transport as unknown as TransportWithConfigKey;
-    keyed.__flujoHttpKey = httpConfigKey(config);
-    keyed.__flujoKind = "streamable";
+    markTransport(transport, { __flujoHttpKey: httpConfigKey(config), __flujoKind: "streamable" });
     log.info(`Created v2-beta streamable transport for ${config.name}`);
     return transport;
   }
@@ -347,9 +352,7 @@ export async function createBetaTransport(
       new URL(sseConfig.serverUrl),
       options,
     );
-    const keyed = transport as unknown as TransportWithConfigKey;
-    keyed.__flujoHttpKey = httpConfigKey(config);
-    keyed.__flujoKind = "sse";
+    markTransport(transport, { __flujoHttpKey: httpConfigKey(config), __flujoKind: "sse" });
     log.info(`Created v2-beta SSE transport for ${config.name}`);
     return transport;
   }
@@ -362,7 +365,7 @@ export async function createBetaTransport(
   const retireRuntimeAuthority = () => retireMcpRuntimeAuthority(config.name, workloadWorkspace, workload, runtimeBroker);
   let transport: BetaStdioClientTransport;
   try {
-    assertMcpRuntimeAuthorityRetired(config.name);
+    await settleMcpRuntimeAuthorityRetirement(config.name);
     workload = prepareBundledFlujoWorkload(config);
     runtimeBroker = options?.enableRuntimeBroker && mcpAppRuntimeBrokerEnabled(config)
       ? issueMcpAppRuntimeBrokerEnvironment(config.name) : undefined;
@@ -391,20 +394,18 @@ export async function createBetaTransport(
     }
   } catch (error) {
     const cleanupErrors: unknown[] = [];
-    try { isolation?.close(); } catch (cleanup) { cleanupErrors.push(cleanup); }
-    try { retireRuntimeAuthority(); } catch (cleanup) { cleanupErrors.push(cleanup); }
+    try { await isolation?.close(); } catch (cleanup) { cleanupErrors.push(cleanup); }
+    try { await retireRuntimeAuthority(); } catch (cleanup) { cleanupErrors.push(cleanup); }
     if (cleanupErrors.length) throw new McpRuntimeAuthorityRetirementError([error, ...cleanupErrors], 'MCP transport creation and authority retirement failed.', { cause: error });
     throw error;
   }
-  const keyed = transport as unknown as TransportWithConfigKey;
-  keyed.__flujoRuntimeBrokerLeaseId = runtimeBroker?.leaseId;
-  keyed.__flujoBundledWorkload = workload;
-  keyed.__flujoRetireRuntimeAuthority = retireRuntimeAuthority;
-  keyed.__flujoStdioKey = stdioConfigKey(
-    config,
-    options?.isolateRuntimeHome === true,
-  );
-  keyed.__flujoKind = "stdio";
+  markTransport(transport, {
+    __flujoRuntimeBrokerLeaseId: runtimeBroker?.leaseId,
+    __flujoBundledWorkload: workload,
+    __flujoRetireRuntimeAuthority: retireRuntimeAuthority,
+    __flujoStdioKey: stdioConfigKey(config, options?.isolateRuntimeHome === true),
+    __flujoKind: "stdio",
+  });
   stdioOAuthControllers.set(transport, new StdioOAuthDeferredMrtrController());
   log.info(`Created v2-beta stdio transport for ${config.name}`);
   return transport;
@@ -439,8 +440,11 @@ export function activateStdioOAuthMrtrController(transport: unknown): void {
  */
 export function negotiatedProtocolVersion(client: Client): string | undefined {
   if (!isBetaClient(client)) return undefined;
+  const read: unknown = Reflect.get(client, 'getNegotiatedProtocolVersion');
+  if (typeof read !== 'function') return undefined;
   try {
-    return (client as unknown as BetaClient).getNegotiatedProtocolVersion();
+    const version: unknown = Reflect.apply(read, client, []);
+    return typeof version === 'string' ? version : undefined;
   } catch {
     return undefined;
   }

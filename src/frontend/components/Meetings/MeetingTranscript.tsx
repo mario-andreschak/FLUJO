@@ -36,6 +36,7 @@ import type { MeetingEvent, MeetingRecord } from '@/shared/types/meeting';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { isTranscriptVisibleEvent } from './meetingTranscriptProjection';
 import { ChatMarkdownContent } from '@/frontend/components/Chat/ChatMarkdown';
+import { useLater } from '@/frontend/hooks/timing';
 
 interface MeetingTranscriptProps {
   meeting: MeetingRecord;
@@ -376,11 +377,13 @@ export default function MeetingTranscript({ meeting, events }: MeetingTranscript
     return () => observer.disconnect();
   }, []);
 
+  // The virtual list applies new row heights on the next frame; follow the newest row then.
+  const scrollLater = useLater();
   useEffect(() => {
     if (!live || !rows.length) return undefined;
-    const frame = requestAnimationFrame(() => listRef.current?.scrollToRow({ index: rows.length - 1, align: 'end' }));
-    return () => cancelAnimationFrame(frame);
-  }, [live, measuredHeights, measurementWidth, rows]);
+    scrollLater(() => listRef.current?.scrollToRow({ index: rows.length - 1, align: 'end' }), 'frame');
+    return scrollLater.cancel;
+  }, [live, measuredHeights, measurementWidth, rows, scrollLater]);
 
   const newest = [...rows].reverse().find((row): row is Extract<TranscriptRow, { kind: 'event' }> => row.kind === 'event');
   const totalHeight = rows.reduce((sum, _, index) => sum + rowHeight(index), 0);

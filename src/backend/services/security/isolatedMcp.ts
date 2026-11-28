@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
-import { windowsPrivateAuthorityStamp } from './windowsPrivateAuthority';
+import { realpath } from '../../../utils/realpath';
+import { windowsPrivateAuthorityStampAsync } from './windowsPrivateAuthority';
 import { assertIsolatedMcpContainerInspection, assertIsolatedMcpDaemonInfo } from './isolatedMcpInspection';
 
 const identifier = z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/);
@@ -80,11 +81,19 @@ export interface IsolatedMcpLaunch {
   readonly generation: string;
   readonly containerId: string;
   readonly ownershipKey?: string;
-  /** Absence is observed for the created container ID, never inferred from CLI exit. */
-  close(): { outcome: 'removed' | 'absent' | 'unknown' };
+  /**
+   * Absence is observed for the created container ID, never inferred from CLI exit.
+   * Callers that arrive while a removal runs share it; once removal is observed,
+   * every later call returns that outcome without contacting Docker again.
+   */
+  close(): Promise<{ outcome: 'removed' | 'absent' | 'unknown' }>;
 }
 
 type DockerEnvironment = Record<string, string> & { NODE_ENV: 'production' };
+
+/** Names the private control folder, so a restart after a crash can find and remove it. */
+const CONTROL_LABEL = 'co.flujo.mcp-control';
+const CONTROL_FOLDER = /^flujo-mcp-isolation-[A-Za-z0-9]+$/;
 
 function hostEssentials(): DockerEnvironment {
   // Next's ambient ProcessEnv requires this field. Set it deliberately for the
@@ -94,58 +103,58 @@ function hostEssentials(): DockerEnvironment {
   return { NODE_ENV: 'production', SystemRoot: systemRoot, WINDIR: systemRoot };
 }
 
-function safeMount(workspaceRoot: string, relative: string): string {
+async function safeMount(workspaceRoot: string, relative: string): Promise<string> {
   const root = path.resolve(workspaceRoot);
-  const rootStat = fs.lstatSync(root);
+  const rootStat = await fs.promises.lstat(root);
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new McpIsolationError('ISOLATION_POLICY_INVALID');
   let current = root;
   for (const segment of relative.split('/')) {
     current = path.join(current, segment);
-    const stat = fs.lstatSync(current);
+    const stat = await fs.promises.lstat(current);
     if (stat.isSymbolicLink() || (!stat.isFile() && !stat.isDirectory())) throw new McpIsolationError('ISOLATION_POLICY_INVALID');
   }
-  const actual = fs.realpathSync(current);
-  const inside = path.relative(fs.realpathSync(root), actual);
+  const actual = await realpath(current);
+  const inside = path.relative(await realpath(root), actual);
   if (!inside || inside.startsWith(`..${path.sep}`) || path.isAbsolute(inside)
       || /[,\r\n]/.test(actual)) throw new McpIsolationError('ISOLATION_POLICY_INVALID');
   return actual;
 }
 
 /** Container grants must never become loader/runtime options for the host CLI. */
-function privateEnvironmentFile(control: string, environment: ReadonlyMap<string, string>) {
+async function privateEnvironmentFile(control: string, environment: ReadonlyMap<string, string>) {
   const filename = path.join(control, 'container.env');
-  const fd = fs.openSync(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL
+  const handle = await fs.promises.open(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL
     | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
-  const identity = fs.fstatSync(fd, { bigint: true });
+  const identity = await handle.stat({ bigint: true }).catch(async (error: unknown) => { await handle.close(); throw error; });
   let content: Buffer | undefined;
-  function assertOwned() {
-    const held = fs.fstatSync(fd, { bigint: true });
-    const named = fs.lstatSync(filename, { bigint: true });
+  async function assertOwned() {
+    const held = await handle.stat({ bigint: true });
+    const named = await fs.promises.lstat(filename, { bigint: true });
     if (!held.isFile() || !named.isFile() || named.isSymbolicLink() || held.nlink !== BigInt(1)
         || held.dev !== identity.dev || held.ino !== identity.ino || named.dev !== held.dev || named.ino !== held.ino
         || held.uid !== identity.uid || held.gid !== identity.gid || held.mode !== identity.mode) {
       throw new McpIsolationError('ISOLATION_UNAVAILABLE');
     }
   }
-  function dispose() {
+  async function dispose() {
     content?.fill(0);
-    try { assertOwned(); fs.unlinkSync(filename); }
-    finally { fs.closeSync(fd); }
+    try { await assertOwned(); await fs.promises.unlink(filename); }
+    finally { await handle.close(); }
   }
   try {
-    assertOwned();
+    await assertOwned();
     // Validate the empty file first: a Windows mode bit alone cannot protect a
     // secret, and a failed ACL check must never leave secret bytes on disk.
-    if (process.platform === 'win32') windowsPrivateAuthorityStamp(filename);
+    if (process.platform === 'win32') await windowsPrivateAuthorityStampAsync(filename);
     else if (identity.uid !== BigInt(process.getuid!()) || (identity.mode & BigInt(0o077)) !== BigInt(0)) {
       throw new McpIsolationError('ISOLATION_UNAVAILABLE');
     }
-    assertOwned();
+    await assertOwned();
     content = Buffer.from([...environment].map(([name, value]) => `${name}=${value}\n`).join(''));
-    fs.writeFileSync(fd, content);
-    assertOwned();
+    await handle.writeFile(content);
+    await assertOwned();
     return { filename, dispose };
-  } catch (error) { dispose(); throw error; }
+  } catch (error) { await dispose(); throw error; }
 }
 
 /**
@@ -154,9 +163,9 @@ function privateEnvironmentFile(control: string, environment: ReadonlyMap<string
  * remote daemon or pre-launch package script is performed.
  * The caller must authenticate the owner and recheck this digest at dispatch.
  */
-export function createIsolatedMcpLaunch(value: unknown, approvedDigest: string,
+export async function createIsolatedMcpLaunch(value: unknown, approvedDigest: string,
   workspaceRoot: string, environment: Readonly<Record<string, string>> = {},
-  ownership?: { key: string }): IsolatedMcpLaunch {
+  ownership?: { key: string }): Promise<IsolatedMcpLaunch> {
   const policy = parsedPolicy(value);
   if (approvedDigest !== isolatedMcpPolicyDigest(policy)) throw new McpIsolationError('ISOLATION_RECONSENT_REQUIRED');
   if (!path.isAbsolute(workspaceRoot)) throw new McpIsolationError('ISOLATION_POLICY_INVALID');
@@ -178,38 +187,65 @@ export function createIsolatedMcpLaunch(value: unknown, approvedDigest: string,
   const tempParent = process.platform === 'win32' ? process.env.LOCALAPPDATA : os.tmpdir();
   if (!tempParent || !path.isAbsolute(tempParent)) throw new McpIsolationError('ISOLATION_UNAVAILABLE');
   const tempRoot = path.resolve(tempParent);
-  const control = fs.mkdtempSync(path.join(tempRoot, 'flujo-mcp-isolation-'));
-  function cleanupControl() {
+  const control = await fs.promises.mkdtemp(path.join(tempRoot, 'flujo-mcp-isolation-'));
+  async function cleanupControl() {
     const relative = path.relative(tempRoot, control);
-    if (!/^flujo-mcp-isolation-[A-Za-z0-9]+$/.test(relative)) throw new McpIsolationError('ISOLATION_POLICY_INVALID');
-    fs.rmSync(control, { recursive: true, force: true });
+    if (!CONTROL_FOLDER.test(relative)) throw new McpIsolationError('ISOLATION_POLICY_INVALID');
+    await fs.promises.rm(control, { recursive: true, force: true });
   }
   const globalArgs = ['--host', policy.daemon, '--config', control];
-  function docker(args: string[]) {
-    return execFileSync(policy.dockerExecutable, [...globalArgs, ...args], {
-      env: hostEssentials(), windowsHide: true, timeout: 5000, maxBuffer: 64 * 1024,
-      stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8',
-    }).trim();
+  function docker(args: string[]): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const child = execFile(policy.dockerExecutable, [...globalArgs, ...args], {
+        env: hostEssentials(), windowsHide: true, timeout: 5000, maxBuffer: 64 * 1024, encoding: 'utf8',
+      }, (error, stdout) => error ? reject(error) : resolve(String(stdout).trim()));
+      // Docker reads no input here; closing it at once matches an ignored stdin.
+      child.stdin?.end();
+    });
   }
-  function ownedRows(filter: string): string[] {
-    return docker(['container', 'ls', '--all', '--no-trunc', '--filter', filter,
-      '--format', '{{.ID}} {{.Label "co.flujo.mcp-generation"}}']).split('\n').filter(Boolean);
+  async function ownedRows(filter: string): Promise<string[]> {
+    return (await docker(['container', 'ls', '--all', '--no-trunc', '--filter', filter,
+      '--format', '{{.ID}} {{.Label "co.flujo.mcp-generation"}}'])).split('\n').filter(Boolean);
   }
-  function removeOwned(id: string): { outcome: 'removed' | 'absent' | 'unknown' } {
+  async function removeOwned(id: string): Promise<{ outcome: 'removed' | 'absent' | 'unknown' }> {
     try {
-      const rows = ownedRows(`id=${id}`);
-      if (rows.length === 0) { cleanupControl(); return { outcome: 'absent' }; }
+      const rows = await ownedRows(`id=${id}`);
+      if (rows.length === 0) { await cleanupControl(); return { outcome: 'absent' }; }
       if (rows.length !== 1 || rows[0] !== `${id} ${generation}`) return { outcome: 'unknown' };
-      docker(['container', 'rm', '--force', id]);
-      if (ownedRows(`id=${id}`).length !== 0) return { outcome: 'unknown' };
-      cleanupControl();
+      await docker(['container', 'rm', '--force', id]);
+      if ((await ownedRows(`id=${id}`)).length !== 0) return { outcome: 'unknown' };
+      await cleanupControl();
       return { outcome: 'removed' };
     } catch { return { outcome: 'unknown' }; }
   }
+  /**
+   * A FLUJO process that crashed could not remove its sandbox, and the stopped
+   * container still holds this server's name. Remove it and its control folder
+   * so the next start can launch. Without --force Docker refuses to remove a
+   * running container, so one that a live owner still runs is left alone.
+   */
+  async function removeCrashLeftovers(key: string): Promise<void> {
+    try {
+      const rows = (await docker(['container', 'ls', '--all', '--no-trunc', '--filter', `name=^/${name}$`,
+        '--filter', `label=co.flujo.mcp-ownership=${key}`,
+        '--filter', 'status=created', '--filter', 'status=exited', '--filter', 'status=dead',
+        '--format', `{{.ID}} {{.Label "${CONTROL_LABEL}"}}`])).split('\n').filter(Boolean);
+      for (const row of rows) {
+        const [id, folder = ''] = row.split(' ');
+        if (!/^[a-f0-9]{64}$/.test(id)) continue;
+        await docker(['container', 'rm', id]);
+        if ((await ownedRows(`id=${id}`)).length !== 0) continue;
+        const leftover = path.join(tempRoot, folder);
+        if (!CONTROL_FOLDER.test(folder) || leftover === control) continue;
+        const stat = await fs.promises.lstat(leftover).catch(() => undefined);
+        if (stat?.isDirectory() && !stat.isSymbolicLink()) await fs.promises.rm(leftover, { recursive: true, force: true });
+      }
+    } catch { /* The name stays taken and creation reports the sandbox unavailable. */ }
+  }
   let creationRequested = false;
   try {
-    assertIsolatedMcpDaemonInfo(JSON.parse(docker(['info', '--format', '{{json .}}'])));
-    const image = JSON.parse(docker(['image', 'inspect', policy.image, '--format',
+    assertIsolatedMcpDaemonInfo(JSON.parse(await docker(['info', '--format', '{{json .}}'])));
+    const image = JSON.parse(await docker(['image', 'inspect', policy.image, '--format',
       '{"Id":{{json .Id}},"Config":{"Volumes":{{json (index .Config "Volumes")}}}}']));
     if (!image || !/^sha256:[a-f0-9]{64}$/.test(image.Id)) throw new McpIsolationError('ISOLATION_UNAVAILABLE');
     const volumes: unknown = image.Config?.Volumes;
@@ -228,12 +264,16 @@ export function createIsolatedMcpLaunch(value: unknown, approvedDigest: string,
       '--memory-swap', `${policy.memoryMiB}m`, '--cpus', String(policy.cpus),
       '--pids-limit', String(policy.pidsLimit), '--shm-size=1m',
       '--tmpfs', '/tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777'];
-    if (ownership) args.push('--label', `co.flujo.mcp-ownership=${ownership.key}`);
-    const mounts = policy.mounts.map(mount => ({ source: safeMount(workspaceRoot, mount.source), target: `/grants/${mount.name}` }));
+    if (ownership) {
+      args.push('--label', `co.flujo.mcp-ownership=${ownership.key}`, '--label', `${CONTROL_LABEL}=${path.basename(control)}`);
+      await removeCrashLeftovers(ownership.key);
+    }
+    const mounts: Array<{ source: string; target: string }> = [];
+    for (const mount of policy.mounts) mounts.push({ source: await safeMount(workspaceRoot, mount.source), target: `/grants/${mount.name}` });
     for (const mount of mounts) {
       args.push('--mount', `type=bind,source=${mount.source},target=${mount.target},readonly,bind-recursive=disabled`);
     }
-    const grants = policy.environmentNames.length ? privateEnvironmentFile(control, containerEnvironment) : undefined;
+    const grants = policy.environmentNames.length ? await privateEnvironmentFile(control, containerEnvironment) : undefined;
     if (grants) args.push('--env-file', grants.filename);
     args.push(image.Id, ...policy.command);
     // Create without executing first. Starting by immutable ID prevents a late
@@ -241,13 +281,10 @@ export function createIsolatedMcpLaunch(value: unknown, approvedDigest: string,
     let containerId: string;
     try {
       creationRequested = true;
-      containerId = execFileSync(policy.dockerExecutable, [...globalArgs, ...args], {
-        env: hostEssentials(), windowsHide: true, timeout: 5000, maxBuffer: 64 * 1024,
-        stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8',
-      }).trim();
-    } finally { grants?.dispose(); }
+      containerId = await docker(args);
+    } finally { await grants?.dispose(); }
     if (!/^[a-f0-9]{64}$/.test(containerId)
-      || ownedRows(`id=${containerId}`).join('\n') !== `${containerId} ${generation}`) {
+      || (await ownedRows(`id=${containerId}`)).join('\n') !== `${containerId} ${generation}`) {
       throw new McpIsolationError('ISOLATION_UNAVAILABLE');
     }
     // Do not read Config.Env back into CLI output: it contains granted secrets.
@@ -256,19 +293,22 @@ export function createIsolatedMcpLaunch(value: unknown, approvedDigest: string,
       + '"Mounts":{{json .Mounts}},"NetworkSettings":{{json .NetworkSettings}},"Config":{'
       + '"Image":{{json .Config.Image}},"User":{{json .Config.User}},"Cmd":{{json .Config.Cmd}},'
       + '"Labels":{{json .Config.Labels}},"Volumes":{{json .Config.Volumes}},"Healthcheck":{{json .Config.Healthcheck}}}}';
-    assertIsolatedMcpContainerInspection(JSON.parse(docker(['container', 'inspect', containerId, '--format', inspectionFormat])), {
+    assertIsolatedMcpContainerInspection(JSON.parse(await docker(['container', 'inspect', containerId, '--format', inspectionFormat])), {
       containerId, generation, name, imageId: image.Id, policy, mounts, ownershipKey: ownership?.key,
     });
     let completed: { outcome: 'removed' | 'absent' } | undefined;
+    let removing: Promise<{ outcome: 'removed' | 'absent' | 'unknown' }> | undefined;
     return Object.freeze({ command: policy.dockerExecutable,
       args: Object.freeze([...globalArgs, 'container', 'start', '--attach', '--interactive', containerId]),
       env: Object.freeze(hostEssentials()), cwd: control, generation, containerId,
       ...(ownership ? { ownershipKey: ownership.key } : {}),
       close: () => {
-        if (completed) return completed;
-        const result = removeOwned(containerId);
-        if (result.outcome !== 'unknown') completed = { outcome: result.outcome };
-        return result;
+        if (completed) return Promise.resolve(completed);
+        removing ??= removeOwned(containerId).then(result => {
+          if (result.outcome !== 'unknown') completed = { outcome: result.outcome };
+          return result;
+        }).finally(() => { removing = undefined; });
+        return removing;
       },
     });
   } catch (error) {
@@ -276,10 +316,12 @@ export function createIsolatedMcpLaunch(value: unknown, approvedDigest: string,
       // A timed out create may leave a stopped container. Reconcile only this
       // generation; retain the control directory when observation is uncertain.
       try {
-        const rows = ownedRows(`name=^/${name}$`);
-        if (rows.length === 1 && new RegExp(`^[a-f0-9]{64} ${generation}$`).test(rows[0])) removeOwned(rows[0].split(' ')[0]);
+        const rows = await ownedRows(`name=^/${name}$`);
+        if (rows.length === 1 && new RegExp(`^[a-f0-9]{64} ${generation}$`).test(rows[0])) await removeOwned(rows[0].split(' ')[0]);
+        // Another container holds the name, so this create made none and nothing uses the control folder.
+        else if (rows.length === 1 && /^[a-f0-9]{64} \S+$/.test(rows[0]) && !rows[0].endsWith(` ${generation}`)) await cleanupControl();
       } catch { /* Never delete an unobserved container or claim cleanup success. */ }
-    } else cleanupControl();
+    } else await cleanupControl();
     if (error instanceof McpIsolationError) throw error;
     throw new McpIsolationError('ISOLATION_UNAVAILABLE');
   }

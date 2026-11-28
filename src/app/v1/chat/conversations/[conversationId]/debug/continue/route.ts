@@ -123,13 +123,9 @@ async function POST_handler(
       }, { status: dispatch.state === 'queued' || dispatch.state === 'running' ? 202 : 200 });
     }
 
-    // 3. Prepare data for processChatCompletion
-    // We need to simulate a ChatCompletionRequest. We'll use the existing messages
-    // and flow information from the sharedState.
-    // We need the original model name (e.g., "flow-MyFlow") which isn't directly in SharedState.
-    // We might need to load the flow definition to get the name.
-    // For now, let's assume we can reconstruct it or find a way to pass it.
-    // TODO: Refine how model name is retrieved if needed. Maybe store it in SharedState?
+    // 3. Prepare data for processChatCompletion: a ChatCompletionRequest built
+    // from the current messages. A flow's model name is "flow-<flow name>", so
+    // it comes from the flow definition named in the shared state.
     const flow = await flowService.getFlow(sharedState.flowId);
     if (!flow) {
         log.error(`Flow definition not found for flowId ${sharedState.flowId}`, { requestId, conversationId });

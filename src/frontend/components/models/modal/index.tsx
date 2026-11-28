@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { createLogger } from '@/utils/logger';
 import {
@@ -59,6 +59,8 @@ import { setEditBase, type EditConflict } from '@/frontend/services/sharedItems'
 import EditingNotice from '@/frontend/components/shared/sharedEditing/EditingNotice';
 import EditConflictDialog from '@/frontend/components/shared/sharedEditing/EditConflictDialog';
 import ChangeHistoryDialog from '@/frontend/components/shared/sharedEditing/ChangeHistoryDialog';
+import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
+import { useInterval, useLater, useTimeout } from '@/frontend/hooks/timing';
 
 const discoveredModelMetadata = (model: NormalizedModel, changed = false): Partial<Model> => ({
   ...(changed || model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
@@ -79,13 +81,37 @@ export interface ModelModalProps {
   onReload?: () => void | Promise<void>;
 }
 
+const NEW_MODEL_FORM: Partial<Model> = {
+  name: '',
+  displayName: '',
+  description: '',
+  ApiKey: '',
+  baseUrl: 'https://api.openai.com/v1',
+  provider: 'openai' as ModelProvider,
+  adapter: 'openai' as ModelAdapter,
+  promptTemplate: '',
+  temperature: '0.0',
+};
+
+/** The form for `model` as the dialog opens: a bound key stays bound, a stored key is masked. */
+function formForModel(open: boolean, model: Model): { form: Partial<Model>; boundToGlobalVar: string | null } {
+  if (!open) return { form: NEW_MODEL_FORM, boundToGlobalVar: null };
+  const adapter = resolveModelAdapter(model.provider, model.adapter);
+  const form = { ...model, adapter, displayName: model.displayName || model.name };
+  const bindingMatch = (model.ApiKey || '').match(/\$\{global:([^}]+)\}/);
+  if (bindingMatch) return { form, boundToGlobalVar: bindingMatch[1] };
+  // A preliminary model (empty name) leaves the API key empty; otherwise the existing key is masked.
+  const emptyKey = !model.name || (supportsLocalModelAuth(adapter) && !model.ApiKey?.trim());
+  return { form: { ...form, ApiKey: emptyKey ? '' : MASKED_API_KEY }, boundToGlobalVar: null };
+}
+
 export const ModelModal = ({ open, model, onSave, onClose, onReload }: ModelModalProps) => {
   const { t } = useI18n();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const router = useRouter();
   const { globalEnvVars } = useStorage();
-  const [formState, setFormState] = useState<Partial<Model>>({});
+  const [formState, setFormState] = useState<Partial<Model>>(() => formForModel(open, model).form);
   // Multi-user mode (#575): "Anna is editing" notes, "someone else saved
   // first", and who changed what. All stay off (no request) while it is off.
   const editLease = useEditLease('model', model.id, open && Boolean(model.name));
@@ -94,14 +120,13 @@ export const ModelModal = ({ open, model, onSave, onClose, onReload }: ModelModa
   const [changeHistoryOpen, setChangeHistoryOpen] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [info, setInfo] = useState<string | null>(null);
-  const [isApiKeyBound, setIsApiKeyBound] = useState(false);
-  const [boundToGlobalVar, setBoundToGlobalVar] = useState<string | null>(null);
+  const [isApiKeyBound, setIsApiKeyBound] = useState(() => formForModel(open, model).boundToGlobalVar !== null);
+  const [boundToGlobalVar, setBoundToGlobalVar] = useState<string | null>(() => formForModel(open, model).boundToGlobalVar);
   const [showBindModal, setShowBindModal] = useState(false);
   const [openRouterModels, setOpenRouterModels] = useState<NormalizedModel[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [catalogUnavailable, setCatalogUnavailable] = useState(false);
   const promptBuilderRef = useRef<PromptBuilderRef>(null);
-  const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const discoveryRequestIdRef = useRef(0);
   const currentProfile = getProviderProfile(formState.provider, formState.adapter);
   // Ollama ignores keys; like the guided setup, an empty key is stored as the placeholder "ollama".
@@ -136,6 +161,7 @@ export const ModelModal = ({ open, model, onSave, onClose, onReload }: ModelModa
     'maxTokens',
   ] as const, []);
 
+  const highlightLater = useLater();
   const highlightModelField = useCallback((field: string) => {
     const root = [...document.querySelectorAll('[data-ask-flujo-model-id]')]
       .find(element => element.getAttribute('data-ask-flujo-model-id') === model.id) ?? null;
@@ -170,9 +196,10 @@ export const ModelModal = ({ open, model, onSave, onClose, onReload }: ModelModa
       return { success: false, message: `${field} must be text.` };
     }
     setFormState(current => ({ ...current, [field]: action.value }));
-    window.requestAnimationFrame(() => highlightModelField(field));
+    // The field shows its new value on the next frame; highlight it then.
+    highlightLater(() => highlightModelField(field), 'frame');
     return { success: true, message: `Updated ${field} in the unsaved form. Review it, then Save.` };
-  }, [askEditableFields, highlightModelField]);
+  }, [askEditableFields, highlightLater, highlightModelField]);
 
   useAskFlujoPage({
     scopeId: `model:${model.id}`,
@@ -264,144 +291,67 @@ export const ModelModal = ({ open, model, onSave, onClose, onReload }: ModelModa
     }
   }, [currentProfile.id, model.id]);
 
-  // Opening or closing the modal invalidates any response still in flight.
-  useEffect(() => {
-    discoveryRequestIdRef.current += 1;
-    setIsLoadingModels(false);
-    if (open) {
-      setOpenRouterModels([]);
-      setCatalogUnavailable(false);
-    }
-  }, [open]);
-
-  // Clear provider results and invalidate in-flight work whenever the discovery
-  // identity changes. Native profiles participate without exposing a base URL.
-  useEffect(() => {
-    discoveryRequestIdRef.current += 1;
+  // Opening or closing the modal, or a new discovery identity, clears provider
+  // results and invalidates any response still in flight (in the commit, before
+  // a late response could land). Native profiles participate without exposing a base URL.
+  const discoveryIdentity = JSON.stringify([
+    open,
+    formState.baseUrl ?? null,
+    discoveryCredential ?? null,
+    isApiKeyBound,
+    boundToGlobalVar,
+    currentProfile.id,
+    canDiscoverProviderModels,
+  ]);
+  useResetOnChange(discoveryIdentity, () => {
     setIsLoadingModels(false);
     setOpenRouterModels([]);
     setCatalogUnavailable(false);
+  });
+  useLayoutEffect(() => {
+    discoveryRequestIdRef.current += 1;
     if (canDiscoverProviderModels) {
       log.debug('Provider discovery identity changed', {
         baseUrl: formState.baseUrl,
         profileId: currentProfile.id,
       });
     }
-  }, [
-    formState.baseUrl,
-    discoveryCredential,
-    isApiKeyBound,
-    boundToGlobalVar,
-    currentProfile.id,
-    canDiscoverProviderModels,
-  ]);
+  }, [discoveryIdentity]);
 
   // Load the complete catalogue once per modal/profile/endpoint/credential
   // identity. Typing filters the in-memory list locally and does not create a
   // provider request per keystroke.
-  useEffect(() => {
-    if (debounceTimeoutRef.current) {
-      clearTimeout(debounceTimeoutRef.current);
-    }
-
-    if (open && canDiscoverProviderModels && hasDiscoveryCredential) {
-      debounceTimeoutRef.current = setTimeout(() => {
-        log.debug('Automatic provider discovery triggered', {
-          baseUrl: formState.baseUrl,
-          profileId: currentProfile.id,
-        });
-        fetchModels(
-          formState.baseUrl ?? '',
-          undefined,
-          currentProfile.id,
-          discoveryCredential,
-        );
-      }, 100);
-    }
-
-    return () => {
-      if (debounceTimeoutRef.current) {
-        clearTimeout(debounceTimeoutRef.current);
-      }
-    };
-  }, [
-    open,
-    formState.baseUrl,
-    discoveryCredential,
-    isApiKeyBound,
-    boundToGlobalVar,
-    currentProfile.id,
-    canDiscoverProviderModels,
-    hasDiscoveryCredential,
-    fetchModels,
-  ]);
+  useTimeout(() => {
+    log.debug('Automatic provider discovery triggered', {
+      baseUrl: formState.baseUrl,
+      profileId: currentProfile.id,
+    });
+    fetchModels(
+      formState.baseUrl ?? '',
+      undefined,
+      currentProfile.id,
+      discoveryCredential,
+    );
+  }, open && canDiscoverProviderModels && hasDiscoveryCredential ? 100 : null, `${discoveryIdentity}:${model.id}`);
 
   // Refresh CLI catalogues while the editor is open.
-  useEffect(() => {
-    if (!open || !['codex', 'antigravity-cli'].includes(currentProfile.id)) return;
-    // Pick up account/catalogue changes and a completed background CLI update.
-    const interval = setInterval(() => {
-      fetchModels('', undefined, currentProfile.id, discoveryCredential);
-    }, 60_000);
-    return () => clearInterval(interval);
-  }, [open, currentProfile.id, discoveryCredential, fetchModels]);
-
-  // Cleanup timeout on component unmount
-  useEffect(() => {
-    return () => {
-      if (debounceTimeoutRef.current) {
-        clearTimeout(debounceTimeoutRef.current);
-      }
-    };
-  }, []);
+  // Pick up account/catalogue changes and a completed background CLI update.
+  useInterval(
+    () => fetchModels('', undefined, currentProfile.id, discoveryCredential),
+    open && ['codex', 'antigravity-cli'].includes(currentProfile.id) ? 60_000 : null,
+  );
 
   // Reset form when modal opens/closes or model changes
-  useEffect(() => {
-    if (open) {
-      setFormState({
-        ...model,
-        adapter: resolveModelAdapter(model.provider, model.adapter),
-        displayName: model.displayName || model.name,
-      });
-      
-      // Handle API key binding
-      const apiKeyValue = model.ApiKey || '';
-      const bindingMatch = apiKeyValue.match(/\$\{global:([^}]+)\}/);
-      
-      if (bindingMatch) {
-        setIsApiKeyBound(true);
-        setBoundToGlobalVar(bindingMatch[1]);
-      } else {
-        setIsApiKeyBound(false);
-        setBoundToGlobalVar(null);
-        
-        // If this is a preliminary model (empty name), leave API key empty
-        // Otherwise, mask the existing API key
-        setFormState(prev => ({
-          ...prev,
-          ApiKey: !model.name || (supportsLocalModelAuth(resolveModelAdapter(model.provider, model.adapter)) && !model.ApiKey?.trim())
-            ? '' : MASKED_API_KEY
-        }));
-      }
-    } else {
-      // New model defaults
-      setFormState({
-        name: '',
-        displayName: '',
-        description: '',
-        ApiKey: '',
-        baseUrl: 'https://api.openai.com/v1',
-        provider: 'openai' as ModelProvider,
-        adapter: 'openai' as ModelAdapter,
-        promptTemplate: '',
-        temperature: '0.0',
-      });
-      setIsApiKeyBound(false);
-      setBoundToGlobalVar(null);
-    }
+  const resetForm = () => {
+    const next = formForModel(open, model);
+    setFormState(next.form);
+    setIsApiKeyBound(next.boundToGlobalVar !== null);
+    setBoundToGlobalVar(next.boundToGlobalVar);
     setErrors({});
     setInfo(null);
-  }, [open, model]);
+  };
+  useResetOnChange(open, resetForm);
+  useResetOnChange(model, resetForm);
 
   // Note: the API key is intentionally NOT persisted as the user types. It is sent directly
   // to the provider-fetch endpoint for listing models, and only saved (encrypted) when the
