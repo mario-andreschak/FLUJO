@@ -43,8 +43,9 @@ import { mcpService } from '@/backend/services/mcp';
 import { runFlow } from '@/backend/execution/flow/runFlow';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { getFlowRunEventBus, type FlowEvent } from '@/backend/services/scheduler/flowRunEventBus';
+import { bundledMcpEntry } from '../helpers/bundledMcpEntry';
 
-const binary = path.resolve(process.cwd(), 'mcp-servers/bash/dist/index.js');
+const binary = bundledMcpEntry('bash');
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'flujo-static-real-bash-'));
 const program = path.join(scratch, 'harmless-probe.cjs');
 fs.writeFileSync(program, [

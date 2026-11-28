@@ -13,7 +13,6 @@ These were opened on November 25, 2026:
 | [#1438](https://github.com/mario-andreschak/FLUJO/issues/1438) Clear the "Copied" and "Saved" messages with the shared timer hook | Swap two raw timers for `useTimeout`, add two small component tests | React, Jest |
 | [#1439](https://github.com/mario-andreschak/FLUJO/issues/1439) Share one lazy-loading helper for the three browser services | Replace three copies of the same code with one typed helper and a test | TypeScript |
 | [#1440](https://github.com/mario-andreschak/FLUJO/issues/1440) Persona goal card: stop reading the clock while drawing | Make a card switch its label on time, with a fake-timer test | React, Jest |
-| [#1442](https://github.com/mario-andreschak/FLUJO/issues/1442) Say "run npm run build:mcp" instead of a raw ENOENT | Make an error message helpful and prove it with a test | TypeScript, Node.js |
 
 ## How to take one
 

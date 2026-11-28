@@ -90,7 +90,8 @@ Good to know:
 - Pass test file paths as plain arguments. Quoted glob patterns behave
   differently in PowerShell, cmd.exe and bash.
 - Do not run the whole suite (`npm test`, about 1,270 files) on a laptop. CI does.
-- Tests that create a workspace need `npm run build:mcp` once after `npm ci`.
+- Tests that create a workspace need the built-in MCP servers. The test runner
+  builds them once when they are missing; `npm run build:mcp` does it by hand.
 - Times measured on November 25, 2026, including start-up: `pathSafety.test.ts`
   about 40 seconds, `PersonaGoalCard.test.tsx` about 30 seconds, the two-file
   example 20 seconds, the four recovery suites 100 seconds.

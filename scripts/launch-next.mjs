@@ -151,6 +151,11 @@ async function launchNext(passthroughArgs) {
     FLUJO_APP_ROOT: process.env.FLUJO_APP_ROOT || process.cwd(),
     FLUJO_BASE_URL: process.env.FLUJO_BASE_URL || `http://127.0.0.1:${portFromNextArgs(passthroughArgs)}`,
   };
+  if (passthroughArgs[0] === 'dev') {
+    // A source checkout copies its bundled MCP packages into every new workspace.
+    const { ensureBundledMcpBuilt } = require('./bundled-mcp-build.cjs');
+    await ensureBundledMcpBuilt(baseEnv.FLUJO_APP_ROOT, { log: (line) => console.log(`[FLUJO] ${line}`) });
+  }
   const env = applyExposureRuntimeEnv(withDevelopmentHeap(buildLaunchEnv(baseEnv), passthroughArgs), process.cwd());
   const nextArgs = withLocalInstanceHostname(withExposureHostname(withPort(passthroughArgs), env), env);
   const instance = await prepareLocalInstance({ env, args: nextArgs });

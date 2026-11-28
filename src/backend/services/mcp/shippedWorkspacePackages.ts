@@ -119,7 +119,24 @@ async function packageDigests(root: string, distributedOnly = false): Promise<{ 
     portableRuntimeSha256: portableRuntimeHash.digest('hex') };
 }
 
-async function validatePackage(root: string, name: string): Promise<{ name: string; version?: string }> {
+/** Where a package lives decides its fix: the installation is rebuilt, a workspace copy is the owner's. */
+type PackageCopy = 'installation' | 'workspace';
+
+async function unbuiltPackageError(root: string, name: string, copy: PackageCopy): Promise<Error> {
+  const entry = path.join(root, 'dist', 'index.js');
+  const lead = `Shipped package is not built: ${name}.`;
+  if (copy === 'workspace') {
+    return new Error(`${lead} This workspace's copy has no built code (${entry} is missing). `
+      + `Run "npm run build" in ${root}, or remove that folder so FLUJO copies a fresh one (this discards changes made in it).`);
+  }
+  if ((await optionalStat(path.join(root, 'src')))?.isDirectory()) {
+    return new Error(`${lead} ${entry} is missing because the built-in MCP packages were never built in this source checkout. `
+      + `Run "npm run build:mcp" once in ${path.dirname(path.dirname(root))}, then try again.`);
+  }
+  return new Error(`${lead} This FLUJO installation is missing ${entry}. Reinstall or update FLUJO to repair it.`);
+}
+
+async function validatePackage(root: string, name: string, copy: PackageCopy): Promise<{ name: string; version?: string }> {
   await realDirectory(root);
   const manifestPath = path.join(root, 'package.json');
   const stat = await optionalStat(manifestPath);
@@ -133,11 +150,11 @@ async function validatePackage(root: string, name: string): Promise<{ name: stri
     throw new Error(`The existing ${name} directory belongs to a different package; it was not overwritten.`);
   }
   if (name !== 'shared') {
-    await realDirectory(path.join(root, 'dist'));
-    const entry = await optionalStat(path.join(root, 'dist', 'index.js'));
-    if (!entry?.isFile() || entry.isSymbolicLink()) {
-      throw new Error(`Shipped package is not built: ${name}. Build its MCP package first.`);
-    }
+    const dist = path.join(root, 'dist');
+    if (!(await optionalStat(dist))) throw await unbuiltPackageError(root, name, copy);
+    await realDirectory(dist);
+    const entry = await optionalStat(path.join(dist, 'index.js'));
+    if (!entry?.isFile() || entry.isSymbolicLink()) throw await unbuiltPackageError(root, name, copy);
   }
   return manifest;
 }
@@ -180,8 +197,8 @@ export async function inspectShippedWorkspaceProvenance(workspaceRoot: string, p
   await realDirectory(installation);
   const source = path.join(installation, 'mcp-servers', packageDirectory);
   const destination = path.join(path.resolve(workspaceRoot), 'mcp-servers', packageDirectory);
-  await validatePackage(source, packageDirectory);
-  await validatePackage(destination, packageDirectory);
+  await validatePackage(source, packageDirectory, 'installation');
+  await validatePackage(destination, packageDirectory, 'workspace');
   // Compare the same distributed assets clonePackage copies. Installation
   // userdata is excluded from that copy; snapshot edit detection stays broader.
   const [installed, copied] = await Promise.all([packageDigests(source, true), packageDigests(destination, true)]);
@@ -332,7 +349,7 @@ async function clonePackage(root: string, appRoot: string, name: string): Promis
   const destination = path.join(root, name);
   const existing = await optionalStat(destination);
   if (existing) {
-    await validatePackage(destination, name);
+    await validatePackage(destination, name, 'workspace');
     // This may contain user edits or an earlier version. Startup is not an
     // update operation and must never overwrite or adopt its contents.
     await ensureDependencies(destination, appRoot, name);
@@ -341,7 +358,7 @@ async function clonePackage(root: string, appRoot: string, name: string): Promis
 
   const source = path.join(appRoot, 'mcp-servers', name);
   if (name === 'shared' && !(await optionalStat(source))) return; // npm ships embedded shared.js instead.
-  const manifest = await validatePackage(source, name);
+  const manifest = await validatePackage(source, name, 'installation');
 
   const stage = path.join(root, `.flujo-copy-${name}-${randomUUID()}`);
   await fs.mkdir(stage);
@@ -370,7 +387,7 @@ async function clonePackage(root: string, appRoot: string, name: string): Promis
       // result; never merge, replace, or remove the winning directory.
       if (!['EEXIST', 'ENOTEMPTY', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '')
         || !(await optionalStat(destination))) throw error;
-      await validatePackage(destination, name);
+      await validatePackage(destination, name, 'workspace');
       await ensureDependencies(destination, appRoot, name);
     }
   } finally {

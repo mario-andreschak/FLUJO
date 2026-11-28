@@ -33,6 +33,8 @@ jest.mock('@/backend/services/mcp', () => ({
     pinServer: jest.fn(),
     unpinServer: jest.fn(),
     isServerDisabled: jest.fn(async () => false),
+    getClient: jest.fn(() => undefined),
+    forceReconnect: jest.fn(async () => ({ success: true })),
     subscribeServerEvent: jest.fn(async () => ({ id: 'sub', refreshBefore: null })),
     unsubscribeServerEvent: jest.fn(async () => undefined),
     connectClaudeChannel: jest.fn(async () => true),

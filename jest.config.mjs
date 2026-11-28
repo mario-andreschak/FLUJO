@@ -148,6 +148,7 @@ async function buildConfig() {
     }
   }
   return {
+    globalSetup: "<rootDir>/jest.globalSetup.cjs",
     // Recycle accumulated test heaps between completed files. The serial
     // process stage and each test's workload and deadlines remain unchanged.
     workerIdleMemoryLimit: "1GB",

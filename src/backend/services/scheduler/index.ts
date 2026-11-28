@@ -49,6 +49,7 @@ import { armMcpEventPoll } from './triggers/mcpEventPoll';
 import type { McpEventOccurrence } from '@/backend/services/mcp/serverEvents';
 import type { McpEventStreamHandlers } from '@/backend/services/mcp/serverEventStream';
 import { subscribeInboundEvents } from '@/backend/services/mcp/inboundEvents';
+import { healDeadConnection, withLiveConnection } from '@/backend/services/mcp/liveConnection';
 import { composeTriggerPrompt } from './triggerPrompt';
 import { intervalMsToCron } from '@/utils/shared/cron';
 import { armUrlWatch } from './triggers/urlWatch';
@@ -751,6 +752,7 @@ export class SchedulerService {
               connect: this.bindToWorkspace(async () => {
                 const { mcpService } = await import('@/backend/services/mcp');
                 if (!await this.isCurrentSchedule(execution)) throw new Error('Schedule changed before connecting');
+                await healDeadConnection(mcpService, trigger.serverName);
                 return mcpService.connectClaudeChannel(trigger.serverName);
               }),
               pin: this.bindToWorkspace(async () => {
@@ -823,11 +825,11 @@ export class SchedulerService {
               open: this.bindToWorkspace(async (cursor: string | null, handlers: McpEventStreamHandlers) => {
                 const { mcpService } = await import('@/backend/services/mcp');
                 if (!await this.isCurrentSchedule(execution)) throw new Error('Schedule changed before opening the event stream');
-                return mcpService.openServerEventStream(trigger.serverName, {
+                return withLiveConnection(mcpService, trigger.serverName, () => mcpService.openServerEventStream(trigger.serverName, {
                   name: trigger.eventName,
                   arguments: trigger.arguments,
                   cursor,
-                }, handlers);
+                }, handlers));
               }),
               ...eventCursor,
               deliver: deliverOccurrences('push'),
@@ -845,12 +847,12 @@ export class SchedulerService {
               poll: this.bindToWorkspace(async (cursor: string | null) => {
                 const { mcpService } = await import('@/backend/services/mcp');
                 if (!await this.isCurrentSchedule(execution)) throw new Error('Schedule changed before polling');
-                return mcpService.pollServerEvent(trigger.serverName, {
+                return withLiveConnection(mcpService, trigger.serverName, () => mcpService.pollServerEvent(trigger.serverName, {
                   name: trigger.eventName,
                   arguments: trigger.arguments,
                   cursor,
                   maxEvents: MCP_EVENT_POLL_BATCH,
-                });
+                }));
               }),
               ...eventCursor,
               deliver: deliverOccurrences('poll'),
@@ -867,14 +869,15 @@ export class SchedulerService {
             subscribe: this.bindToWorkspace(async (ttlMs: number) => {
               const { mcpService } = await import('@/backend/services/mcp');
               if (!await this.isCurrentSchedule(execution)) throw new Error('Schedule changed before subscribing');
-              const granted = await mcpService.subscribeServerEvent(trigger.serverName, {
+              const cursor = await eventCursor.loadCursor();
+              const granted = await withLiveConnection(mcpService, trigger.serverName, () => mcpService.subscribeServerEvent(trigger.serverName, {
                 name: trigger.eventName,
                 arguments: trigger.arguments,
                 url: mcpEventDeliveryUrl(execution.id, trigger, getCurrentWorkspace()),
                 secret: trigger.secret,
                 ttlMs,
-                cursor: await eventCursor.loadCursor(),
-              });
+                cursor,
+              }));
               // The answer carries a safe resume point, so a quiet subscription
               // does not fall behind the server's history.
               if (granted.cursor) await eventCursor.saveCursor(granted.cursor);
