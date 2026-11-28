@@ -4,7 +4,7 @@ import path from 'node:path';
 import { issueOwnerCredential, ownerPolicySchema } from '@/backend/services/security/ownerCredentials';
 
 /** Provision an owned operator; approval still goes through the real protected writer. */
-export function installBundledFixtureOwner() {
+export function installBundledFixtureOwner({ lifetimeMs = 120_000 }: { lifetimeMs?: number } = {}) {
   const parent = path.resolve(process.platform === 'win32' ? process.env.LOCALAPPDATA ?? os.tmpdir() : os.tmpdir());
   const directory = fs.mkdtempSync(path.join(parent, 'flujo-bundled-owner-'));
   const names = ['FLUJO_OWNER_AUTH_FILE', 'FLUJO_MCP_TRUSTED_HOST_FILE', 'FLUJO_MCP_ISOLATION_FILE'];
@@ -19,7 +19,7 @@ export function installBundledFixtureOwner() {
     fs.rmSync(directory, { recursive: true, force: true });
   };
   try {
-    const expiresAt = Date.now() + 120_000;
+    const expiresAt = Date.now() + lifetimeMs;
     const issued = issueOwnerCredential(['control:admin', 'mcp:access', 'secrets:read'], expiresAt);
     const ownerId = 'owned-bundled-fixture-operator';
     const owner = ownerPolicySchema.parse({ schemaVersion: 1, ownerId, credentials: [issued.record] });

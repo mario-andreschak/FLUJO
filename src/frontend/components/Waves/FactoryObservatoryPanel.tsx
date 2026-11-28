@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Box, Button, Chip, Paper, Stack, Typography } from '@mui/material';
 import type { FactoryObservatorySnapshot } from '@/shared/types/factoryObservatory';
+import { useInterval } from '@/frontend/hooks/timing';
 
 const POLL_MS = 30_000;
 
@@ -24,28 +25,29 @@ function treeOrder(cells: FactoryObservatorySnapshot['cells']) {
   return ordered;
 }
 
+async function loadSnapshot(): Promise<FactoryObservatorySnapshot> {
+  const response = await fetch('/api/factory-observatory', { cache: 'no-store' });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { error?: string } | null;
+    throw new Error(body?.error === 'FACTORY_NOT_CONFIGURED' ? 'FACTORY is not configured for this FLUJO instance.'
+      : 'FACTORY is unavailable.');
+  }
+  return await response.json() as FactoryObservatorySnapshot;
+}
+
 export default function FactoryObservatoryPanel() {
   const [snapshot, setSnapshot] = useState<FactoryObservatorySnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const refresh = useCallback(async () => {
-    try {
-      const response = await fetch('/api/factory-observatory', { cache: 'no-store' });
-      if (!response.ok) {
-        const body = await response.json().catch(() => null) as { error?: string } | null;
-        throw new Error(body?.error === 'FACTORY_NOT_CONFIGURED' ? 'FACTORY is not configured for this FLUJO instance.'
-          : 'FACTORY is unavailable.');
-      }
-      setSnapshot(await response.json() as FactoryObservatorySnapshot);
-      setError(null);
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : 'FACTORY is unavailable.');
-    }
-  }, []);
+  const refresh = useCallback(() => loadSnapshot().then((next) => {
+    setSnapshot(next);
+    setError(null);
+  }, (failure) => {
+    setError(failure instanceof Error ? failure.message : 'FACTORY is unavailable.');
+  }), []);
   useEffect(() => {
     void refresh();
-    const timer = window.setInterval(() => { void refresh(); }, POLL_MS);
-    return () => window.clearInterval(timer);
   }, [refresh]);
+  useInterval(() => { void refresh(); }, POLL_MS);
   const cells = useMemo(() => treeOrder(snapshot?.cells ?? []), [snapshot]);
   const taskCounts = useMemo(() => {
     const counts = new Map<string, number>();

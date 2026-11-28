@@ -92,19 +92,35 @@ export default function PersonaImprovementsArea({ detail }: { detail: PersonaDet
     if (promotion && error && acting === null) promotionErrorRef.current?.focus();
   }, [promotion, error, acting]);
 
-  const load = useCallback(async () => {
+  const fetchProposals = useCallback((isCurrent: () => boolean = () => true) => personasService
+    .improvements(detail.persona.id)
+    .then((next) => {
+      if (isCurrent()) setProposals(next);
+    })
+    .catch((cause) => {
+      if (isCurrent()) setError(cause instanceof Error ? cause.message : t('personas.improvements.loadFailed'));
+    })
+    .finally(() => {
+      if (isCurrent()) setLoading(false);
+    }), [detail.persona.id, t]);
+
+  const load = async () => {
     setLoading(true);
     setError(null);
-    try {
-      setProposals(await personasService.improvements(detail.persona.id));
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t('personas.improvements.loadFailed'));
-    } finally {
-      setLoading(false);
-    }
-  }, [detail.persona.id, t]);
+    await fetchProposals();
+  };
 
-  useEffect(() => { void load(); }, [load]);
+  const [loadedFor, setLoadedFor] = useState(detail.persona.id);
+  if (loadedFor !== detail.persona.id) {
+    setLoadedFor(detail.persona.id);
+    setLoading(true);
+    setError(null);
+  }
+  useEffect(() => {
+    let current = true;
+    void fetchProposals(() => current);
+    return () => { current = false; };
+  }, [fetchProposals]);
 
   const replace = (updated: BehaviorProposal) => {
     setProposals((current) => current.map((proposal) => (

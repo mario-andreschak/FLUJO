@@ -694,6 +694,9 @@ async function archiveModelDispatchWithinMutation(
     contextCompaction: input.modelInput?.contextCompaction,
   };
   recheckArchiveWriteMemory(snapshot, true);
+  // The sanitized snapshot is archive-owned and no longer changes. Only the
+  // caller's provenance pages below need a fresh look while they stream.
+  const snapshotBytes = pagedProvenance ? estimateArchivePayload(snapshot) : 0;
 
   await settleArchiveWrites([...ctx.writes.entries()].map(async ([sha256, bytes]) => {
     const target = mediaPath(input.conversationId, sha256);
@@ -724,7 +727,7 @@ async function archiveModelDispatchWithinMutation(
               if (!descriptor || !('value' in descriptor)) throw new ModelTurnArchiveMemoryError('MODEL_TURN_ARCHIVE_MEMORY_LIMIT');
               page.push(descriptor.value);
             }
-            recheckArchiveWriteMemory({ ...snapshot, provenance: page }, true);
+            recheckArchiveWriteMemory(page, true, snapshotBytes);
             yield (offset ? ',' : '') + JSON.stringify(page).slice(1, -1);
           }
           yield ']';

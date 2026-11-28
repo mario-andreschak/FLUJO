@@ -82,12 +82,16 @@ interface SharedTasks {
   live: Map<string, LiveTask>; chains: Map<string, Promise<unknown>>;
   /** Callback settlement receipts contain IDs only, never retained payloads or authority. */
   settled: Map<string, Set<string>>;
+  /** The latest unlocked look at each ledger, shared by the monitors of its live tasks. */
+  snapshots: Map<string, { takenAt: number; ledger: Promise<Ledger> }>;
   continuations?: ServerTaskContinuations;
 }
 declare global { var __flujo_server_tasks_v1: SharedTasks | undefined }
-const shared: SharedTasks = globalThis.__flujo_server_tasks_v1 ??= { live: new Map(), chains: new Map(), settled: new Map() };
-// Existing Next route bundles can have initialized the previous shared shape.
+const shared: SharedTasks = globalThis.__flujo_server_tasks_v1 ??= { live: new Map(), chains: new Map(), settled: new Map(), snapshots: new Map() };
+// Existing Next route bundles can have initialized a previous shared shape.
 shared.settled ??= new Map();
+shared.snapshots ??= new Map();
+const MONITOR_INTERVAL_MS = 200;
 const LIMITS = Object.freeze({ records: 128, active: 32, perOwnerActive: 4, payloadBytes: 32 * 1024,
   ledgerBytes: 6 * 1024 * 1024, inputCount: 16, ttlMs: 24 * 60 * 60 * 1000 });
 const terminal = (status: ServerTaskStatus) => ['completed', 'failed', 'cancelled'].includes(status);
@@ -211,6 +215,20 @@ export class ServerTaskStore {
     try { await writeFileAtomic(this.filename, text, async () => { await guard?.();
       await assertLinkFreeFileParent(path.dirname(path.dirname(this.filename)), this.filename); }); }
     catch (error) { throw error instanceof ServerTaskError ? error : new ServerTaskError('TASK_STORAGE_UNAVAILABLE'); }
+    finally { shared.snapshots.delete(this.filename); }
+  }
+  /**
+   * One unlocked look at the ledger, shared by every live task's monitor within
+   * half a tick. Writes replace the file atomically, so a look is a whole ledger.
+   */
+  private snapshot(): Promise<Ledger> {
+    const takenAt = performance.now();
+    const cached = shared.snapshots.get(this.filename);
+    if (cached && takenAt - cached.takenAt < MONITOR_INTERVAL_MS / 2) return cached.ledger;
+    const ledger = this.read();
+    shared.snapshots.set(this.filename, { takenAt, ledger });
+    ledger.catch(() => { if (shared.snapshots.get(this.filename)?.ledger === ledger) shared.snapshots.delete(this.filename); });
+    return ledger;
   }
   private async transaction<T>(workspace: string, action: (ledger: Ledger) => Promise<T>): Promise<T> {
     const previous = shared.chains.get(this.filename) ?? Promise.resolve();
@@ -312,7 +330,7 @@ export class ServerTaskStore {
       live.busy = true;
       void runWithWorkspace(workspace, () => this.monitor(auth, workspace, task.taskId, live))
         .catch(() => this.retire(task.taskId)).finally(() => { live.busy = false; });
-    }, 200);
+    }, MONITOR_INTERVAL_MS);
     live.monitor.unref?.();
     // Detach from HTTP request cancellation. Admission is complete and durably recorded.
     void Promise.resolve().then(() => runWithWorkspace(workspace, async () => {
@@ -485,7 +503,22 @@ export class ServerTaskStore {
     });
     return response;
   }
+  /**
+   * Nothing for a monitor tick to do: authority holds, no input is awaited, and
+   * the ledger still shows the task running. Every other tick takes the lock.
+   */
+  private async unchanged(auth: OwnerRequestAuthorization, workspace: string, id: string, live: LiveTask): Promise<boolean> {
+    if (live.pending) return false;
+    try { await this.assertAuthority(auth, workspace); } catch { return false; }
+    let ledger: Ledger;
+    try { ledger = await this.snapshot(); } catch { return false; }
+    const task = ledger.tasks.find(record => record.taskId === id);
+    return !!task && !terminal(task.status) && task.expiresAt > this.now();
+  }
   private async monitor(auth: OwnerRequestAuthorization, workspace: string, id: string, live: LiveTask): Promise<void> {
+    // A locked transaction per running task and tick would let 32 running
+    // tasks keep every create, get and cancel waiting behind their checks.
+    if (await this.unchanged(auth, workspace, id, live)) return;
     await this.transaction(workspace, async ledger => {
       const task = ledger.tasks.find(record => record.taskId === id);
       if (!task || terminal(task.status)) { this.retire(id); return; }

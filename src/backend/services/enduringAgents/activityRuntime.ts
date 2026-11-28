@@ -2183,24 +2183,59 @@ export async function readWithPersonaActivityLease<T>(
   task: (reader: HeldPersonaActivityRead) => Promise<T>,
 ): Promise<T> {
   const fence = LeaseFenceSchema.parse(value) as PersonaLeaseFence;
+  for (;;) {
+    const outcome = await readOnceWithPersonaActivityLease(fence, task);
+    if ('result' in outcome) return outcome.result;
+    // The heartbeat renews the lease as soon as this lock is free. Come back
+    // after it; once the lease really expires, the next check refuses the read
+    // and records the expiry, so this wait never outlasts the lease.
+    await runtimeClock.sleep(Math.max(1, Math.min(
+      HELD_READ_RENEWAL_WAIT_STEP_MS,
+      outcome.renewalDueBefore - runtimeClock.now(),
+    )));
+  }
+}
+
+const HELD_READ_RENEWAL_WAIT_STEP_MS = 100;
+
+/** The lease is intact, but the rest of its window belongs to the heartbeat's renewal. */
+class HeldReadRenewalDueError extends PersonaLeaseLostError {
+  constructor(personaId: string, readonly expiresAt: number) {
+    super(personaId, 'Held Persona Activity read used half of its lease; the lease renews before the next read.');
+  }
+}
+
+async function readOnceWithPersonaActivityLease<T>(
+  fence: PersonaLeaseFence,
+  task: (reader: HeldPersonaActivityRead) => Promise<T>,
+): Promise<{ result: T } | { renewalDueBefore: number }> {
   return withPersonaRuntimeLock(fence.personaId, async (lock) => {
-    const deadline = runtimeClock.monotonicNow() + 5_000;
     let active = true;
     const pending = new Set<Promise<void>>();
-    const assertLifetime = () => {
-      if (!active || runtimeClock.monotonicNow() >= deadline) {
-        throw new PersonaLeaseLostError(fence.personaId, 'Held Persona Activity read expired.');
+    const assertOpen = () => {
+      if (!active) throw new PersonaLeaseLostError(fence.personaId, 'Held Persona Activity read ended.');
+    };
+    // The lease heartbeat needs this lock to renew. A read may use the first
+    // half of the lease's renewal window and leaves the second half for the
+    // renewal, so a slow PC lengthens the read instead of refusing it after a
+    // fixed few seconds. A read that would start in the second half waits for
+    // the renewal instead, and then gets a whole window.
+    const assertWithinHalfLease = (lease: PersonaLease) => {
+      if (runtimeClock.now() >= lease.renewedAt + Math.floor((lease.expiresAt - lease.renewedAt) / 2)) {
+        throw new HeldReadRenewalDueError(fence.personaId, lease.expiresAt);
       }
     };
     const reader: HeldPersonaActivityRead = Object.freeze({
       assertCurrent: () => {
         const check = (async () => {
-          assertLifetime();
+          assertOpen();
           await lock.assertOwned();
-          assertLifetime();
-          await requireActiveRunnableLease(lock, fence);
+          assertOpen();
+          // Real expiry is refused and recorded here before the read's own bound.
+          const { lease } = await requireActiveRunnableLease(lock, fence);
+          assertWithinHalfLease(lease);
           await lock.assertOwned();
-          assertLifetime();
+          assertOpen();
         })();
         pending.add(check);
         void check.then(() => pending.delete(check), () => pending.delete(check));
@@ -2209,10 +2244,15 @@ export async function readWithPersonaActivityLease<T>(
     });
     heldPersonaActivityReads.add(reader);
     try {
-      await reader.assertCurrent();
+      try {
+        await reader.assertCurrent();
+      } catch (error) {
+        if (error instanceof HeldReadRenewalDueError) return { renewalDueBefore: error.expiresAt };
+        throw error;
+      }
       const result = await task(reader);
       await reader.assertCurrent();
-      return result;
+      return { result };
     } finally {
       active = false;
       heldPersonaActivityReads.delete(reader);

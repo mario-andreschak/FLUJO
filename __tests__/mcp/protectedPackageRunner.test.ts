@@ -18,6 +18,7 @@ import { trustedHostMcpPolicyDigest, trustedHostMcpPolicySchema, verifyTrustedHo
 import { fingerprintTrustedHostSource } from './fixtures/trustedHostFingerprint';
 
 import { materializeProtectedPackageRunner } from './fixtures/protectedPackageRunner';
+import { PRIVATE_READ_TEST_MS } from '../helpers/privateReadTime';
 
 // This server uses genuine npm exec resolution and real SDK stdio transport.
 // Its one materialized synthetic dependency exercises actual Node resolution.
@@ -61,10 +62,15 @@ const approve = (value = config) => { ledger.approvals = [{ workspace: getCurren
 
 // The 2026-10-09 isolated Windows run took 206.13s: closure cases took
 // 13.05/13.17s and four launch/home/writer cases exceeded the old 25s budget.
-// Allow full fresh fingerprint/ACL work and cleanup; SDK connect/call remain 10s.
-const caseTimeout = process.platform === 'win32' ? 60_000 : 25_000;
-const closureTimeout = process.platform === 'win32' ? 60_000 : 15_000;
-const cleanupTimeout = process.platform === 'win32' ? 120_000 : 15_000;
+// On a busy Windows PC (2026-11-28) the file took 431s even on its own: the
+// host-home cases took 63/97s and the writer case passed 100s beside another
+// worker, because every fresh ACL check starts a PowerShell process. Allow that
+// full fresh fingerprint/ACL work and cleanup; SDK connect/call remain 10s.
+const caseTimeout = process.platform === 'win32' ? 240_000 : 25_000;
+const closureTimeout = process.platform === 'win32' ? 120_000 : 15_000;
+// Longer than a case: a timed-out case still drains here before the next one starts.
+const cleanupTimeout = process.platform === 'win32' ? 300_000 : 15_000;
+jest.setTimeout(PRIVATE_READ_TEST_MS);
 const ownedCases = new Set<Promise<void>>();
 function ownedCase(operation: () => Promise<void>): Promise<void> {
   const pending = operation();

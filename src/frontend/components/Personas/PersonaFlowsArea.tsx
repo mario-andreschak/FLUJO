@@ -111,26 +111,40 @@ export default function PersonaFlowsArea({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async (background = false) => {
+  const fetchArea = useCallback((isCurrent: () => boolean = () => true) => Promise.all([
+    personasService.getComposition(detail.persona.id),
+    flowService.loadFlows({ refresh: true }),
+  ]).then(([nextComposition, nextFlows]) => {
+    if (!isCurrent()) return false;
+    setComposition(nextComposition);
+    setFlows(nextFlows);
+    return true;
+  }, (cause) => {
+    if (isCurrent()) setError(cause instanceof Error ? cause.message : t('personas.flows.loadFailed'));
+    return false;
+  }), [detail.persona.id, t]);
+
+  const load = async (background = false) => {
     if (!background) setLoading(true);
     setError(null);
-    try {
-      const [nextComposition, nextFlows] = await Promise.all([
-        personasService.getComposition(detail.persona.id),
-        flowService.loadFlows({ refresh: true }),
-      ]);
-      setComposition(nextComposition);
-      setFlows(nextFlows);
-      return true;
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t('personas.flows.loadFailed'));
-      return false;
-    } finally {
-      if (!background) setLoading(false);
-    }
-  }, [detail.persona.id, t]);
+    const loaded = await fetchArea();
+    if (!background) setLoading(false);
+    return loaded;
+  };
 
-  useEffect(() => { void load(); }, [load]);
+  const [loadedFor, setLoadedFor] = useState(detail.persona.id);
+  if (loadedFor !== detail.persona.id) {
+    setLoadedFor(detail.persona.id);
+    setLoading(true);
+    setError(null);
+  }
+  useEffect(() => {
+    let current = true;
+    void fetchArea(() => current).then(() => {
+      if (current) setLoading(false);
+    });
+    return () => { current = false; };
+  }, [fetchArea]);
 
   const pickerModel = useCardPicker<Flow>(
     'flows',

@@ -1,4 +1,4 @@
-import React, { memo, useContext, useEffect, useRef, useState } from 'react';
+import React, { memo, useContext, useState } from 'react';
 import { 
   Handle, 
   Position, 
@@ -29,6 +29,7 @@ import { flowNodeColors, flowNodeLightColors } from '@/frontend/utils/flowPalett
 import { buildNodeInformation } from './nodeInformation';
 import { FlowNamesContext } from './flowNamesContext';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useTimeout } from '@/frontend/hooks/timing';
 import { HUMAN_ROUTE_HANDLES } from '@/utils/shared/humanStep';
 
 // Resource, signal, and trigger nodes use shared semantic tokens because the
@@ -259,48 +260,32 @@ const CustomNode = ({ id, data, nodeType, selected }: CustomNodeProps & { select
   const { t, tp, formatList } = useI18n();
   const flowNames = useContext(FlowNamesContext);
   const [hoverReady, setHoverReady] = useState(false);
-  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [hovering, setHovering] = useState(false);
   const information = buildNodeInformation(data, nodeType, { t, tp, formatList }, flowNames);
-
-  useEffect(() => () => {
-    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
-    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
-  }, []);
 
   // Selection opens the inspector and pins the add-and-connect controls. This
   // keeps the common "select, then continue building" gesture to one click.
-  useEffect(() => {
-    if (!selected) return;
-    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
-    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
-    hoverTimerRef.current = null;
-    hideTimerRef.current = null;
-    setHoverReady(false);
-  }, [selected]);
+  const [wasSelected, setWasSelected] = useState(selected);
+  if (selected !== wasSelected) {
+    setWasSelected(selected);
+    if (selected) {
+      setHoverReady(false);
+      setHovering(false);
+    }
+  }
+
+  // Hovering an unselected step reveals the controls after a short pause and
+  // hides them shortly after the pointer leaves, so passing over does not flash them.
+  useTimeout(() => setHoverReady(true), hovering && !hoverReady ? 450 : null);
+  useTimeout(() => setHoverReady(false), !hovering && hoverReady ? 180 : null);
 
   const quickConnectVisible = !!selected || hoverReady;
 
   const startHoverReveal = () => {
-    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
-    hideTimerRef.current = null;
-    if (selected || hoverReady || hoverTimerRef.current) return;
-    hoverTimerRef.current = setTimeout(() => {
-      setHoverReady(true);
-      hoverTimerRef.current = null;
-    }, 450);
+    if (!selected) setHovering(true);
   };
 
-  const stopHoverReveal = () => {
-    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
-    hoverTimerRef.current = null;
-    if (selected) return;
-    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
-    hideTimerRef.current = setTimeout(() => {
-      setHoverReady(false);
-      hideTimerRef.current = null;
-    }, 180);
-  };
+  const stopHoverReveal = () => setHovering(false);
 
   const requestQuickConnect = (
     event: React.MouseEvent<HTMLButtonElement>,

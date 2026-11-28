@@ -21,7 +21,6 @@ import { bundledMcpEntry } from '../helpers/bundledMcpEntry';
 jest.mock('@/backend/services/security/windowsPrivateAuthority', () => {
   const actual = jest.requireActual('@/backend/services/security/windowsPrivateAuthority');
   return process.platform === 'win32' ? { ...actual,
-    windowsPrivateAuthorityStamp: jest.fn(() => 'synthetic-private-stamp'),
     windowsPrivateAuthorityStampAsync: jest.fn(async () => 'synthetic-private-stamp') } : actual;
 });
 

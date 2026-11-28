@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -72,6 +72,7 @@ import UrlWatchPanel from './UrlWatchPanel';
 import FlowEventPanel from './FlowEventPanel';
 import FlowSelector from '@/frontend/components/Chat/FlowSelector';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useDebouncedCallback } from '@/frontend/hooks/timing';
 
 const log = createLogger('frontend/components/PlannedExecutions/ExecutionModal');
 
@@ -170,6 +171,11 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
   // Dialog mounts its portal after the first render. Track the actual element
   // so observer setup also runs when that delayed content becomes available.
   const [scrollContainer, setScrollContainer] = useState<HTMLDivElement | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const attachScrollContainer = useCallback((element: HTMLDivElement | null) => {
+    scrollContainerRef.current = element;
+    setScrollContainer(element);
+  }, []);
   const whenRef = useRef<HTMLDivElement>(null);
   const whatRef = useRef<HTMLDivElement>(null);
   const restrictionsRef = useRef<HTMLDivElement>(null);
@@ -178,37 +184,50 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
   const programmaticScroll = useRef(false);
   const restrictionCardRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
-  // Reset the form from the execution being edited (or to defaults) on open.
+  // Reset the form from the execution being edited (or to defaults) on open,
+  // and show the pickers as loading until their lists arrive.
+  const [formFor, setFormFor] = useState<{ open: boolean; execution: PlannedExecution | null } | null>(null);
+  if (!formFor || formFor.open !== open || formFor.execution !== execution) {
+    const opening = open && !formFor?.open;
+    setFormFor({ open, execution });
+    if (open) {
+      setSaveError(null);
+      setName(execution?.name ?? '');
+      setTargetKind(execution?.personaId ? 'persona' : 'flow');
+      setFlowId(execution?.flowId ?? '');
+      setPersonaId(execution?.personaId ?? '');
+      setBehaviorSlotKey(execution?.behaviorSlotKey ?? '');
+      setPrompt(execution?.prompt ?? '');
+      setSaveConversations(execution?.saveConversations === true);
+      setOverlapStrategy(execution?.overlapStrategy ?? 'skip');
+      const restrictions = normalizeStartRestrictions(execution ?? {});
+      setStartRestriction(restrictions.startRestriction);
+      setSuperExclusive(restrictions.superExclusive);
+      setEmergency(restrictions.emergency);
+      setNonExclusiveBehavior(execution?.nonExclusiveBehavior ?? 'queue');
+      setTrigger(withoutLegacyAiGate(execution?.trigger ?? DEFAULT_SCHEDULE));
+      setAiGate(execution ? automationAiGate(execution) : null);
+      setDraftId(execution ? '' : crypto.randomUUID());
+      setPersonaComposition(null);
+      setPersonaCompositionError(false);
+      setActiveSection('when');
+    }
+    if (opening) {
+      setLoadingFlows(true);
+      setLoadingPersonas(true);
+      setPersonasError(false);
+    }
+  }
+
   useEffect(() => {
     if (!open) return;
-    setSaveError(null);
-    setName(execution?.name ?? '');
-    setTargetKind(execution?.personaId ? 'persona' : 'flow');
-    setFlowId(execution?.flowId ?? '');
-    setPersonaId(execution?.personaId ?? '');
-    setBehaviorSlotKey(execution?.behaviorSlotKey ?? '');
-    setPrompt(execution?.prompt ?? '');
-    setSaveConversations(execution?.saveConversations === true);
-    setOverlapStrategy(execution?.overlapStrategy ?? 'skip');
-    const restrictions = normalizeStartRestrictions(execution ?? {});
-    setStartRestriction(restrictions.startRestriction);
-    setSuperExclusive(restrictions.superExclusive);
-    setEmergency(restrictions.emergency);
-    setNonExclusiveBehavior(execution?.nonExclusiveBehavior ?? 'queue');
-    setTrigger(withoutLegacyAiGate(execution?.trigger ?? DEFAULT_SCHEDULE));
-    setAiGate(execution ? automationAiGate(execution) : null);
-    setDraftId(execution ? '' : crypto.randomUUID());
-    setPersonaComposition(null);
-    setPersonaCompositionError(false);
-    setActiveSection('when');
-    if (scrollContainer) scrollContainer.scrollTop = 0;
+    if (scrollContainerRef.current) scrollContainerRef.current.scrollTop = 0;
   }, [open, execution]);
 
   // Load the available flows to choose from when the modal opens.
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    setLoadingFlows(true);
     flowService.loadFlows()
       .then((loaded) => {
         if (!cancelled) setFlows(loaded || []);
@@ -228,8 +247,6 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    setLoadingPersonas(true);
-    setPersonasError(false);
     personasService.list()
       .then((loaded) => {
         if (!cancelled) setPersonas(loaded || []);
@@ -247,18 +264,19 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
     return () => { cancelled = true; };
   }, [open]);
 
-  useEffect(() => {
-    if (!open || targetKind !== 'persona' || !personaId) {
-      setPersonaComposition(null);
-      setPersonaCompositionError(false);
-      setLoadingPersonaComposition(false);
-      return;
-    }
-    let cancelled = false;
+  const compositionPersonaId = open && targetKind === 'persona' && personaId ? personaId : null;
+  const [compositionFor, setCompositionFor] = useState<string | null>(null);
+  if (compositionPersonaId !== compositionFor) {
+    setCompositionFor(compositionPersonaId);
     setPersonaComposition(null);
     setPersonaCompositionError(false);
-    setLoadingPersonaComposition(true);
-    personasService.getComposition(personaId)
+    setLoadingPersonaComposition(compositionPersonaId !== null);
+  }
+
+  useEffect(() => {
+    if (!compositionPersonaId) return;
+    let cancelled = false;
+    personasService.getComposition(compositionPersonaId)
       .then((loaded) => {
         if (!cancelled) setPersonaComposition(loaded);
       })
@@ -270,18 +288,17 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
         if (!cancelled) setLoadingPersonaComposition(false);
       });
     return () => { cancelled = true; };
-  }, [open, targetKind, personaId]);
+  }, [compositionPersonaId]);
 
   // flowId remains required persisted provenance, but Persona users choose a
   // person and a friendly skill. The matching Flow reference is derived here.
-  useEffect(() => {
-    if (targetKind !== 'persona' || !personaComposition) return;
+  if (targetKind === 'persona' && personaComposition) {
     const effectiveFlowRef = behaviorSlotKey
       ? personaComposition.behaviorCards.find((card) => card.slotKey === behaviorSlotKey)
           ?.effectiveFlowRef
       : personaComposition.core?.effectiveFlowRef ?? personaComposition.coreFlowRef;
-    setFlowId(effectiveFlowRef ?? '');
-  }, [targetKind, personaComposition, behaviorSlotKey]);
+    if (flowId !== (effectiveFlowRef ?? '')) setFlowId(effectiveFlowRef ?? '');
+  }
 
   const selectedMissing = targetKind === 'flow'
     && !!flowId
@@ -338,6 +355,15 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
     return () => observer.disconnect();
   }, [open, execution, scrollContainer]);
 
+  // A smooth scroll settles within this time; the observer follows the user again after it.
+  const releaseAfterSmoothScroll = useDebouncedCallback(() => {
+    programmaticScroll.current = false;
+  }, 500);
+  // Focus waits for the section that holds the control to be drawn.
+  const focusAfterRender = useDebouncedCallback((target: () => HTMLElement | null | undefined) => {
+    target()?.focus();
+  }, 0);
+
   const handleSectionClick = (section: ExecutionSection) => {
     setActiveSection(section);
     programmaticScroll.current = true;
@@ -345,9 +371,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
     if (target && typeof target.scrollIntoView === 'function') {
       target.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
-    window.setTimeout(() => {
-      programmaticScroll.current = false;
-    }, 500);
+    releaseAfterSmoothScroll();
   };
 
   const selectStartRestriction = (restriction: StartRestriction) => {
@@ -398,7 +422,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
 
     if (!section || !focusTarget) return false;
     handleSectionClick(section);
-    window.setTimeout(() => focusTarget?.()?.focus(), 0);
+    focusAfterRender(focusTarget);
     return true;
   };
 
@@ -409,9 +433,9 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
     if (conditionError) {
       setSaveError(conditionError);
       handleSectionClick('when');
-      window.setTimeout(() => {
-        scrollContainer?.querySelector<HTMLElement>('#automation-ai-condition textarea, #automation-ai-condition input')?.focus();
-      }, 0);
+      focusAfterRender(() => scrollContainerRef.current?.querySelector<HTMLElement>(
+        '#automation-ai-condition textarea, #automation-ai-condition input',
+      ));
       return;
     }
     setSaving(true);
@@ -510,7 +534,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
           </Tabs>
         </Box>
         <Box
-          ref={setScrollContainer}
+          ref={attachScrollContainer}
           data-testid="execution-modal-scroll-container"
           sx={{
             flexGrow: 1,

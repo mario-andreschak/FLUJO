@@ -18,7 +18,6 @@ export interface CanvasProps {
   onDrop?: (event: React.DragEvent<HTMLDivElement>) => void;
   onDragOver?: (event: React.DragEvent<HTMLDivElement>) => void;
   onInit?: (reactFlowInstance: ReactFlowInstance<FlowNode, Edge>) => void;
-  reactFlowWrapper?: React.RefObject<HTMLDivElement | null>;
   onEditNode?: (node: FlowNode) => void;
   /**
    * Centralized node factory owned by FlowBuilder. Returning null rejects the

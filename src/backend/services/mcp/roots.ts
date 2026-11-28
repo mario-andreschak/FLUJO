@@ -307,7 +307,7 @@ export function createRootsListHandler(config: MCPServerConfig,
     const current = await freshestConfig(config);
     if (!current || current.disabled || current.isolation !== undefined) {
       if (getManagedTrustedHost(owner?.transport)) {
-        getManagedTrustedHost(owner?.transport)!.retire();
+        await getManagedTrustedHost(owner?.transport)!.retire();
         try { await owner?.close(); } catch { /* retain lifecycle cleanup uncertainty */ }
       }
       return { roots: [] };
@@ -328,7 +328,7 @@ export function createRootsListHandler(config: MCPServerConfig,
         }
         return { roots };
       } catch {
-        getManagedTrustedHost(owner?.transport)?.retire();
+        await getManagedTrustedHost(owner?.transport)?.retire();
         try { await owner?.close(); } catch { /* retain lifecycle cleanup uncertainty */ }
         return { roots: [] };
       }

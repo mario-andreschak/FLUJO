@@ -26,6 +26,7 @@ import WavesRoundedIcon from '@mui/icons-material/WavesRounded';
 import type { AutomationMapResponse } from '@/shared/types/waves/automationMap';
 import { automationMapService } from '@/frontend/services/automationMap';
 import { useWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
+import { useTimeout } from '@/frontend/hooks/timing';
 import PageHeader from '@/frontend/components/shared/PageHeader';
 import { createLogger } from '@/utils/logger';
 import { useI18n } from '@/frontend/contexts/I18nContext';
@@ -77,7 +78,8 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const loadRequest = useRef(0);
-  const activeLoad = useRef<{ controller: AbortController; timeout: number } | null>(null);
+  const activeLoad = useRef<AbortController | null>(null);
+  const [finishedLoads, setFinishedLoads] = useState(0);
   const [view, setView] = useWorkspaceUiPreference<WavesView>(VIEW_PREF_KEY, 'day');
   const [mode, setMode] = useWorkspaceUiPreference<PlaygroundMode>(MODE_PREF_KEY, 'simple');
   const [activeWaveId, setActiveWaveId] = useWorkspaceUiPreference<string | null>(ACTIVE_WAVE_PREF_KEY, null);
@@ -86,58 +88,57 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
   // Inspecting an item switches views and remounts DayView on return.
   const [selectedDate, setSelectedDate] = useState(() => new Date());
 
-  const refresh = useCallback(async () => {
+  // Starts a load unless one is running; the caller shows it as loading.
+  const loadMap = useCallback(() => {
     // Slow requests get time to finish instead of being superseded every poll.
     if (activeLoad.current) return;
     const request = ++loadRequest.current;
     const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), LOAD_TIMEOUT_MS);
-    activeLoad.current = { controller, timeout };
-    setLoading(true);
-    try {
-      const response = await automationMapService.load(controller.signal);
-      if (request !== loadRequest.current) return;
-      setData(response);
-      setLoadError(false);
-    } catch (error) {
-      if (request !== loadRequest.current) return;
-      log.warn('Automation map load failed', error);
-      setLoadError(true);
-    } finally {
-      window.clearTimeout(timeout);
-      if (request === loadRequest.current) {
-        activeLoad.current = null;
-        setLoading(false);
-      }
-    }
+    activeLoad.current = controller;
+    void automationMapService.load(AbortSignal.any([controller.signal, AbortSignal.timeout(LOAD_TIMEOUT_MS)]))
+      .then((response) => {
+        if (request !== loadRequest.current) return;
+        setData(response);
+        setLoadError(false);
+      }, (error) => {
+        if (request !== loadRequest.current) return;
+        log.warn('Automation map load failed', error);
+        setLoadError(true);
+      })
+      .finally(() => {
+        if (request === loadRequest.current) {
+          activeLoad.current = null;
+          setLoading(false);
+          setFinishedLoads((count) => count + 1);
+        }
+      });
   }, []);
 
-  const retryLoad = useCallback(() => {
-    void refresh();
-  }, [refresh]);
+  const refresh = useCallback(() => {
+    if (activeLoad.current) return;
+    setLoading(true);
+    loadMap();
+  }, [loadMap]);
 
+
+  // Entering a view with a map loads it at once.
+  const [loadingView, setLoadingView] = useState(view);
+  if (view !== loadingView) {
+    setLoadingView(view);
+    if (view !== 'factory') setLoading(true);
+  }
   useEffect(() => {
     if (view === 'factory') return;
-    let cancelled = false;
-    let timer: number | undefined;
-    const poll = async () => {
-      await refresh();
-      // Wait after completion, including timeouts, so recovery stays usable.
-      if (!cancelled) timer = window.setTimeout(() => { void poll(); }, POLL_INTERVAL_MS);
-    };
-    void poll();
+    loadMap();
     return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
       // A previous poll or departed view cannot replace this view's details.
       loadRequest.current++;
-      if (activeLoad.current) {
-        window.clearTimeout(activeLoad.current.timeout);
-        activeLoad.current.controller.abort();
-        activeLoad.current = null;
-      }
+      activeLoad.current?.abort();
+      activeLoad.current = null;
     };
-  }, [refresh, view]);
+  }, [loadMap, view]);
+  // Poll again only once the last load has finished, including timeouts, so recovery stays usable.
+  useTimeout(refresh, view !== 'factory' && !loading ? POLL_INTERVAL_MS : null, finishedLoads);
 
   useEffect(() => {
     if (!data || !activeWaveId) return;
@@ -200,7 +201,7 @@ export default function WavesManager({ height = '100%' }: WavesManagerProps) {
   );
 
   const retryAction = (
-    <Button color="inherit" onClick={retryLoad} disabled={loading} sx={{ minHeight: 44, width: { xs: '100%', sm: 'auto' } }}>
+    <Button color="inherit" onClick={refresh} disabled={loading} sx={{ minHeight: 44, width: { xs: '100%', sm: 'auto' } }}>
       {t('common.tryAgain')}
     </Button>
   );

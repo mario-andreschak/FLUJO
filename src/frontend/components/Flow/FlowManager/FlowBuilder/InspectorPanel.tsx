@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Box,
   Button,
@@ -168,16 +168,21 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   const [improvingPrompt, setImprovingPrompt] = useState(false);
   const [promptImprovementError, setPromptImprovementError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (selectedNode) setTab('node');
-    else setTab('flow');
-  }, [selectedNode?.id]);
+  const selectedNodeId = selectedNode?.id;
+  const selectedNodeData = selectedNode?.data;
+  const [tabFor, setTabFor] = useState(selectedNodeId);
+  if (selectedNodeId !== tabFor) {
+    setTabFor(selectedNodeId);
+    setTab(selectedNode ? 'node' : 'flow');
+  }
 
-  useEffect(() => {
-    setLabel(selectedNode?.data.label ?? '');
-    setPromptTemplate(String(selectedNode?.data.properties?.promptTemplate ?? ''));
+  const [draftFor, setDraftFor] = useState({ id: selectedNodeId, data: selectedNodeData });
+  if (draftFor.id !== selectedNodeId || draftFor.data !== selectedNodeData) {
+    setDraftFor({ id: selectedNodeId, data: selectedNodeData });
+    setLabel(selectedNodeData?.label ?? '');
+    setPromptTemplate(String(selectedNodeData?.properties?.promptTemplate ?? ''));
     setPromptImprovementError(null);
-  }, [selectedNode?.id, selectedNode?.data]);
+  }
 
   const nodeSummary = useMemo(() => {
     if (!selectedNode) return [];

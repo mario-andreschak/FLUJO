@@ -29,9 +29,13 @@ export default function PersonaSetup({
       : detail.persona.composition.coreBinding.personaFlowRef)
     : detail.persona.composition?.coreFlowRef;
   const [coreFlow, setCoreFlow] = useState<Flow | null>(null);
+  const [coreFlowFor, setCoreFlowFor] = useState({ ref: coreFlowRef, personaId: detail.persona.id });
+  if (coreFlowFor.ref !== coreFlowRef || coreFlowFor.personaId !== detail.persona.id) {
+    setCoreFlowFor({ ref: coreFlowRef, personaId: detail.persona.id });
+    setCoreFlow(null);
+  }
   useEffect(() => {
     let cancelled = false;
-    setCoreFlow(null);
     if (coreFlowRef) {
       void flowService.getFlow(coreFlowRef).then((flow) => {
         if (!cancelled) setCoreFlow(flow ?? null);

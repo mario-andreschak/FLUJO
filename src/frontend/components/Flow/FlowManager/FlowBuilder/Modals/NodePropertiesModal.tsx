@@ -81,14 +81,17 @@ export const NodePropertiesModal = ({ open, node, onClose, onSave }: NodePropert
   // Tab state for the modal sections
   const [activeTab, setActiveTab] = useState(0);
 
-  React.useEffect(() => {
+  const seedDeps = [node, open];
+  const [seededFor, setSeededFor] = useState<readonly unknown[] | null>(null);
+  if (!seededFor || seedDeps.some((dep, index) => dep !== seededFor[index])) {
+    setSeededFor(seedDeps);
     if (node) {
       setNodeData({
         ...node.data,
         properties: { ...node.data.properties }
       });
     }
-  }, [node, open]);
+  }
 
   const handlePropertyChange = (key: string, value: unknown) => {
     setNodeData((prev) => {
