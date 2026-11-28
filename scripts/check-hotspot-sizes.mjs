@@ -2,15 +2,16 @@
 // runFlow.ts, ModelHandler.ts and the MCP service index.ts grew with every
 // feature (#571). Each has a line ceiling in scripts/execution-hotspots.json,
 // and the ceiling only goes down. This check fails when a file grows past its
-// ceiling, when a file shrank but its ceiling was not lowered, and when a
-// branch raises a ceiling.
+// ceiling, when a file shrank but its ceiling was not lowered, when a branch
+// raises a ceiling, and when a module split out of one of them is not named in
+// the architecture guide.
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const CONTRACT_FILE = 'scripts/execution-hotspots.json';
-const GUIDE = 'docs/architecture/execution-module-boundaries.md';
+export const GUIDE = 'docs/architecture/execution-module-boundaries.md';
 
 /** Counts lines the way `wc -l` does for a file that ends with a newline. */
 export function countLines(text) {
@@ -41,6 +42,17 @@ export function findRaisedCeilings(base, current) {
   return raised;
 }
 
+/** Lists split modules the guide does not name, by file name in backticks. */
+export function findUndocumentedModules(hotspots, guideText) {
+  const missing = [];
+  for (const { modules = [] } of hotspots) {
+    for (const split of modules) {
+      if (!guideText.includes(`\`${path.posix.basename(split)}\``)) missing.push(split);
+    }
+  }
+  return missing;
+}
+
 /** Lowers every stale ceiling to the file's current length. Never raises one. */
 export function lowerCeilings(contract, linesOf) {
   return {
@@ -52,7 +64,7 @@ export function lowerCeilings(contract, linesOf) {
   };
 }
 
-export function describeProblems(problems, raised) {
+export function describeProblems(problems, raised, undocumented = []) {
   const out = [];
   const grew = problems.filter((problem) => problem.kind === 'grew');
   const stale = problems.filter((problem) => problem.kind === 'stale');
@@ -72,7 +84,22 @@ export function describeProblems(problems, raised) {
     for (const { file, before, after } of raised) out.push(`  ${file}  ${before} -> ${after ?? 'removed'}`);
     out.push('Keep the ceiling and move code out of the file instead.');
   }
+  if (undocumented.length) {
+    out.push(`These split modules are not named in ${GUIDE}:`);
+    for (const file of undocumented) out.push(`  ${file}`);
+    out.push('Add each one to the module map there: what it owns and the contract it keeps.');
+  }
   return out.join('\n');
+}
+
+/** The guide's text, or nothing when no module is listed. A missing guide names no module. */
+function readGuide(cwd, contract) {
+  if (!contract.hotspots.some(({ modules = [] }) => modules.length)) return '';
+  try {
+    return readFileSync(path.join(cwd, GUIDE), 'utf8');
+  } catch {
+    return '';
+  }
 }
 
 function git(args, cwd) {
@@ -113,11 +140,12 @@ export function run({ cwd = process.cwd(), env = process.env, argv = process.arg
   }
 
   const problems = findSizeProblems(contract.hotspots, linesOf);
-  if (problems.length || raised.length) {
-    error(describeProblems(problems, raised));
+  const undocumented = findUndocumentedModules(contract.hotspots, readGuide(cwd, contract));
+  if (problems.length || raised.length || undocumented.length) {
+    error(describeProblems(problems, raised, undocumented));
     return 1;
   }
-  log(`Hotspot sizes hold (${baseNote}): ${contract.hotspots.map(({ file, maxLines }) => `${path.basename(file)} ${maxLines}`).join(', ')}.`);
+  log(`Hotspot sizes hold (${baseNote}): ${contract.hotspots.map(({ file, maxLines }) => `${path.basename(file)} ${maxLines}`).join(', ')}; every split module is in the guide.`);
   return 0;
 }
 

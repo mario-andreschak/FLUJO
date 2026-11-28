@@ -4,7 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import {
-  CONTRACT_FILE, countLines, describeProblems, findRaisedCeilings, findSizeProblems, lowerCeilings, run,
+  CONTRACT_FILE, GUIDE, countLines, describeProblems, findRaisedCeilings, findSizeProblems, findUndocumentedModules,
+  lowerCeilings, run,
 } from './check-hotspot-sizes.mjs';
 
 const hotspots = [{ file: 'src/a.ts', maxLines: 10 }, { file: 'src/b.ts', maxLines: 5 }];
@@ -65,6 +66,35 @@ test('run checks a checkout, and --write lowers the ceiling', () => {
     writeFileSync(path.join(cwd, 'src', 'a.ts'), 'one\ntwo\nthree\n');
     assert.equal(run({ cwd, env, argv: ['--write'], log: () => {}, error: () => {} }), 1);
     assert.equal(JSON.parse(readFileSync(contract, 'utf8')).hotspots[0].maxLines, 2);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('every split module must be named in the architecture guide', () => {
+  const listed = [{ file: 'src/big.ts', maxLines: 9, modules: ['src/split/one.ts', 'src/split/two.ts'] }];
+  assert.deepEqual(findUndocumentedModules(listed, '| `one.ts` | Owns one thing |'), ['src/split/two.ts']);
+  assert.deepEqual(findUndocumentedModules(listed, 'one.ts and two.ts without backticks'), ['src/split/one.ts', 'src/split/two.ts']);
+  assert.deepEqual(findUndocumentedModules([{ file: 'src/big.ts', maxLines: 9 }], ''), []);
+  const text = describeProblems([], [], ['src/split/two.ts']);
+  assert.match(text, /src\/split\/two\.ts/);
+  assert.match(text, /Add each one to the module map/);
+});
+
+test('run fails until a listed module is named in the guide', () => {
+  const cwd = mkdtempSync(path.join(os.tmpdir(), 'flujo-hotspots-'));
+  try {
+    mkdirSync(path.join(cwd, 'scripts'));
+    mkdirSync(path.join(cwd, 'src'));
+    mkdirSync(path.join(cwd, path.dirname(GUIDE)), { recursive: true });
+    writeFileSync(path.join(cwd, 'src', 'a.ts'), 'one\n');
+    writeFileSync(path.join(cwd, CONTRACT_FILE), JSON.stringify({ hotspots: [{ file: 'src/a.ts', maxLines: 1, modules: ['src/aPart.ts'] }] }));
+    const env = { HOTSPOT_BASE: 'no-such-commit' };
+    const errors = [];
+    assert.equal(run({ cwd, env, argv: [], log: () => {}, error: (line) => errors.push(line) }), 1);
+    assert.match(errors.join('\n'), /src\/aPart\.ts/);
+    writeFileSync(path.join(cwd, GUIDE), '| `aPart.ts` | Owns part of a |\n');
+    assert.equal(run({ cwd, env, argv: [], log: () => {}, error: () => {} }), 0);
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
