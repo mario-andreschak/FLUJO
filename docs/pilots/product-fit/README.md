@@ -2,9 +2,9 @@
 
 This packet supports [#577](https://github.com/mario-andreschak/FLUJO/issues/577) and supplies journey requirements for [#572](https://github.com/mario-andreschak/FLUJO/issues/572). FLUJO's intended value is a local MCP hub whose connections can be inspected, used in visual agents, debugged, approved, and reused by other clients. Measure whether people actually return to those workflows and benefit from that control.
 
-**Running the pilot?** Start with the plain-language [pilot kit](start-here.md): who to invite, the invitation, a consent note, the tester guide, a weekly form and two tracking sheets. The rest of this page describes the strict record for the independent reviewer.
+**Running the pilot?** It runs by itself: `npm run pilot:scripted` plays three scripted first-time users through every day-one task of the tester guide on fresh FLUJO instances and fails when any task fails; the broad CI run (`verify-full`) runs it on Linux and Windows. See [start here](start-here.md). The plain-language kit for inviting real people (invitation, consent note, weekly form, tracking sheets) is there too. The rest of this page describes the strict record for an independent reviewer of a pilot with real people.
 
-**Status: preparation only.** No participants, consent, candidate installed-artifact acceptance, eight elapsed weeks, or independent scorecard reassessment are supplied by this change. Numeric targets remain proposed until the maintainer and independent reviewer agree them under [#564](https://github.com/mario-andreschak/FLUJO/issues/564). Fixture/test success validates the collection tool, not product fit or real usage.
+**Status of a pilot with real people: preparation only.** No participants, consent, candidate installed-artifact acceptance, eight elapsed weeks, or independent scorecard reassessment are supplied by this change. Numeric targets remain proposed until the maintainer and independent reviewer agree them under [#564](https://github.com/mario-andreschak/FLUJO/issues/564). Fixture/test success validates the collection tool, not product fit or real usage.
 
 ## Use the packet
 

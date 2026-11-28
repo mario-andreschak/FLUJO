@@ -1368,7 +1368,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
                 visual picker and choose a node from the pre-rendered flow. */}
             {(onSelectNode || isEditing) && availableNodes.length > 0 && (
               <>
-                <Tooltip title={isEditing
+                <Tooltip disableInteractive title={isEditing
                   ? t('chat.input.nodeEditing')
                   : (nodeOverrideActive
                     ? t('chat.input.nodeOverride')
@@ -1412,7 +1412,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
                 composer is disabled while a run is in flight or paused, which
                 is exactly when opening the debugger is most useful. */}
             {onToggleDebugger && (
-              <Tooltip title={debuggerOpen ? t('chat.input.debuggerClose') : t('chat.input.debuggerOpen')}>
+              <Tooltip disableInteractive title={debuggerOpen ? t('chat.input.debuggerClose') : t('chat.input.debuggerOpen')}>
                 <Chip
                   icon={<BugReportIcon />}
                   label={t('chat.input.debugger')}

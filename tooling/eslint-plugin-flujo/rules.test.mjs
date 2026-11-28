@@ -224,3 +224,31 @@ tester.run('mcp-feature-defaults', rules['mcp-feature-defaults'], {
     { code: 'const on = config.elicitation?.enabled === true;', errors: [{ messageId: 'compare', data: { name: 'elicitation.enabled' } }] },
   ],
 });
+
+tester.run('route-request-required', rules['route-request-required'], {
+  valid: [
+    'export async function GET(request: Request) { return request; }',
+    'export async function GET() { return null; }',
+    'export const POST = async (request: Request) => request;',
+    'async function helper(request?: Request) { return request; }',
+    'export function format(value?: string) { return value; }',
+    [
+      'export function GET(): Response;',
+      'export function GET(request: Request): Response;',
+      "export function GET(request: Request = new Request('http://x/')) { return new Response(request.url); }",
+    ].join('\n'),
+  ],
+  invalid: [
+    { code: 'export async function GET(request?: Request) { return request; }', errors: [{ messageId: 'optionalRequest', data: { name: 'GET' } }] },
+    { code: 'export async function PATCH(request: Request = new Request("http://x")) { return request; }', errors: [{ messageId: 'optionalRequest' }] },
+    { code: 'export const DELETE = async (request?: Request) => request;', errors: [{ messageId: 'optionalRequest', data: { name: 'DELETE' } }] },
+    {
+      code: [
+        'export function GET(request: Request): Response;',
+        'export function GET(request?: Request): Response;',
+        'export function GET(request?: Request) { return new Response(String(request)); }',
+      ].join('\n'),
+      errors: [{ messageId: 'optionalRequest' }],
+    },
+  ],
+});

@@ -1,12 +1,57 @@
 # Run the pilot: start here
 
-This page is for the person who runs the pilot (the pilot owner). It is the short
-path through the kit for [#577](https://github.com/mario-andreschak/FLUJO/issues/577).
-The goal: find out whether people other than the author use FLUJO again and again
-for real work, and where they get stuck.
+The pilot for [#577](https://github.com/mario-andreschak/FLUJO/issues/577) asks
+one question: can a first-time user get through FLUJO's day-one tasks without
+getting stuck? It runs by itself; nobody has to invite, watch or ask anyone.
 
-Nothing in this folder contacts anyone, sends data or starts a pilot by itself.
-The pilot starts when the owner sends the first invitation.
+## The scripted pilot
+
+```sh
+npm run build
+npm run pilot:scripted
+```
+
+Three scripted first-time users (a desktop, a laptop and a phone-sized window)
+each get a fresh FLUJO with an empty data folder and work through every day-one
+task of the [tester guide](tester-guide.md), the way the guide tells a person to:
+
+1. connect an AI and test it;
+2. let the built-in filesystem app read only a practice folder and test its
+   `read_file` tool on the practice note;
+3. build an agent with **Agents → Start simple** and ask it for the note's
+   receipt phrase;
+4. turn on **Require tool approvals**, approve once and reject once;
+5. turn on the **Debugger**, step through the run and continue to the end;
+6. expose the app to external apps and read the note from another MCP program;
+7. create the diagnostic report under **Settings → Privacy & usage**.
+
+The AI is a free local stand-in (`scripts/scripted-pilot/pilot-model.mjs`): it
+lists the allowed folders, reads the note and quotes what the tool returned, so
+no account or key is needed. Everything else is the real FLUJO. FLUJO's anonymous
+daily usage pulse goes to a local stand-in too, so pilot runs never count as real
+installations, and the pilot checks that it holds only the five fields its notice
+names.
+
+Every task has a fixed rule. It passes only when its result shows on screen
+within its time limit and no red error message appears. Tasks 1 to 3 together
+(the first run) must take less than 15 minutes. The diagnostic report must be
+complete, count what the tester just did, and contain none of the tester's
+names, paths, addresses or the practice phrase.
+
+The run writes `result.md` (a short result in plain language), `result.json`,
+each tester's diagnostic report, and a screenshot and page snapshot of every
+task. It exits with 1 when any task fails. Options: `--only p02-laptop` for one
+tester, `--out <folder>` for the result folder, `--mode dev` without a build.
+
+The broad CI run (`verify-full`) runs it on Linux and Windows and keeps the
+result folder as a download; `scripts/workflow-contract.mjs` fails when that
+job is missing or made optional.
+
+## Inviting real people too
+
+The rest of this page and the rest of the kit are for anyone who also wants to
+invite real testers later. Nothing in this folder contacts anyone, sends data or
+starts that by itself.
 
 ## What is in the kit
 
@@ -29,35 +74,35 @@ pilot week by week.
 
 ### 1. Recruit (week 0)
 
-- [ ] Choose a contact address for the pilot (for example a separate mailbox or a
-      Discord channel only you can read).
-- [ ] Fill in the blanks in the [invitation](invite.md): name, start date, the
-      FLUJO version to install and your contact.
-- [ ] Pick 12 to 15 people from the [target groups](invite.md#who-to-invite), so
-      that about 10 are still there after eight weeks.
-- [ ] Give each person a tester number (`p001`, `p002`, …). Keep the list that
-      connects names to numbers in a private place, never in this repository.
+- Choose a contact address for the pilot (for example a separate mailbox or a
+  Discord channel only you can read).
+- Fill in the blanks in the [invitation](invite.md): name, start date, the
+  FLUJO version to install and your contact.
+- Pick 12 to 15 people from the [target groups](invite.md#who-to-invite), so
+  that about 10 are still there after eight weeks.
+- Give each person a tester number (`p001`, `p002`, …). Keep the list that
+  connects names to numbers in a private place, never in this repository.
 
 ### 2. Send (week 0)
 
-- [ ] Send each person the invitation, the [consent note](consent-note.md) and
-      the [tester guide](tester-guide.md).
-- [ ] Wait for a clear "yes, I agree" to the consent note before you count
-      anyone. Write down the date of each yes in your private list.
-- [ ] Pick one start date for everyone. Week 1 is the first seven days after it.
+- Send each person the invitation, the [consent note](consent-note.md) and
+  the [tester guide](tester-guide.md).
+- Wait for a clear "yes, I agree" to the consent note before you count
+  anyone. Write down the date of each yes in your private list.
+- Pick one start date for everyone. Week 1 is the first seven days after it.
 
 ### 3. Collect (weeks 1 to 8)
 
-- [ ] Each tester sends the [weekly form](feedback-form.md) at the end of each
-      week. A short reminder message is in the [invitation page](invite.md#weekly-reminder).
-- [ ] Copy each answer into one row of the [tracking sheet](tracking-sheet.csv).
-      If a tester sends nothing, still add the row with `report_received` set to
-      `no`. A missing week is a result, not a gap to hide.
-- [ ] After a tester's first run, fill in one row of the
-      [first-run sheet](first-run-sheet.csv).
-- [ ] When a tester reports a problem, open a GitHub issue in your own words.
-      Leave out names, prompts, file names, keys and anything from their
-      computer. Put the issue number into the sheet.
+- Each tester sends the [weekly form](feedback-form.md) at the end of each
+  week. A short reminder message is in the [invitation page](invite.md#weekly-reminder).
+- Copy each answer into one row of the [tracking sheet](tracking-sheet.csv).
+  If a tester sends nothing, still add the row with `report_received` set to
+  `no`. A missing week is a result, not a gap to hide.
+- After a tester's first run, fill in one row of the
+  [first-run sheet](first-run-sheet.csv).
+- When a tester reports a problem, open a GitHub issue in your own words.
+  Leave out names, prompts, file names, keys and anything from their
+  computer. Put the issue number into the sheet.
 
 ### 4. Review (every week, and once at the end)
 

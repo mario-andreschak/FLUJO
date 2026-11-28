@@ -9,6 +9,7 @@ import noNodeVm from './rules/no-node-vm.mjs';
 import noRawTimers from './rules/no-raw-timers.mjs';
 import noSyncFs from './rules/no-sync-fs.mjs';
 import noWorkaroundComment from './rules/no-workaround-comment.mjs';
+import routeRequestRequired from './rules/route-request-required.mjs';
 import singleToolApprovalGate from './rules/single-tool-approval-gate.mjs';
 
 export default {
@@ -23,6 +24,7 @@ export default {
     'no-raw-timers': noRawTimers,
     'no-sync-fs': noSyncFs,
     'no-workaround-comment': noWorkaroundComment,
+    'route-request-required': routeRequestRequired,
     'single-tool-approval-gate': singleToolApprovalGate,
   },
 };

@@ -68,7 +68,7 @@ function sources(): DiagnosticSources {
       from: '2026-11-19',
       to: '2026-11-25',
       summary: {
-        runs: 12, successes: 9, errors: 2, cancelled: 1, runsIncomplete: 0,
+        runs: 15, successes: 9, errors: 2, cancelled: 1, paused: 2, capped: 1, runsIncomplete: 0,
         toolCalls: 20, toolFailures: 3, providerAttempts: 15, providerErrors: 2,
         errorClasses: { rate_limit: 2, 'Read my medical record sk-live-SECRET-KEY-123': 4 },
       },
@@ -96,7 +96,7 @@ describe('diagnostic report', () => {
     });
     expect(report.activity).toEqual({
       from: '2026-11-19', to: '2026-11-25', daysWithRuns: 3,
-      runs: 12, finished: 9, failed: 2, stopped: 1, unfinished: 0,
+      runs: 15, finished: 9, failed: 2, stopped: 1, paused: 2, limited: 1, unfinished: 0,
       toolCalls: 20, toolFailures: 3, aiRequests: 15, aiFailures: 2,
       errorTypes: { other: 4, rate_limit: 2 },
     });
@@ -141,7 +141,7 @@ describe('diagnostic report', () => {
     expect(text).toContain('AI connections: 4 (anthropic 1, openai 1, other 1, unknown 1)');
     expect(text).toContain('App states: connected 1, disabled 1, other 1');
     expect(text).toContain('Agents: 2, 1 use connected apps, 6 steps in total');
-    expect(text).toContain('Runs: 12 (finished 9, failed 2, stopped 1, unfinished 0)');
+    expect(text).toContain('Runs: 15 (finished 9, failed 2, stopped 1, paused 2, ended at a limit 1, unfinished 0)');
     expect(text).toContain('Error types: other 4, rate_limit 2');
     expect(text).not.toContain('Could not read');
   });

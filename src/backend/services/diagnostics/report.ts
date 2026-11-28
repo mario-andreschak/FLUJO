@@ -18,7 +18,7 @@ export interface DiagnosticSources {
   activity?: {
     from: string;
     to: string;
-    summary: Partial<Record<'runs' | 'successes' | 'errors' | 'cancelled' | 'runsIncomplete' | 'toolCalls'
+    summary: Partial<Record<'runs' | 'successes' | 'errors' | 'cancelled' | 'paused' | 'capped' | 'runsIncomplete' | 'toolCalls'
       | 'toolFailures' | 'providerAttempts' | 'providerErrors', number>> & { errorClasses?: Record<string, number> };
     daily: ReadonlyArray<{ summary: { runs: number } }>;
   };
@@ -85,6 +85,8 @@ export function buildDiagnosticReport(sources: DiagnosticSources): DiagnosticRep
       finished: activity.summary.successes,
       failed: activity.summary.errors,
       stopped: activity.summary.cancelled,
+      paused: activity.summary.paused,
+      limited: activity.summary.capped,
       unfinished: activity.summary.runsIncomplete,
       toolCalls: activity.summary.toolCalls,
       toolFailures: activity.summary.toolFailures,
