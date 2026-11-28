@@ -4,6 +4,7 @@ import * as serviceSkills from './serviceSkills';
 import { isUnparsableStdioLine, transportForHostInspection } from './transportInspection';
 import { clearLegacyInferredOAuthScopesForHeaderAuth, hasConfiguredAuthorizationHeader } from './headerAuthScopes';
 import { testConnection } from './connectionTest';
+import * as serviceEvents from './serviceEvents';
 import { ensureManagedServerRootDir, resolveEnvForSave, resolveHeadersForSave, resolveOAuthSecretForSave } from './serverConfigSave';
 import { subscribeModernResource, retireModernSubscriptions } from './modernSubscriptions';
 import { completeRequiredUrlElicitations, requiredUrlElicitationsOf } from './elicitation';
@@ -114,11 +115,6 @@ import {
 } from "./connection";
 import { resolveLazyStart } from "./lazyStart";
 import {
-  listMcpEvents,
-  pollMcpEvent,
-  serverSupportsEvents,
-  subscribeMcpEvent,
-  unsubscribeMcpEvent,
   type McpEventDescriptor,
   type McpEventPollRequest,
   type McpEventPollResult,
@@ -128,7 +124,6 @@ import {
 } from "./serverEvents";
 import {
   MCP_EVENT_NOTIFICATIONS,
-  openMcpEventStream,
   registerMcpEventStreamHandlers,
   routeMcpEventNotification,
   type McpEventStream,
@@ -137,12 +132,7 @@ import {
 } from "./serverEventStream";
 import type { ExtensionNotificationHandlers } from "./betaClient";
 import { registerResourceNotificationHandlers, registerToolListChangedHandler } from "./resourceNotifications";
-import {
-  CLAUDE_CHANNEL_METHOD,
-  receiveClaudeChannelNotification,
-  registerClaudeChannelHandler,
-  serverDeclaresClaudeChannel,
-} from "./inboundEvents";
+import { CLAUDE_CHANNEL_METHOD, receiveClaudeChannelNotification, registerClaudeChannelHandler } from "./inboundEvents";
 import { cachedMcpList, invalidateMcpLists } from "./listCache";
 import {
   isMcpBetaProtocolEnabled,
@@ -1688,100 +1678,37 @@ export class MCPService {
     return [...closed, ...evicted];
   }
 
-  /**
-   * The events a server can report, for the automation editor. `channel` says
-   * whether it also sends Claude channel messages (#1401).
-   */
   async listServerEvents(serverName: string): Promise<{
     supported: boolean;
     channel: boolean;
     events: McpEventDescriptor[];
     error?: string;
   }> {
-    const acquired = await this.acquireServerLease(serverName);
-    if (!acquired.lease) return { supported: false, channel: false, events: [], error: acquired.error };
-    try {
-      const channel = serverDeclaresClaudeChannel(acquired.lease.client);
-      if (!serverSupportsEvents(acquired.lease.client)) return { supported: false, channel, events: [] };
-      return { supported: true, channel, events: await listMcpEvents(acquired.lease.client) };
-    } finally {
-      acquired.lease.release();
-    }
+    return serviceEvents.listServerEvents(this, serverName);
   }
 
-  /** Ends a webhook subscription. Throws when the server cannot be reached or refuses. */
   async unsubscribeServerEvent(serverName: string, request: McpEventUnsubscribeRequest): Promise<void> {
-    const acquired = await this.acquireServerLease(serverName);
-    if (!acquired.lease) throw new Error(acquired.error ?? `MCP server '${serverName}' is not available`);
-    try {
-      if (!serverSupportsEvents(acquired.lease.client)) return;
-      await unsubscribeMcpEvent(acquired.lease.client, request);
-    } finally {
-      acquired.lease.release();
-    }
+    return serviceEvents.unsubscribeServerEvent(this, serverName, request);
   }
 
-  /**
-   * Starts the server if needed and says whether it sends Claude channel
-   * messages. Called on arm and every few minutes, which also reconnects a
-   * server that went away. Throws when the server cannot be reached.
-   */
   async connectClaudeChannel(serverName: string): Promise<boolean> {
-    if (await this.isServerDisabled(serverName)) throw new Error(`MCP server '${serverName}' is disabled`);
-    const acquired = await this.acquireServerLease(serverName);
-    if (!acquired.lease) throw new Error(acquired.error ?? `MCP server '${serverName}' is not available`);
-    try {
-      return serverDeclaresClaudeChannel(acquired.lease.client);
-    } finally {
-      acquired.lease.release();
-    }
+    return serviceEvents.connectClaudeChannel(this, serverName);
   }
 
-  /** Creates or refreshes a webhook subscription. Throws when the server refuses. */
   async subscribeServerEvent(serverName: string, request: McpEventSubscribeRequest): Promise<McpEventSubscribeResult> {
-    if (await this.isServerDisabled(serverName)) throw new Error(`MCP server '${serverName}' is disabled`);
-    const acquired = await this.acquireServerLease(serverName);
-    if (!acquired.lease) throw new Error(acquired.error ?? `MCP server '${serverName}' is not available`);
-    try {
-      if (!serverSupportsEvents(acquired.lease.client)) throw new Error(`MCP server '${serverName}' does not report events`);
-      return await subscribeMcpEvent(acquired.lease.client, request);
-    } finally {
-      acquired.lease.release();
-    }
+    return serviceEvents.subscribeServerEvent(this, serverName, request);
   }
 
-  /**
-   * Opens a push subscription (`events/stream`) and resolves once the server
-   * confirmed it. The stream lives on the connection, not on a lease: the
-   * caller pins the server, and the stream ends when the connection does.
-   */
   async openServerEventStream(
     serverName: string,
     request: McpEventStreamRequest,
     handlers: McpEventStreamHandlers,
   ): Promise<McpEventStream> {
-    if (await this.isServerDisabled(serverName)) throw new Error(`MCP server '${serverName}' is disabled`);
-    const acquired = await this.acquireServerLease(serverName);
-    if (!acquired.lease) throw new Error(acquired.error ?? `MCP server '${serverName}' is not available`);
-    try {
-      if (!serverSupportsEvents(acquired.lease.client)) throw new Error(`MCP server '${serverName}' does not report events`);
-      return await openMcpEventStream(acquired.lease.client, request, handlers);
-    } finally {
-      acquired.lease.release();
-    }
+    return serviceEvents.openServerEventStream(this, serverName, request, handlers);
   }
 
-  /** One `events/poll`. Throws when the server cannot be reached or refuses. */
   async pollServerEvent(serverName: string, request: McpEventPollRequest): Promise<McpEventPollResult> {
-    if (await this.isServerDisabled(serverName)) throw new Error(`MCP server '${serverName}' is disabled`);
-    const acquired = await this.acquireServerLease(serverName);
-    if (!acquired.lease) throw new Error(acquired.error ?? `MCP server '${serverName}' is not available`);
-    try {
-      if (!serverSupportsEvents(acquired.lease.client)) throw new Error(`MCP server '${serverName}' does not report events`);
-      return await pollMcpEvent(acquired.lease.client, request);
-    } finally {
-      acquired.lease.release();
-    }
+    return serviceEvents.pollServerEvent(this, serverName, request);
   }
 
   /**
