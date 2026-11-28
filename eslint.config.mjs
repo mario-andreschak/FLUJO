@@ -144,11 +144,13 @@ export default defineConfig([
     // flujo-avatar and resync instead of editing the copy.
     files: [
       'src/vendor/avatar/client/Eyes.tsx',
+      'src/vendor/avatar/client/nativeRouterPlayback.ts',
       'src/vendor/avatar/client/useNativeRouterVoice.ts',
       'src/vendor/avatar/client/usePocketSpeech.ts',
     ],
     rules: {
       'react-hooks/refs': 'off',
+      'flujo/no-double-cast': 'off',
     },
   },
   {

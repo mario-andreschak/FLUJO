@@ -1,19 +1,4 @@
 {
-  "src/app/api/_workspace.ts": {
-    "flujo/no-double-cast": {
-      "count": 2
-    }
-  },
-  "src/app/api/git/route.ts": {
-    "flujo/no-double-cast": {
-      "count": 1
-    }
-  },
-  "src/app/v1/chat/completions/chatCompletionService.ts": {
-    "flujo/no-double-cast": {
-      "count": 2
-    }
-  },
   "src/backend/execution/flow/buildNodeContext.ts": {
     "flujo/no-double-cast": {
       "count": 2
@@ -649,11 +634,6 @@
       "count": 1
     }
   },
-  "src/frontend/components/Packages/PackageFlowPreview.tsx": {
-    "flujo/no-double-cast": {
-      "count": 2
-    }
-  },
   "src/frontend/components/Personas/PersonaAppToolsDialog.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -814,16 +794,6 @@
       "count": 2
     }
   },
-  "src/frontend/components/mcp/MCPServerManager/index.tsx": {
-    "flujo/no-double-cast": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/mcp/McpModelRiskAssessmentPanel.tsx": {
-    "flujo/no-double-cast": {
-      "count": 1
-    }
-  },
   "src/shared/types/enduringAgent/schemas.ts": {
     "flujo/no-double-cast": {
       "count": 1
@@ -865,11 +835,6 @@
     }
   },
   "src/utils/workspace.ts": {
-    "flujo/no-double-cast": {
-      "count": 1
-    }
-  },
-  "src/vendor/avatar/client/nativeRouterPlayback.ts": {
     "flujo/no-double-cast": {
       "count": 1
     }

@@ -8,6 +8,7 @@ import { getSelectedWorkspace, onWorkspaceChanged, withWorkspaceUrl } from '@/fr
 import { supportsMcpModelRiskAssessment, type McpModelRiskAssessment } from '@/shared/mcpModelRiskAssessment';
 import type { Model } from '@/shared/types/model';
 import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
+import { isModelAdapter, isModelProvider } from '@/shared/types/model/provider';
 
 function repositoryTarget(value: string): string | null {
   try {
@@ -79,7 +80,12 @@ function eligibleModels(value: unknown): Choice[] {
   return value.flatMap(model => {
     if (!record(model) || !text(model.id, 256) || !text(model.name, 256)
       || (model.outputModalities !== undefined && (!Array.isArray(model.outputModalities) || !model.outputModalities.every(item => typeof item === 'string')))
-      || !supportsMcpModelRiskAssessment(model as unknown as Model) || seen.has(String(model.id))) return [];
+      || !supportsMcpModelRiskAssessment({
+        provider: isModelProvider(model.provider) ? model.provider : undefined,
+        adapter: isModelAdapter(model.adapter) ? model.adapter : undefined,
+        outputModalities: model.outputModalities,
+        fallbackPolicy: model.fallbackPolicy,
+      }) || seen.has(String(model.id))) return [];
     seen.add(String(model.id));
     return [{ id: String(model.id), name: String(model.displayName || model.name).slice(0, 256) }];
   });

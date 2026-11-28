@@ -537,7 +537,7 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     // `transport`/`serverUrl`) so the file can be pasted into that tool's
     // config. Servers exposed via FLUJO's mcp-proxy are emitted as http URLs
     // against this origin (e.g. http://localhost:4200/mcp-proxy/<name>).
-    const config = format.export(servers as unknown as MCPServerConfig[], {
+    const config = format.export(servers, {
       proxyBaseUrl: typeof window !== 'undefined' ? window.location.origin : '',
       workspace: getSelectedWorkspace(),
     });

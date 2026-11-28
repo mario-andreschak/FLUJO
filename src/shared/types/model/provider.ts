@@ -3,21 +3,28 @@ import { ANTIGRAVITY_EFFORT_LEVELS, antigravityModelTakesEffort } from './antigr
 /**
  * Supported model providers (the vendor / endpoint identity).
  */
-export type ModelProvider =
-  | 'openai'
-  | 'azure'
-  | 'openrouter'
-  | 'requesty'
-  | 'martllm'
-  | 'anthropic'
-  | 'gemini'
-  | 'mistral'
-  | 'xai'
-  | 'ollama'
-  | 'litellm'
-  | 'claude-subscription'
-  | 'codex'
-  | 'antigravity-cli';
+export const MODEL_PROVIDERS = [
+  'openai',
+  'azure',
+  'openrouter',
+  'requesty',
+  'martllm',
+  'anthropic',
+  'gemini',
+  'mistral',
+  'xai',
+  'ollama',
+  'litellm',
+  'claude-subscription',
+  'codex',
+  'antigravity-cli',
+] as const;
+export type ModelProvider = typeof MODEL_PROVIDERS[number];
+
+/** True for a provider id FLUJO knows, such as one read from an API answer. */
+export function isModelProvider(value: unknown): value is ModelProvider {
+  return MODEL_PROVIDERS.some((provider) => provider === value);
+}
 
 /** Stable Azure OpenAI data-plane API version used for new connections. */
 export const AZURE_OPENAI_DEFAULT_API_VERSION = '2024-10-21';
@@ -48,16 +55,23 @@ export const AZURE_OPENAI_DEFAULT_API_VERSION = '2024-10-21';
  * - 'antigravity-cli' -> AntigravityCliAdapter, drives the official Antigravity CLI
  *                   with its local account login or a Gemini API key.
  */
-export type ModelAdapter =
-  | 'openai'
-  | 'openai-responses'
-  | 'openrouter-agent'
-  | 'azure'
-  | 'gemini'
-  | 'anthropic'
-  | 'claude-cli'
-  | 'codex-cli'
-  | 'antigravity-cli';
+export const MODEL_ADAPTERS = [
+  'openai',
+  'openai-responses',
+  'openrouter-agent',
+  'azure',
+  'gemini',
+  'anthropic',
+  'claude-cli',
+  'codex-cli',
+  'antigravity-cli',
+] as const;
+export type ModelAdapter = typeof MODEL_ADAPTERS[number];
+
+/** True for an adapter id FLUJO knows, such as one read from an API answer. */
+export function isModelAdapter(value: unknown): value is ModelAdapter {
+  return MODEL_ADAPTERS.some((adapter) => adapter === value);
+}
 
 /** CLI adapters that can use a host login when no API key was configured. */
 export function supportsLocalModelAuth(adapter?: string): boolean {
