@@ -518,19 +518,32 @@ export async function trustedHostMcpApprovalAsync(config: MCPStdioConfig, signal
     const approvalFile = process.env.FLUJO_MCP_TRUSTED_HOST_FILE;
     const ownerFile = process.env.FLUJO_OWNER_AUTH_FILE;
     if (!approvalFile || !ownerFile) throw new Error();
-    // One fresh native snapshot covers BOTH chains before and after the held-FD
-    // reads. There is no gap where one private reader awaits another helper.
-    const results = await readPrivateApprovalPairAsync(approvalFile, ownerFile, signal);
-    if (approvalFile !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE || ownerFile !== process.env.FLUJO_OWNER_AUTH_FILE) throw new Error();
-    const approvals = approvalsSchema.parse(results[0]);
-    const owner = ownerPolicySchema.parse(results[1]);
-    const grant = approvals.approvals.find(item => item.workspace === workspace && item.serverName === captured.name);
-    if (signal?.aborted || workspace !== getCurrentWorkspace() || owner.ownerId !== approvals.ownerId
-        || !grant || grant.expiresAt <= Date.now() || grant.policyDigest !== digest) throw new Error();
-    return { policy, digest, ownerId: owner.ownerId, workspace, expiresAt: grant.expiresAt };
+    for (let upgraded = false; ; upgraded = true) {
+      // One fresh native snapshot covers BOTH chains before and after the held-FD
+      // reads. There is no gap where one private reader awaits another helper.
+      const results = await readPrivateApprovalPairAsync(approvalFile, ownerFile, signal);
+      if (approvalFile !== process.env.FLUJO_MCP_TRUSTED_HOST_FILE || ownerFile !== process.env.FLUJO_OWNER_AUTH_FILE) throw new Error();
+      const approvals = approvalsSchema.parse(results[0]);
+      const owner = ownerPolicySchema.parse(results[1]);
+      const grant = approvals.approvals.find(item => item.workspace === workspace && item.serverName === captured.name);
+      if (!upgraded && grant && grant.policyDigest !== digest && await upgradeStoredFormApproval(captured, signal)) continue;
+      if (signal?.aborted || workspace !== getCurrentWorkspace() || owner.ownerId !== approvals.ownerId
+          || !grant || grant.expiresAt <= Date.now() || grant.policyDigest !== digest) throw new Error();
+      return { policy, digest, ownerId: owner.ownerId, workspace, expiresAt: grant.expiresAt };
+    }
   } catch (error) {
     if (error instanceof TrustedHostMcpError) throw error;
     throw new TrustedHostMcpError('HOST_CONSENT_REQUIRED');
+  }
+}
+
+/** An approval made before #1337 covered the saved form; it moves to the launch form once (`storedFormApprovalUpgrade.ts`). */
+async function upgradeStoredFormApproval(config: MCPStdioConfig, signal?: AbortSignal): Promise<boolean> {
+  try {
+    const { upgradeStoredFormApproval: upgrade } = await import('./storedFormApprovalUpgrade');
+    return await upgrade(config, signal);
+  } catch {
+    return false;
   }
 }
 

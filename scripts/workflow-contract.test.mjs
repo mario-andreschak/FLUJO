@@ -494,6 +494,19 @@ for (const [label, change, expected] of [
     const gate = files['verify.yml'].jobs.verification;
     gate.needs = gate.needs.filter(id => id !== 'claude-code');
   }, /evaluate every prerequisite/],
+  ['a first-use job without the front door check', files => {
+    journeyJob(files).steps = journeyJob(files).steps.filter(step => step.run !== 'npm run journey:front-door');
+  }, /signed-in front door/],
+  ['an optional front door check', files => { journeyStep(files, 'npm run journey:front-door')['continue-on-error'] = true; }, /first-use journey/],
+  ['a front door check before the production build', files => {
+    const steps = journeyJob(files).steps;
+    const [check] = steps.splice(steps.findIndex(step => step.run === 'npm run journey:front-door'), 1);
+    steps.splice(steps.findIndex(step => step.run === 'npm run build'), 0, check);
+  }, /signed-in front door/],
+  ['a front door check that drops its evidence', files => {
+    const upload = journeyJob(files).steps.find(step => step.uses?.startsWith('actions/upload-artifact@'));
+    upload.with.path = upload.with.path.split('\n').filter(line => !line.includes('/evidence/front-door/')).join('\n');
+  }, /signed-in front door/],
 ]) {
   test(`broad qualification refuses ${label}`, () => {
     const files = readWorkflows();

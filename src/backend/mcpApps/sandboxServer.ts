@@ -481,13 +481,18 @@ export function describeSandboxEndpointConfiguration():
   return { level: ignored.length > 0 ? 'warn' : 'info', message: parts.join(' ') };
 }
 
+/**
+ * The operator reads this line in the server's own output. The app logger
+ * prints only errors by default, so the line goes straight to the console.
+ */
 function logSandboxEndpointConfigurationOnce(state: SandboxRuntimeState): void {
   if (state.endpointConfigurationLogged) return;
   state.endpointConfigurationLogged = true;
   const description = describeSandboxEndpointConfiguration();
   if (!description) return;
-  if (description.level === 'warn') log.warn(description.message);
-  else log.info(description.message);
+  const line = `[FLUJO] ${description.message}`;
+  if (description.level === 'warn') console.warn(line);
+  else console.info(line);
 }
 
 /**

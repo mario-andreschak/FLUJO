@@ -42,7 +42,8 @@ async function waitForExit(pid, ms) {
   return !isAlive(pid);
 }
 
-export async function startProductionFlujo({ root = ROOT, logFile, log = console.log, timeoutMs = 180_000 } = {}) {
+/** `env` adds to the launch environment, for checks that start FLUJO the way a deployment does. */
+export async function startProductionFlujo({ root = ROOT, logFile, log = console.log, timeoutMs = 180_000, env = {} } = {}) {
   if (!hasProductionBuild(root)) {
     throw new Error(`No production build in ${root}. Run "npm run build" first, or pass --base-url to drive a FLUJO that is already running.`);
   }
@@ -65,6 +66,7 @@ export async function startProductionFlujo({ root = ROOT, logFile, log = console
       // A check run is not a person using FLUJO: send no daily check-in.
       FLUJO_TELEMETRY_URL: 'http://127.0.0.1:9/disabled-telemetry',
       NEXT_TELEMETRY_DISABLED: '1',
+      ...env,
     },
     detached: process.platform !== 'win32',
     stdio: ['ignore', out, out],
@@ -98,5 +100,5 @@ export async function startProductionFlujo({ root = ROOT, logFile, log = console
     throw error;
   }
   log(`Ready: ${baseUrl}\nLog: ${logFile}`);
-  return { baseUrl, dataDir, logFile, stop };
+  return { baseUrl, sandboxPort, dataDir, logFile, stop };
 }

@@ -327,10 +327,11 @@ function stop(log) {
   return 0;
 }
 
-export async function loadChromium() {
+/** `args` are extra Chromium switches, for example a host name map for a local front door. */
+export async function loadChromium({ args = [] } = {}) {
   const { chromium } = await import('playwright');
   const executablePath = process.env.FLUJO_DRIVE_CHROMIUM || process.env.FEATURE_BROWSER_CHROMIUM_EXECUTABLE;
-  return chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+  return chromium.launch({ headless: true, args, ...(executablePath ? { executablePath } : {}) });
 }
 
 // FLUJO shows `.app-loading` while it opens the workspace; role="alert" marks a dead end (error, owner sign-in).

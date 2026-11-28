@@ -35,6 +35,10 @@ const CALLERS: Readonly<Record<string, { why: string; keeps: readonly RegExp[] }
     why: 'defines the approval digests; every caller passes the launch form',
     keeps: [],
   },
+  'src/backend/services/security/storedFormApprovalUpgrade.ts': {
+    why: 'compares the launch form it is given with the saved config in launch form; the saved form is digested only to recognise an approval made before #1337',
+    keeps: [/sameTrustedHostConsent\(await stdioLaunchForm\(stored\), launch\)/],
+  },
   'src/backend/services/security/bundledMcpConsent.ts': {
     why: 'the digest the owner reviews is computed over the launch form; proposals are compared stored form to stored form',
     keeps: [/trustedHostMcpPreviewDigestAsync\(await stdioLaunchForm\(config\)\)/],

@@ -14,18 +14,21 @@ const JOURNEY_DESKTOP = 'npm run journey:first-use';
 const JOURNEY_PHONE = 'npm run journey:first-use -- --viewport 390x844';
 const BIG_APP = 'npx playwright test --config=playwright.features-first-use.config.mjs';
 const TOOL_TESTER = 'npx playwright test --config=playwright.features.config.mjs';
+const FRONT_DOOR = 'npm run journey:front-door';
 
 /**
  * The first-use journey (#572) walks a fresh production build on desktop and
  * phone screens, then reaches every tool of a 128-tool app and tests the tool
  * tester on that build, with nothing optional, and keeps its evidence even when it fails.
+ * On the same build, an app view must show in a chat opened through a signed-in
+ * front door (#1336).
  */
 export function assertFirstUseJourneyJob(workflow) {
   const job = workflow?.jobs?.['first-use-journey'];
   const steps = job?.steps ?? [];
   const at = (run) => steps.findIndex(step => step.run === run);
-  const [install, browser, build, desktop, phone, bigApp, toolTester] = ['npm ci --include=dev', 'npx playwright install --with-deps chromium',
-    'npm run build', JOURNEY_DESKTOP, JOURNEY_PHONE, BIG_APP, TOOL_TESTER].map(at);
+  const [install, browser, build, desktop, phone, bigApp, toolTester, frontDoor] = ['npm ci --include=dev', 'npx playwright install --with-deps chromium',
+    'npm run build', JOURNEY_DESKTOP, JOURNEY_PHONE, BIG_APP, TOOL_TESTER, FRONT_DOOR].map(at);
   const evidence = steps.find(step => step.uses?.startsWith('actions/upload-artifact@'));
   const kept = (evidence?.with?.path ?? '').split('\n').map(line => line.trim());
   if (!job || job['runs-on'] !== 'ubuntu-24.04' || job.if !== undefined || job['continue-on-error'] || job.strategy
@@ -38,6 +41,10 @@ export function assertFirstUseJourneyJob(workflow) {
     throw new Error('The broad qualification must walk the first-use journey on desktop and phone after a fresh production build '
       + 'and reach every tool of the 128-tool app and test the tool tester on that build, with nothing optional, '
       + 'and keep its screenshots and reports even when it fails.');
+  }
+  if (frontDoor <= build || !kept.some(line => line.endsWith('/flujo-drive/evidence/front-door/'))) {
+    throw new Error('The broad qualification must show an app view in a chat through a signed-in front door '
+      + `(${FRONT_DOOR}) after the production build, with nothing optional, and keep its screenshots and report even when it fails.`);
   }
 }
 const ANTIGRAVITY_INSTALL = "node -e \"require('./bin/antigravity-runtime.cjs').resolveBinary().then(binary => console.log(binary))\"";
