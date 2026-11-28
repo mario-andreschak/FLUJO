@@ -11,6 +11,10 @@ jest.mock('@/backend/services/mcp', () => ({
     loadServerConfigs: async () => [{ name: 'srv', transport: 'streamable', serverUrl: 'https://tasks.example.test/mcp', disabled: false }],
   },
 }));
+jest.mock('@/backend/services/mcp/serviceRegistries', () => ({
+  ...jest.requireActual('@/backend/services/mcp/serviceRegistries'),
+  liveClient: (name: string) => mockGetClient(name),
+}));
 jest.mock('@/backend/utils/resolveGlobalVars', () => ({ resolveGlobalVars: jest.fn(async (value: unknown) => value) }));
 jest.mock('@/backend/services/mcp/config', () => ({
   loadServerConfigs: jest.fn(async () => [{ name: 'srv', transport: 'streamable', serverUrl: 'https://tasks.example.test/mcp', disabled: false }]),
