@@ -5,10 +5,13 @@ import { IconButton, Tooltip } from '@mui/material';
 import type { SxProps, Theme } from '@mui/material/styles';
 import LinkRoundedIcon from '@mui/icons-material/LinkRounded';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useTimeout } from '@/frontend/hooks/timing';
 import { magicLinkUrl, type MagicLinkTarget } from '@/frontend/utils/magicLink';
 import { createLogger } from '@/utils/logger';
 
 const log = createLogger('frontend/components/shared/CopyLinkButton');
+
+const FEEDBACK_MS = 1500;
 
 export interface CopyLinkButtonProps {
   target: MagicLinkTarget;
@@ -66,6 +69,8 @@ export async function copyText(text: string): Promise<boolean> {
 export default function CopyLinkButton({ target, size = 'small', className, sx, label: idleLabel }: CopyLinkButtonProps) {
   const { t } = useI18n();
   const [status, setStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const [attempt, setAttempt] = useState(0);
+  useTimeout(() => setStatus('idle'), status === 'idle' ? null : FEEDBACK_MS, attempt);
 
   const handleClick = useCallback(
     async (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -74,7 +79,7 @@ export default function CopyLinkButton({ target, size = 'small', className, sx, 
       const url = magicLinkUrl(target);
       const succeeded = await copyText(url);
       setStatus(succeeded ? 'copied' : 'failed');
-      window.setTimeout(() => setStatus('idle'), 1500);
+      setAttempt((count) => count + 1);
     },
     [target]
   );

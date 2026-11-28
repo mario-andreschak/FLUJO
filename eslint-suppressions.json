@@ -996,11 +996,6 @@
       "count": 1
     }
   },
-  "src/frontend/components/Settings/GlobalEnvSettings.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
   "src/frontend/components/Settings/PersonaRecoverySettings.tsx": {
     "flujo/no-raw-timers": {
       "count": 1
@@ -1251,11 +1246,6 @@
       "count": 2
     },
     "react-hooks/refs": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/shared/CopyLinkButton.tsx": {
-    "flujo/no-raw-timers": {
       "count": 1
     }
   },
