@@ -98,6 +98,8 @@ export function parseStepItem(item) {
   if (match) return { do: 'expect-text', text: match[1] };
   match = /^press `?([A-Za-z+]+)`?$/i.exec(text);
   if (match) return { do: 'press', key: match[1] };
+  match = /^choose-file (?:button )?"([^"]+)" with `([^`]+)`$/i.exec(text);
+  if (match) return { do: 'choose-file', role: 'button', name: match[1], file: match[2] };
   if (/^`?(?:shot|aria)`?(?: and `?(?:shot|aria)`?)?$/i.test(text)) return { evidence: true };
   return undefined;
 }

@@ -89,11 +89,12 @@ step it can run on the launched instance and writes one report with proof of
 each failure.
 
 Step kinds are `goto`, `click`, `fill`, `press`, `wait-for`, `expect-text`,
-`drop-file`, `choose-file`, `shot` and `aria`. `click`, `fill` and `wait-for` find visible elements by
+`expect-no-text`, `drop-file`, `choose-file`, `shot` and `aria`. `click`, `fill` and `wait-for` find visible elements by
 ARIA role and English name (part of the name is enough). `drop-file` drags the
 local `file` onto the element named by `role` and `name`; `choose-file` clicks
 that element and picks `file` in the file dialog it opens. `expect-text` waits
-for text a user can see, so screen-reader-only text does not count. Never use
+for text a user can see, so screen-reader-only text does not count;
+`expect-no-text` waits until that text is gone (for example "Reading…"). Never use
 CSS classes or screen positions. Add `--viewport 360x800` to check the phone
 layout.
 

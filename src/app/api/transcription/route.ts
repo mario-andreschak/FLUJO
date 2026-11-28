@@ -1,10 +1,8 @@
 import { withWorkspaceRoute } from '@/app/api/_workspace';
-import { modelService } from '@/backend/services/model';
-import { resolveAndDecryptApiKey } from '@/backend/services/model/encryption';
 import {
-  createOpenAIClient,
-  getProviderDefaultHeaders,
-} from '@/backend/services/model/openaiClient';
+  AudioTranscriptionError,
+  transcribeAudioFile,
+} from '@/backend/services/transcription/audioTranscription';
 import {
   MAX_TRANSCRIPTION_AUDIO_BYTES,
   isSupportedTranscriptionAudioMimeType,
@@ -21,14 +19,6 @@ function errorResponse(
   status: number,
 ): NextResponse {
   return NextResponse.json({ error, code }, { status });
-}
-
-function supportsOpenAITranscription(adapter: string | undefined): boolean {
-  // Models created before the adapter field existed used the OpenAI-compatible
-  // client, so an absent adapter retains that established default.
-  return adapter === undefined ||
-    adapter === 'openai' ||
-    adapter === 'openai-responses';
 }
 
 function normalizeLanguageHint(value: string | undefined): string | undefined {
@@ -94,66 +84,12 @@ async function POST_handler(request: NextRequest) {
       );
     }
 
-    const model = await modelService.getModel(modelId);
-    if (!model) {
-      return errorResponse(
-        'The transcription model was not found',
-        'missing-model',
-        404,
-      );
-    }
-    if (model.ownerCredentialBinding !== undefined) {
-      return errorResponse(
-        'Owner-bound models require an authorized model-step transport.',
-        'owner-bound-model',
-        403,
-      );
-    }
-    if (
-      !supportsOpenAITranscription(model.adapter) ||
-      model.provider === 'azure'
-    ) {
-      return errorResponse(
-        'The selected model does not support file transcription',
-        'unsupported-format',
-        400,
-      );
-    }
-
-    const apiKey = await resolveAndDecryptApiKey(model.ApiKey);
-    if (!apiKey) {
-      return errorResponse(
-        'Could not resolve credentials for the transcription model',
-        'request-failed',
-        400,
-      );
-    }
-
-    const client = createOpenAIClient({
-      apiKey,
-      baseURL: model.baseUrl,
-      defaultHeaders: getProviderDefaultHeaders(model.provider),
-    });
-    const result = await client.audio.transcriptions.create(
-      {
-        file,
-        model: model.name,
-        ...(language ? { language } : {}),
-      },
-      { signal: request.signal },
-    );
-    const text = typeof result.text === 'string' ? result.text.trim() : '';
-
-    if (!text) {
-      return errorResponse(
-        'The transcription provider returned no text',
-        'empty-transcript',
-        422,
-      );
-    }
-
+    const text = await transcribeAudioFile(file, modelId, { language, signal: request.signal });
     return NextResponse.json({ text });
   } catch (error) {
+    if (error instanceof AudioTranscriptionError) {
+      return errorResponse(error.message, error.code, error.status);
+    }
     if (request.signal.aborted) {
       return errorResponse(
         'Audio transcription was cancelled',

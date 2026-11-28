@@ -42,10 +42,11 @@ const nextConfig = {
   // Next infer the wrong root and install/resolve deps like typescript in the
   // wrong place, breaking `next build`.
   outputFileTracingRoot: __dirname,
-  // Both SDKs locate their native executables relative to import.meta.url, and
-  // unpdf loads its PDF.js build with a runtime import. Keep Node's
+  // Both SDKs locate their native executables relative to import.meta.url,
+  // unpdf loads its PDF.js build with a runtime import, and @hyzyla/pdfium
+  // reads its WebAssembly file from next to itself. Keep Node's
   // installed-package lookup when the built app moves machines.
-  serverExternalPackages: ['@openai/codex-sdk', '@anthropic-ai/claude-agent-sdk', 'unpdf'],
+  serverExternalPackages: ['@openai/codex-sdk', '@anthropic-ai/claude-agent-sdk', 'unpdf', '@hyzyla/pdfium'],
   // Runtime workspace data can contain Windows junctions such as the legacy
   // Content.IE5 cache link. It is never a deployable application dependency,
   // so keep it out of Next's output traces.

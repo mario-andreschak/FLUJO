@@ -14,7 +14,7 @@ test('a target is chosen explicitly, never port 4200, and never two at once', ()
   assert.equal(chooseTarget({ launch: true }, undefined).mode, 'dev');
   assert.equal(chooseTarget({ launch: true, mode: 'start', 'app-dir': 'x' }, undefined).appDir, path.resolve('x'));
   assert.deepEqual(chooseTarget({}, { baseUrl: 'http://127.0.0.1:5123/' }), { kind: 'url', baseUrl: 'http://127.0.0.1:5123/', fromDrive: true });
-  assert.throws(() => chooseTarget({}, undefined), /npm run drive -- launch/);
+  assert.throws(() => chooseTarget({}, null), /npm run drive -- launch/);
   assert.throws(() => chooseTarget({ 'base-url': 'http://127.0.0.1:4200/' }, undefined), /4200/);
   assert.throws(() => chooseTarget({ release: 'latest' }, undefined), /version such as/);
   assert.throws(() => chooseTarget({ release: '1.0.0', launch: true }, undefined), /Pick one target/);
