@@ -187,7 +187,8 @@ export default function Docs() {
     const link = document.createElement('a');
     link.href = url; link.download = 'flujo-openapi.json';
     link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    // The click has handed the file to the browser's download, like every other download here.
+    URL.revokeObjectURL(url);
   };
 
   const filteredGroups = useMemo(() => {

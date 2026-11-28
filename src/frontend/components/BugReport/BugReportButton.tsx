@@ -140,12 +140,6 @@ export default function BugReportButton({ variant = 'icon' }: BugReportButtonPro
   const titleInputRef = useRef<HTMLInputElement | null>(null);
   const descriptionInputRef = useRef<HTMLInputElement | null>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    const id = window.setTimeout(() => titleInputRef.current?.focus(), 0);
-    return () => window.clearTimeout(id);
-  }, [open]);
-
   const handleClose = useCallback(() => {
     setOpen(false);
     setTitle('');

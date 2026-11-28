@@ -22,6 +22,7 @@ import { createLogger } from '@/utils/logger';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { Translator } from '@/frontend/i18n/core';
 import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
+import { useInterval } from '@/frontend/hooks/timing';
 
 const log = createLogger('frontend/components/mcp/MCPCapabilitiesManager');
 
@@ -104,10 +105,8 @@ const MCPCapabilitiesManager: React.FC<MCPCapabilitiesManagerProps> = ({ serverN
   // When the backend increments it (on a notifications/resources/list_changed event),
   // evict the frontend cache and re-fetch so the manager auto-refreshes without the
   // user clicking the Refresh button.
-  useEffect(() => {
-    if (!serverName || !showResources) return;
-    // Start polling only after the initial load so we don't race with it.
-    const intervalId = setInterval(async () => {
+  // The first poll comes after the initial load, so it does not race with it.
+  useInterval(async () => {
       try {
         const status = await mcpService.getServerStatus(serverName);
         const version = (status as { resourceListVersion?: number }).resourceListVersion ?? 0;
@@ -119,9 +118,7 @@ const MCPCapabilitiesManager: React.FC<MCPCapabilitiesManagerProps> = ({ serverN
       } catch {
         // Ignore polling errors — the Refresh button is always available as a fallback.
       }
-    }, 10000); // 10-second poll interval
-    return () => clearInterval(intervalId);
-  }, [serverName, showResources, reload]);
+  }, serverName && showResources ? 10000 : null);
 
   const handleReadResource = async (uri: string, label: string) => {
     setPreviewTitle(t('mcp.capabilities.resourceTitle', { name: label }));

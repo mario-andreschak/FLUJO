@@ -55,6 +55,7 @@ import { writeWorkspaceUiPreference } from '@/frontend/hooks/useUiPreference';
 import type { FlowAuthoringMode } from '@/utils/shared/flowAuthoringProfile';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useAskFlujoPage } from '@/frontend/contexts/AskFlujoContext';
+import { useTimeout } from '@/frontend/hooks/timing';
 
 const log = createLogger('app/flows/page');
 
@@ -329,13 +330,11 @@ const FlowsPage = () => {
 
   // Auto-dismiss the banner after a few seconds (re-armed whenever a new
   // message is shown). Errors stay until dismissed so they aren't missed.
-  useEffect(() => {
-    if (!snackbar.open || snackbar.severity === 'error') return;
-    const timer = setTimeout(() => {
-      setSnackbar(prev => ({ ...prev, open: false }));
-    }, 6000);
-    return () => clearTimeout(timer);
-  }, [snackbar.open, snackbar.message, snackbar.severity]);
+  useTimeout(
+    () => setSnackbar(prev => ({ ...prev, open: false })),
+    snackbar.open && snackbar.severity !== 'error' ? 6000 : null,
+    `${snackbar.severity}:${snackbar.message}`,
+  );
 
   // Validate flow name
   const validateFlowName = useCallback((name: string): string | null => {

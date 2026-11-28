@@ -34,6 +34,7 @@ import {
   parseMeetingLaunchIntent,
 } from './meetingLaunchIntent';
 import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
+import { useDebouncedCallback } from '@/frontend/hooks/timing';
 
 const log = createLogger('frontend/components/Meetings');
 
@@ -67,7 +68,6 @@ export default function MeetingsManager() {
   const [streamConnected, setStreamConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [wizardError, setWizardError] = useState<string | null>(null);
-  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!launchIntent || typeof window === 'undefined') return;
@@ -118,6 +118,9 @@ export default function MeetingsManager() {
     void fetchList();
   }, [fetchList]);
 
+  // A burst of live events reloads the meeting once.
+  const refreshDetailSoon = useDebouncedCallback((id: string) => void loadDetail(id), 220);
+
   useResetOnChange(selectedId, (id) => {
     if (!id) setDetail(null);
     setDetailLoading(Boolean(id));
@@ -141,17 +144,16 @@ export default function MeetingsManager() {
         setDetail((current) => current?.meeting.id === selectedId
           ? { ...current, events: mergeEvents(current.events, [event]) }
           : current);
-        if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-        refreshTimerRef.current = setTimeout(() => void loadDetail(selectedId), 220);
+        refreshDetailSoon(selectedId);
       },
     }, detail?.events.at(-1) ? detail.events.at(-1)!.seq + 1 : undefined);
 
     return () => {
       source.close();
       setStreamConnected(false);
-      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+      refreshDetailSoon.cancel();
     };
-  }, [activeStatus, loadDetail, selectedId]);
+  }, [activeStatus, refreshDetailSoon, selectedId]);
 
   const selectMeeting = (id: string | null) => {
     setSelectedId(id);

@@ -14,6 +14,7 @@ import {
 import { createLogger } from '@/utils/logger';
 import { useStorage } from '@/frontend/contexts/StorageContext';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { useReloadWhenServerReturns } from '@/frontend/hooks/useReloadWhenServerReturns';
 
 const log = createLogger('frontend/components/Settings/UpdateSettings');
 
@@ -25,6 +26,8 @@ export default function UpdateSettings() {
 
   const [checking, setChecking] = useState(false);
   const [applying, setApplying] = useState(false);
+  const [restarting, setRestarting] = useState(false);
+  useReloadWhenServerReturns(restarting);
   const [status, setStatus] = useState<
     { severity: 'success' | 'error' | 'info' | 'warning'; message: string } | null
   >(null);
@@ -111,22 +114,8 @@ export default function UpdateSettings() {
       }
       setStatus({ severity: 'success', message: data.message || t('settings.update.complete') });
       if (data.restarting) {
-        // The server stops, rebuilds, and comes back up (can take minutes).
-        // Poll until it goes DOWN and then UP again, then reload.
-        let sawDown = false;
-        const poll = async () => {
-          try {
-            const ping = await fetch('/api/cwd', { cache: 'no-store' });
-            if (ping.ok && sawDown) {
-              window.location.reload();
-              return;
-            }
-          } catch {
-            sawDown = true; // server is down -> rebuilding
-          }
-          setTimeout(poll, 3000);
-        };
-        setTimeout(poll, 5000);
+        // The server stops, rebuilds, and comes back up; the page reloads then.
+        setRestarting(true);
       } else {
         setApplying(false);
       }

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLatest } from '@/frontend/hooks/useLatest';
 import { useResetOnChange } from './useResetOnChange';
+import { useInterval } from './timing';
 
 /** Git state of a project folder, as reported by `/api/projects`. */
 export interface ProjectGitInfo {
@@ -129,6 +130,10 @@ export function useProjects(conversationId?: string | null): {
     void refresh();
   }, [conversationId, refresh]);
 
+  useInterval(() => {
+    if (document.visibilityState === 'visible') void refresh();
+  }, REFRESH_INTERVAL_MS);
+
   useEffect(() => {
     const onChanged = (event: Event) => {
       // The instance that made the change already applied the server's answer.
@@ -137,14 +142,10 @@ export function useProjects(conversationId?: string | null): {
     };
     const onFocus = () => { void refresh(); };
     const onVisible = () => { if (document.visibilityState === 'visible') void refresh(); };
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === 'visible') void refresh();
-    }, REFRESH_INTERVAL_MS);
     window.addEventListener(CHANGED_EVENT, onChanged);
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onVisible);
     return () => {
-      window.clearInterval(timer);
       window.removeEventListener(CHANGED_EVENT, onChanged);
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisible);

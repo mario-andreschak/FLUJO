@@ -12,6 +12,7 @@ import {
   resolveScrollElement,
   resolveScrollBehavior,
 } from '@/frontend/hooks/scrollTarget';
+import { useLater } from './timing';
 
 // Scroll-position persistence + "back to top" state for the main list pages
 // (#185: /models, /mcp, /flows, /waves). This wraps the already-battle-tested
@@ -73,38 +74,29 @@ export function useScrollRestoration<T extends HTMLElement = HTMLDivElement>(
     [resolveEl],
   );
 
-  // Persist the position and drive button visibility. Writes are coalesced with
-  // requestAnimationFrame (falling back to a microtask) so a fast scroll does
-  // not hammer localStorage. Listens on both the element and the window so
-  // whichever one is the real scroller is covered.
+  // Persist the position and drive button visibility. Writes are coalesced to
+  // one per animation frame so a fast scroll does not hammer localStorage.
+  // Listens on both the element and the window so whichever one is the real
+  // scroller is covered.
+  const saveLater = useLater();
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const el = ref.current;
-    let frame = 0;
-    const raf =
-      typeof window.requestAnimationFrame === 'function'
-        ? window.requestAnimationFrame.bind(window)
-        : (cb: FrameRequestCallback) => window.setTimeout(() => cb(0), 16) as unknown as number;
-    const caf =
-      typeof window.cancelAnimationFrame === 'function'
-        ? window.cancelAnimationFrame.bind(window)
-        : (id: number) => window.clearTimeout(id);
 
     const onScroll = () => {
       const top = getScrollTop();
       setShowBackToTop(top > threshold);
-      if (frame) caf(frame);
-      frame = raf(() => writeWorkspaceUiPreference(storageKey, top));
+      saveLater(() => writeWorkspaceUiPreference(storageKey, top), 'frame');
     };
 
     el?.addEventListener('scroll', onScroll, { passive: true });
     window.addEventListener('scroll', onScroll, { passive: true });
     return () => {
-      if (frame) caf(frame);
+      saveLater.cancel();
       el?.removeEventListener('scroll', onScroll);
       window.removeEventListener('scroll', onScroll);
     };
-  }, [storageKey, threshold, getScrollTop]);
+  }, [storageKey, threshold, getScrollTop, saveLater]);
 
   // Restore the saved position once (re-tried when `deps` change so async lists
   // get their position back after they have grown to full height). If the saved

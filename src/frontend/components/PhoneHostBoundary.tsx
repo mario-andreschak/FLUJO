@@ -1,9 +1,10 @@
 'use client';
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { NativeVoiceTransport } from '@/vendor/avatar/client/nativeVoiceTransport';
 import { bindPhoneHostRequests, initializeWorkspaceSelection, readWorkspacePageRequest, setSelectedWorkspace, workspacePageUrl } from '@/frontend/utils/workspaceSelection';
 import { createPhoneVoiceTransport, readPhoneVoiceSession, unavailablePhoneVoiceTransport, type PhoneVoiceSession } from './AvatarWorld/phoneVoiceTransport';
+import { useInterval } from '@/frontend/hooks/timing';
 
 const PhoneHostContext = createContext<NativeVoiceTransport | null>(null);
 export const usePhoneHostVoice = () => useContext(PhoneHostContext);
@@ -18,6 +19,8 @@ function AdmittedPhoneHost({ children, fallback }: { children: ReactNode; fallba
   const [transport, setTransport] = useState<NativeVoiceTransport | null>(null);
   const [failed, setFailed] = useState(false);
   const [retry, setRetry] = useState(0);
+  // The running session check, looked at again every 15 s so a failed host heals by itself.
+  const recheck = useRef<(() => void) | undefined>(undefined);
   useEffect(() => {
     let disposed = false, generation = 0;
     let lookup: AbortController | undefined;
@@ -66,13 +69,14 @@ function AdmittedPhoneHost({ children, fallback }: { children: ReactNode; fallba
     };
     const visible = () => { if (!document.hidden) void refresh(); };
     void refresh();
-    const timer = setInterval(visible, 15000);
+    recheck.current = visible;
     window.addEventListener('focus', visible); document.addEventListener('visibilitychange', visible);
     return () => {
-      disposed = true; generation++; lookup?.abort(); retire(); clearInterval(timer);
+      disposed = true; generation++; lookup?.abort(); retire(); recheck.current = undefined;
       window.removeEventListener('focus', visible); document.removeEventListener('visibilitychange', visible);
     };
   }, [retry]);
+  useInterval(() => recheck.current?.(), 15000);
   if (transport) return <PhoneHostContext.Provider value={transport}>{children}</PhoneHostContext.Provider>;
   if (!failed) return fallback;
   return <div className="app-loading" role="alert"><div className="premium-surface" style={{ width: 'min(92vw, 520px)', padding: 28, textAlign: 'center' }}>

@@ -15,6 +15,7 @@ import {
 import { RIVER_SCENES, resolveRiverScene, type RiverScene } from './sceneMap';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { TranslationKey } from '@/frontend/i18n/messages';
+import { frameLoop, useLater } from '@/frontend/hooks/timing';
 
 interface CameraFlight {
   from: RiverCamera;
@@ -83,7 +84,7 @@ export default function RiverWorld() {
   const pointerRef = useRef<RiverPointer>({ ...STILL_POINTER });
   const pointerTargetRef = useRef<RiverPointer>({ ...STILL_POINTER });
   const requestDrawRef = useRef<(() => void) | null>(null);
-  const travelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const travelLater = useLater();
   const [travelling, setTravelling] = useState(false);
 
   useEffect(() => {
@@ -132,14 +133,9 @@ export default function RiverWorld() {
       duration,
     };
     setTravelling(true);
-    if (travelTimerRef.current) clearTimeout(travelTimerRef.current);
-    travelTimerRef.current = setTimeout(() => setTravelling(false), duration + 80);
+    travelLater(() => setTravelling(false), duration + 80);
     requestDrawRef.current?.();
   }, [enabled, scene]);
-
-  useEffect(() => () => {
-    if (travelTimerRef.current) clearTimeout(travelTimerRef.current);
-  }, []);
 
   useEffect(() => {
     if (!enabled) return;
@@ -157,7 +153,6 @@ export default function RiverWorld() {
     let width = 1;
     let height = 1;
     let pixelRatio = 1;
-    let animationFrame = 0;
     let lastPaint = 0;
     let reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -210,11 +205,8 @@ export default function RiverWorld() {
       lastPaint = now;
     };
 
-    const tick = (now: number) => {
-      if (document.hidden || reducedMotion) {
-        animationFrame = 0;
-        return;
-      }
+    const loop = frameLoop((now) => {
+      if (document.hidden || reducedMotion) return false;
       // Camera travel stays fluid, while the decorative idle scene is capped
       // at 10 fps. Painting a full-window canvas at display refresh speed while
       // the user reads a chat wastes an entire renderer core for imperceptible
@@ -223,8 +215,8 @@ export default function RiverWorld() {
         ? FLIGHT_FRAME_INTERVAL_MS
         : AMBIENT_FRAME_INTERVAL_MS;
       if (now - lastPaint >= minimumFrameTime) paint(now);
-      animationFrame = window.requestAnimationFrame(tick);
-    };
+      return true;
+    });
 
     const requestDraw = () => {
       if (reducedMotion) {
@@ -233,9 +225,7 @@ export default function RiverWorld() {
         paint(performance.now());
         return;
       }
-      if (!animationFrame && !document.hidden) {
-        animationFrame = window.requestAnimationFrame(tick);
-      }
+      if (!document.hidden) loop.start();
     };
 
     const handleResize = () => {
@@ -255,8 +245,7 @@ export default function RiverWorld() {
 
     const handleVisibilityChange = () => {
       if (document.hidden) {
-        if (animationFrame) window.cancelAnimationFrame(animationFrame);
-        animationFrame = 0;
+        loop.stop();
       } else {
         requestDraw();
       }
@@ -264,8 +253,7 @@ export default function RiverWorld() {
 
     const handleMotionChange = (event: MediaQueryListEvent) => {
       reducedMotion = event.matches;
-      if (animationFrame) window.cancelAnimationFrame(animationFrame);
-      animationFrame = 0;
+      loop.stop();
       if (reducedMotion) {
         cameraRef.current = cameraForScene(sceneRef.current);
         flightRef.current = null;
@@ -285,7 +273,7 @@ export default function RiverWorld() {
 
     return () => {
       requestDrawRef.current = null;
-      if (animationFrame) window.cancelAnimationFrame(animationFrame);
+      loop.stop();
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('blur', resetPointer);

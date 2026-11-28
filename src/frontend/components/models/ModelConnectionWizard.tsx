@@ -58,6 +58,7 @@ import { useI18n } from '@/frontend/contexts/I18nContext';
 import type { TranslationKey } from '@/frontend/i18n/messages';
 import { useSetupStepFocus } from '@/frontend/hooks/useSetupStepFocus';
 import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
+import { useLater, useTimeout } from '@/frontend/hooks/timing';
 
 type Experience = 'beginner' | 'familiar';
 type WizardStep =
@@ -436,11 +437,15 @@ export default function ModelConnectionWizard({
     if (nextKind === 'ollama' && !ollamaChecked && !ollamaLoading) void loadOllama();
   };
 
+  // The "Copied" note shows for 1.6 s.
+  useTimeout(() => setCopiedCommand(null), copiedCommand ? 1600 : null, copiedCommand);
+  // A freshly installed Ollama gets a moment to start before it is checked.
+  const ollamaRecheckLater = useLater();
+
   const copyCommand = async (command: string) => {
     try {
       await navigator.clipboard.writeText(command);
       setCopiedCommand(command);
-      window.setTimeout(() => setCopiedCommand((value) => value === command ? null : value), 1600);
     } catch {
       setError(t('models.wizard.copyFailed'));
     }
@@ -483,7 +488,7 @@ export default function ModelConnectionWizard({
       if (!current()) return;
       if (!terminalSuccess) throw new Error(terminalError || t('models.wizard.wingetFailed'));
       setInstallResult('success');
-      if (tool === 'ollama') window.setTimeout(() => { if (current()) void loadOllama(); }, 1200);
+      if (tool === 'ollama') ollamaRecheckLater(() => { if (current()) void loadOllama(); }, 1200);
     } catch (installError) {
       if (!current()) return;
       setInstallResult('error');

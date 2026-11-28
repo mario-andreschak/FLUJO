@@ -36,6 +36,8 @@ import type { ConversationChainsResponse } from '@/shared/types/conversationChai
 import { createLogger } from '@/utils/logger';
 import ChainFlowTree from './ChainFlowTree';
 import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
+import { useDebouncedCallback, useLater, useTimeout } from '@/frontend/hooks/timing';
+import { useLatest } from '@/frontend/hooks/useLatest';
 
 const log = createLogger('frontend/components/ConversationChainGraph');
 
@@ -76,7 +78,8 @@ export function ConversationChainGraph() {
   const [selectedRootId, setSelectedRootId] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
-  const liveRefreshTimerRef = useRef<number | null>(null);
+  const refreshSoon = useDebouncedCallback(() => setReloadToken((token) => token + 1), 450);
+  const reconnectLater = useLater();
 
   // Every reload shows the loading state until its answer arrives.
   useResetOnChange(reloadToken, () => setState('loading'));
@@ -107,32 +110,23 @@ export function ConversationChainGraph() {
   useEffect(() => {
     if (typeof chatService.subscribeToSidebarEvents !== 'function') return;
     let stream: EventSource | undefined;
-    let retryTimer: number | undefined;
     let disposed = false;
     const connect = () => { if (!disposed) stream = chatService.subscribeToSidebarEvents({
-      onEvent: () => {
-        if (liveRefreshTimerRef.current !== null) window.clearTimeout(liveRefreshTimerRef.current);
-        liveRefreshTimerRef.current = window.setTimeout(() => {
-          setReloadToken((token) => token + 1);
-          liveRefreshTimerRef.current = null;
-        }, 450);
-      },
+      onEvent: refreshSoon,
       onReset: () => {
         if (disposed) return;
-        window.clearTimeout(retryTimer);
         setReloadToken(token => token + 1);
-        retryTimer = window.setTimeout(connect, 3000);
+        reconnectLater(connect, 3000);
       },
     }); };
     connect();
     return () => {
       disposed = true;
-      window.clearTimeout(retryTimer);
-      if (liveRefreshTimerRef.current !== null) window.clearTimeout(liveRefreshTimerRef.current);
-      liveRefreshTimerRef.current = null;
+      reconnectLater.cancel();
+      refreshSoon.cancel();
       stream?.close();
     };
-  }, []);
+  }, [reconnectLater, refreshSoon]);
 
   const chains = useMemo(() => data?.chains ?? [], [data]);
 
@@ -150,24 +144,22 @@ export function ConversationChainGraph() {
   // Sidebar lifecycle events intentionally omit message/tool payload events.
   // While the selected family is live, refresh just that bounded family so its
   // latest-message bubbles actually move with the run without re-reading every
-  // recent chain or opening a high-volume event stream in the browser.
-  useEffect(() => {
-    if (!selectedChain || selectedChain.activeNodeCount === 0) return;
-
-    let disposed = false;
-    let timer: number | null = null;
-    let controller: AbortController | null = null;
-    const rootId = selectedChain.rootId;
-
-    const poll = async () => {
-      controller = new AbortController();
-      try {
-        const response = await chatService.getConversationChains({
-          rootId,
-          limit: 1,
-          signal: controller.signal,
-        });
-        if (disposed || controller.signal.aborted) return;
+  // recent chain or opening a high-volume event stream in the browser. Each
+  // refresh waits for the previous one to finish.
+  const liveRootId = selectedChain && selectedChain.activeNodeCount > 0 ? selectedChain.rootId : null;
+  const currentLiveRootId = useLatest(liveRootId);
+  const livePollRequest = useRef<AbortController | null>(null);
+  const [livePolls, setLivePolls] = useState(0);
+  useResetOnChange(liveRootId, () => setLivePolls(0));
+  useEffect(() => () => livePollRequest.current?.abort(), [liveRootId]);
+  useTimeout(() => {
+    if (!liveRootId) return;
+    const rootId = liveRootId;
+    const controller = new AbortController();
+    livePollRequest.current = controller;
+    void chatService.getConversationChains({ rootId, limit: 1, signal: controller.signal })
+      .then((response) => {
+        if (controller.signal.aborted) return;
         const refreshed = response.chains.find((chain) => chain.rootId === rootId);
         if (refreshed) {
           setData((current) => current ? {
@@ -176,23 +168,17 @@ export function ConversationChainGraph() {
             generatedAt: response.generatedAt,
           } : current);
         }
-      } catch (error) {
-        if (!disposed && (error as { name?: string })?.name !== 'AbortError') {
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted && (error as { name?: string })?.name !== 'AbortError') {
           log.debug('Selected chain live refresh skipped', error);
         }
-      } finally {
-        controller = null;
-        if (!disposed) timer = window.setTimeout(poll, 3200);
-      }
-    };
-
-    timer = window.setTimeout(poll, 2200);
-    return () => {
-      disposed = true;
-      if (timer !== null) window.clearTimeout(timer);
-      controller?.abort();
-    };
-  }, [selectedChain?.activeNodeCount, selectedChain?.rootId]);
+      })
+      .finally(() => {
+        if (livePollRequest.current === controller) livePollRequest.current = null;
+        if (!controller.signal.aborted && currentLiveRootId.current === rootId) setLivePolls((count) => count + 1);
+      });
+  }, liveRootId ? (livePolls === 0 ? 2200 : 3200) : null, `${liveRootId}:${livePolls}`);
 
   const openConversation = useCallback(
     (conversationId: string) => {

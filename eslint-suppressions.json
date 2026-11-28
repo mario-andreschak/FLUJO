@@ -14,16 +14,6 @@
       "count": 1
     }
   },
-  "src/app/flows/page.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
-  "src/app/page.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 2
-    }
-  },
   "src/app/v1/chat/completions/chatCompletionService.ts": {
     "flujo/no-double-cast": {
       "count": 2
@@ -367,21 +357,6 @@
       "count": 1
     }
   },
-  "src/frontend/components/AmbientWorld/RiverWorld.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 3
-    }
-  },
-  "src/frontend/components/AvatarWorld/index.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/BugReport/BugReportButton.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
   "src/frontend/components/Chat/ChatHistory.tsx": {
     "flujo/no-raw-timers": {
       "count": 2
@@ -513,26 +488,6 @@
   },
   "src/frontend/components/Chat/mcpAppClient.ts": {
     "flujo/no-double-cast": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/ConversationChainGraph/ChainFlowTree.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/ConversationChainGraph/ChainTranscriptPopover.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/ConversationChainGraph/index.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 4
-    }
-  },
-  "src/frontend/components/Docs/index.tsx": {
-    "flujo/no-raw-timers": {
       "count": 1
     }
   },
@@ -709,16 +664,6 @@
       "count": 1
     }
   },
-  "src/frontend/components/Meetings/MeetingTranscript.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/Meetings/index.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
   "src/frontend/components/Packages/PackageFlowPreview.tsx": {
     "flujo/no-double-cast": {
       "count": 2
@@ -783,11 +728,6 @@
       "count": 2
     }
   },
-  "src/frontend/components/PhoneHostBoundary.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
   "src/frontend/components/PlannedExecutions/AiGatePanel.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -840,34 +780,6 @@
       "count": 1
     }
   },
-  "src/frontend/components/Settings/EncryptionSettings.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/Settings/PersonaRecoverySettings.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/Settings/UpdateSettings.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 2
-    }
-  },
-  "src/frontend/components/Tour/BigTutorialOverlay.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 5
-    }
-  },
-  "src/frontend/components/Tour/TourOverlay.tsx": {
-    "flujo/no-double-cast": {
-      "count": 1
-    },
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
   "src/frontend/components/Waves/DayView.tsx": {
     "flujo/no-raw-timers": {
       "count": 1
@@ -917,21 +829,6 @@
       "count": 2
     }
   },
-  "src/frontend/components/mcp/MCPCapabilitiesManager/index.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/mcp/MCPServerManager/Modals/ServerModal/tabs/ConfigureTab/BuildTools.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 2
-    }
-  },
-  "src/frontend/components/mcp/MCPServerManager/ServerCard.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 5
-    }
-  },
   "src/frontend/components/mcp/MCPServerManager/index.tsx": {
     "flujo/no-double-cast": {
       "count": 1
@@ -939,59 +836,6 @@
   },
   "src/frontend/components/mcp/McpModelRiskAssessmentPanel.tsx": {
     "flujo/no-double-cast": {
-      "count": 1
-    }
-  },
-  "src/frontend/components/models/ModelConnectionWizard.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 2
-    }
-  },
-  "src/frontend/components/models/modal/index.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 3
-    }
-  },
-  "src/frontend/components/shared/GlobalReferenceEditor.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 2
-    }
-  },
-  "src/frontend/contexts/AllowanceContext.tsx": {
-    "flujo/no-raw-timers": {
-      "count": 2
-    }
-  },
-  "src/frontend/hooks/useAutoFocusSearch.ts": {
-    "flujo/no-raw-timers": {
-      "count": 2
-    }
-  },
-  "src/frontend/hooks/useAutoHideOnIdle.ts": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
-  "src/frontend/hooks/useProjects.ts": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
-  "src/frontend/hooks/useScrollNav.ts": {
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
-  "src/frontend/hooks/useScrollRestoration.ts": {
-    "flujo/no-double-cast": {
-      "count": 1
-    },
-    "flujo/no-raw-timers": {
-      "count": 1
-    }
-  },
-  "src/frontend/hooks/useServerTools.ts": {
-    "flujo/no-raw-timers": {
       "count": 1
     }
   },

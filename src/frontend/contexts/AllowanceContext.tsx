@@ -1,9 +1,10 @@
 'use client';
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ALLOWANCE_MAX_AGE_MS, isSubscriptionAllowance, type WorkspaceAllowance } from '@/shared/types/model/allowance';
 import { getSelectedWorkspace, onWorkspaceChanged, withWorkspaceUrl } from '@/frontend/utils/workspaceSelection';
 import { ENCRYPTION_UNLOCKED_EVENT } from '@/frontend/utils/encryptionLock';
 import { MODEL_CATALOG_CHANGED_EVENT } from '@/frontend/services/model';
+import { useInterval, useTimeout } from '@/frontend/hooks/timing';
 
 /** How often an open allowance display re-reads the cached snapshot; well
  * inside ALLOWANCE_MAX_AGE_MS so a shown reading never silently expires. */
@@ -16,6 +17,8 @@ interface AllowanceContextValue {
   snapshot: Snapshot | null; loading: boolean; failed: boolean; now: number;
   refresh(modelIds?: string[]): Promise<void>; ensureFresh(modelIds?: string[]): Promise<void>; observe(): () => void;
 }
+// Browsers run a timer at once when its delay does not fit in 32 bits.
+const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 const Context = createContext<AllowanceContextValue>({ snapshot: null, loading: false, failed: false, now: Date.now(), refresh: async () => {}, ensureFresh: async () => {}, observe: () => () => {} });
 export const useAllowance = () => useContext(Context);
 
@@ -89,24 +92,29 @@ export function AllowanceProvider({ children }: { children: ReactNode }) {
     observers.current += 1;
     return () => { observers.current -= 1; };
   }, []);
-  useEffect(() => {
-    // Background re-reads of the cached snapshot are silent and spaced out: the
-    // bars used to flash "Checking…" every 30 s and on every window focus (#1278).
-    const cached = () => {
-      if (observers.current > 0 && document.visibilityState !== 'hidden'
-        && Date.now() - lastLoadAt.current >= ALLOWANCE_FOCUS_REREAD_MS) void load(getSelectedWorkspace(), false, undefined, true);
-    };
-    const timer = setInterval(cached, ALLOWANCE_REREAD_INTERVAL_MS);
-    window.addEventListener('focus', cached);
-    document.addEventListener('visibilitychange', cached);
-    return () => { clearInterval(timer); window.removeEventListener('focus', cached); document.removeEventListener('visibilitychange', cached); };
+  // Background re-reads of the cached snapshot are silent and spaced out: the
+  // bars used to flash "Checking…" every 30 s and on every window focus (#1278).
+  const rereadCached = useCallback(() => {
+    if (observers.current > 0 && document.visibilityState !== 'hidden'
+      && Date.now() - lastLoadAt.current >= ALLOWANCE_FOCUS_REREAD_MS) void load(getSelectedWorkspace(), false, undefined, true);
   }, [load]);
+  useInterval(rereadCached, ALLOWANCE_REREAD_INTERVAL_MS);
   useEffect(() => {
+    window.addEventListener('focus', rereadCached);
+    document.addEventListener('visibilitychange', rereadCached);
+    return () => { window.removeEventListener('focus', rereadCached); document.removeEventListener('visibilitychange', rereadCached); };
+  }, [rereadCached]);
+  // `now` moves on when the next reset, retry or staleness deadline passes. It is set together
+  // with each snapshot, so the wait counts from it. Far deadlines wait in steps a timer can hold.
+  const nextDeadline = useMemo(() => {
     const deadlines = (snapshot?.models ?? []).flatMap(row => [row.observedAt ? Date.parse(row.observedAt) + ALLOWANCE_MAX_AGE_MS : NaN, row.retryAt ? Date.parse(row.retryAt) : NaN, ...row.windows.map(window => window.resetAt ? Date.parse(window.resetAt) : NaN)]).filter(deadline => Number.isFinite(deadline) && deadline > now);
-    if (!deadlines.length) return;
-    const timer = setTimeout(() => setNow(Date.now()), Math.max(1, Math.min(...deadlines) - Date.now() + 1));
-    return () => clearTimeout(timer);
+    return deadlines.length ? Math.min(...deadlines) : null;
   }, [snapshot, now]);
+  useTimeout(
+    () => setNow(Date.now()),
+    nextDeadline === null ? null : Math.min(Math.max(1, nextDeadline - now + 1), MAX_TIMER_DELAY_MS),
+    `${nextDeadline}:${now}`,
+  );
   const accountKey = useCallback((workspace: string, row: Snapshot['models'][number]) => workspace + ':' + (row.accountGroup ?? row.modelId), []);
   const refresh = useCallback((modelIds?: string[]) => {
     const workspace = getSelectedWorkspace();

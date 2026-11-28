@@ -46,6 +46,7 @@ import { getSelectedWorkspace } from '@/frontend/utils/workspaceSelection';
 import './PromptBuilder/promptBuilder.css';
 import { useI18n } from '@/frontend/contexts/I18nContext';
 import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
+import { useDebouncedValue, useLater } from '@/frontend/hooks/timing';
 
 export interface GlobalReferenceEditorRef {
   insertText: (text: string) => void;
@@ -627,48 +628,51 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
   useResetOnChange(remoteSearchApplies, (applies) => {
     if (!applies) setAsyncSuggestions([]);
   });
+  // Remote search starts once the query has stopped changing for 160 ms.
+  const remoteSearch = remoteSearchApplies && remoteQuery ? JSON.stringify([remoteQuery.scope, remoteQuery.query]) : null;
+  const settledRemoteSearch = useDebouncedValue(remoteSearch, 160);
   useEffect(() => {
-    if (!remoteSearchApplies || !activeCompletion) return;
-    const parsed = parseHitlistQuery(activeCompletion.query);
+    const parsed = remoteQuery;
+    if (!remoteSearch || settledRemoteSearch !== remoteSearch || !parsed) return;
     let cancelled = false;
-    const timer = window.setTimeout(() => {
-      if (parsed.scope === 'conversation') {
-        void chatService.listConversationPage({ limit: 50, search: parsed.query, dimension: 'content' })
-          .then((page) => page.items.map((conversation) => ({
-            kind: 'mention' as const,
-            server: '',
-            name: conversation.id,
-            label: conversation.title,
-            value: encodeDynamicReference('conversation', conversation.id),
-            description: conversation.id,
-            // The backend matched this query against message content. Preserve
-            // that match when the shared fuzzy filter ranks the returned rows.
-            searchText: parsed.query,
-            category: 'conversation' as const,
-          })))
-          .then((items) => { if (!cancelled) setAsyncSuggestions(items); })
-          .catch(() => { if (!cancelled) setAsyncSuggestions([]); });
-        return;
-      }
-      const roots = workspaceRoots?.length ? workspaceRoots : configuredRoots;
-      const params = new URLSearchParams({ q: parsed.query });
-      if (roots.length > 0) params.set('roots', JSON.stringify(roots));
-      void fetch(`/api/reference-search/files?${params.toString()}`)
-        .then((response) => response.ok ? response.json() : { items: [] })
-        .then((result) => (Array.isArray(result.items) ? result.items : []).map((item: { path: string; name: string; isDirectory: boolean }) => ({
+    if (parsed.scope === 'conversation') {
+      void chatService.listConversationPage({ limit: 50, search: parsed.query, dimension: 'content' })
+        .then((page) => page.items.map((conversation) => ({
           kind: 'mention' as const,
           server: '',
-          name: item.path,
-          label: item.name,
-          value: encodeDynamicReference(item.isDirectory ? 'folder' : 'file', item.path),
-          description: item.path,
-          category: item.isDirectory ? 'folder' as const : 'file' as const,
+          name: conversation.id,
+          label: conversation.title,
+          value: encodeDynamicReference('conversation', conversation.id),
+          description: conversation.id,
+          // The backend matched this query against message content. Preserve
+          // that match when the shared fuzzy filter ranks the returned rows.
+          searchText: parsed.query,
+          category: 'conversation' as const,
         })))
         .then((items) => { if (!cancelled) setAsyncSuggestions(items); })
         .catch(() => { if (!cancelled) setAsyncSuggestions([]); });
-    }, 160);
-    return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [activeCompletion?.mode, activeCompletion?.query, configuredRoots, enhancedHitlist, remoteSearchApplies, workspaceRoots]);
+      return () => { cancelled = true; };
+    }
+    const roots = workspaceRoots?.length ? workspaceRoots : configuredRoots;
+    const params = new URLSearchParams({ q: parsed.query });
+    if (roots.length > 0) params.set('roots', JSON.stringify(roots));
+    void (async () => {
+      const response = await fetch(`/api/reference-search/files?${params.toString()}`);
+      return response.ok ? response.json() : { items: [] };
+    })()
+      .then((result) => (Array.isArray(result.items) ? result.items : []).map((item: { path: string; name: string; isDirectory: boolean }) => ({
+        kind: 'mention' as const,
+        server: '',
+        name: item.path,
+        label: item.name,
+        value: encodeDynamicReference(item.isDirectory ? 'folder' : 'file', item.path),
+        description: item.path,
+        category: item.isDirectory ? 'folder' as const : 'file' as const,
+      })))
+      .then((items) => { if (!cancelled) setAsyncSuggestions(items); })
+      .catch(() => { if (!cancelled) setAsyncSuggestions([]); });
+    return () => { cancelled = true; };
+  }, [configuredRoots, remoteSearch, settledRemoteSearch, workspaceRoots]);
 
   const chooseSuggestion = useCallback((item: PromptReferenceSuggestion) => {
     if (!activeCompletion) return;
@@ -702,6 +706,7 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
     focus: safeFocus,
   }), [editor, onChange, safeFocus]);
 
+  const refocusLater = useLater();
   useEffect(() => {
     const current = serializeReferenceValue(editor.children as Descendant[]);
     const normalized = serializeReferenceValue(deserializeReferenceValue(value || ''));
@@ -716,15 +721,15 @@ const GlobalReferenceEditor = forwardRef<GlobalReferenceEditorRef, GlobalReferen
     if (!wasFocused) return;
     // Slate writes the DOM selection in a layout effect; refocus afterwards so the
     // caret is actually visible and the next keystroke lands in the editor.
-    const frame = requestAnimationFrame(() => {
+    refocusLater(() => {
       try {
         ReactEditor.focus(editor);
       } catch {
         /* editor unmounted or detached — nothing to focus */
       }
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [editor, value]);
+    }, 'frame');
+    return refocusLater.cancel;
+  }, [editor, refocusLater, value]);
 
   const handleChange = useCallback((nodes: Descendant[]) => {
     if (applyingExternalValue.current) {

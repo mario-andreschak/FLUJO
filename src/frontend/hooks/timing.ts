@@ -105,3 +105,75 @@ export function useDebouncedCallback<Args extends unknown[]>(
   useEffect(() => debounced.cancel, [debounced]);
   return debounced;
 }
+
+/** When a later call runs: after this many milliseconds, or on the next animation frame. */
+export type LaterDelay = number | 'frame';
+
+export interface Later {
+  /** Runs `callback` once after `delay`, replacing a call that is still pending. */
+  (callback: () => void, delay: LaterDelay): void;
+  /** Drops the pending call. */
+  cancel(): void;
+}
+
+function startLater(run: () => void, delay: LaterDelay): () => void {
+  if (delay === 'frame' && typeof requestAnimationFrame === 'function') {
+    const id = requestAnimationFrame(() => run());
+    return () => cancelAnimationFrame(id);
+  }
+  const id = setTimeout(run, delay === 'frame' ? 16 : delay);
+  return () => clearTimeout(id);
+}
+
+function createLater(): Later {
+  let stop: (() => void) | undefined;
+  const cancel = () => {
+    stop?.();
+    stop = undefined;
+  };
+  return Object.assign((callback: () => void, delay: LaterDelay) => {
+    cancel();
+    stop = startLater(() => {
+      stop = undefined;
+      callback();
+    }, delay);
+  }, { cancel });
+}
+
+/**
+ * Returns a stable function that runs one callback later, such as focusing a field on the next
+ * frame or hiding a "Copied" note. A new call replaces the pending one and unmounting drops it,
+ * so calls cannot pile up or outlive the component.
+ */
+export function useLater(): Later {
+  const later = useMemo(() => createLater(), []);
+  useEffect(() => later.cancel, [later]);
+  return later;
+}
+
+export interface FrameLoop {
+  /** Starts the loop, unless it already runs. */
+  start(): void;
+  stop(): void;
+}
+
+/**
+ * A paint loop for canvas animation: `tick(now)` runs on every animation frame until it returns
+ * false or `stop()` is called; `start()` resumes it. Its owner stops it when it unmounts.
+ */
+export function frameLoop(tick: (now: number) => boolean): FrameLoop {
+  let id = 0;
+  const frame = (now: number) => {
+    id = 0;
+    if (tick(now)) id = requestAnimationFrame(frame);
+  };
+  return {
+    start() {
+      if (!id) id = requestAnimationFrame(frame);
+    },
+    stop() {
+      if (id) cancelAnimationFrame(id);
+      id = 0;
+    },
+  };
+}

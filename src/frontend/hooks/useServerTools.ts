@@ -3,6 +3,7 @@ import { mcpService } from '@/frontend/services/mcp';
 import { createLogger } from '@/utils/logger';
 import type { MCPToolResponse } from '@/shared/types/mcp';
 import { useResetOnChange } from './useResetOnChange';
+import { useLater } from './timing';
 
 // Create a logger instance for this file
 const log = createLogger('frontend/hooks/useServerTools');
@@ -28,7 +29,7 @@ export function useServerTools(serverName: string | null) {
   const [toolsServerName, setToolsServerName] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
   const [isRetrying, setIsRetrying] = useState(false);
-  const retryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const retryLater = useLater();
   const toolsServerNameRef = useRef<string | null>(null);
   const selectedServerRef = useRef(serverName);
   const requestGenerationRef = useRef(0);
@@ -55,10 +56,7 @@ export function useServerTools(serverName: string | null) {
     return () => {
       mountedRef.current = false;
       requestGenerationRef.current += 1;
-      if (retryTimeoutRef.current) {
-        clearTimeout(retryTimeoutRef.current);
-        retryTimeoutRef.current = null;
-      }
+      retryLater.cancel();
     };
   }, []);
 
@@ -67,10 +65,7 @@ export function useServerTools(serverName: string | null) {
    * first; only the answer to the newest request is applied.
    */
   const fetchTools = useCallback((requestedServer: string, force: boolean) => {
-    if (retryTimeoutRef.current) {
-      clearTimeout(retryTimeoutRef.current);
-      retryTimeoutRef.current = null;
-    }
+    retryLater.cancel();
 
     const requestGeneration = requestGenerationRef.current + 1;
     requestGenerationRef.current = requestGeneration;
@@ -173,10 +168,7 @@ export function useServerTools(serverName: string | null) {
     const retryServerName = serverName;
     if (selectedServerRef.current !== retryServerName) return;
 
-    if (retryTimeoutRef.current) {
-      clearTimeout(retryTimeoutRef.current);
-      retryTimeoutRef.current = null;
-    }
+    retryLater.cancel();
 
     const retryGeneration = requestGenerationRef.current + 1;
     requestGenerationRef.current = retryGeneration;
@@ -185,8 +177,7 @@ export function useServerTools(serverName: string | null) {
     const backoff = Math.min(Math.pow(2, retryCount) * 1000, 10000);
     log.debug(`Retrying tool load for ${retryServerName} in ${backoff}ms (attempt ${retryCount + 1})`);
 
-    retryTimeoutRef.current = setTimeout(() => {
-      retryTimeoutRef.current = null;
+    retryLater(() => {
       const ownsRetry = (
         mountedRef.current
         && selectedServerRef.current === retryServerName
@@ -199,13 +190,8 @@ export function useServerTools(serverName: string | null) {
       void loadTools(true);
     }, backoff);
 
-    return () => {
-      if (retryTimeoutRef.current) {
-        clearTimeout(retryTimeoutRef.current);
-        retryTimeoutRef.current = null;
-      }
-    };
-  }, [serverName, retryCount, loadTools]);
+    return retryLater.cancel;
+  }, [serverName, retryCount, loadTools, retryLater]);
 
   /**
    * Test a tool with the specified parameters
@@ -261,10 +247,7 @@ export function useServerTools(serverName: string | null) {
     log.debug(`Server name changed to: ${serverName || 'null'}`);
 
     // Clear any existing retry timeout
-    if (retryTimeoutRef.current) {
-      clearTimeout(retryTimeoutRef.current);
-      retryTimeoutRef.current = null;
-    }
+    retryLater.cancel();
     toolsServerNameRef.current = null;
 
     if (serverName) {

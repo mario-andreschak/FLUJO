@@ -22,6 +22,7 @@ import '@flujo-ai/avatar-sdk/styles.css';
 import styles from './world.module.css';
 import { useBrowserValue } from '@/frontend/hooks/useBrowserValue';
 import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
+import { useInterval } from '@/frontend/hooks/timing';
 
 async function readWorld(): Promise<AvatarWorldSnapshot> {
   const response = await fetch('/api/avatar/world');
@@ -85,9 +86,8 @@ export default function AvatarWorld({ voiceTransport }: { voiceTransport?: Nativ
   }, []);
   useEffect(() => {
     void reload();
-    const interval = setInterval(() => { if (document.visibilityState === 'visible') void reload(); }, 15_000);
-    return () => clearInterval(interval);
   }, [reload]);
+  useInterval(() => { if (document.visibilityState === 'visible') void reload(); }, 15_000);
   const pageContext = async (): Promise<AskFlujoPageContext> => await panel.context() ?? {
     scopeId: `world:${getSelectedWorkspace()}`, pageType: 'generic', route: '/world', title: 'Flujo world',
     data: { locale, avatarStyle: avatar, activeIdentity: work.target, selectedPlace: place, world: await reload() ?? snapshot,

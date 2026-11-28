@@ -60,6 +60,7 @@ import EditingNotice from '@/frontend/components/shared/sharedEditing/EditingNot
 import EditConflictDialog from '@/frontend/components/shared/sharedEditing/EditConflictDialog';
 import ChangeHistoryDialog from '@/frontend/components/shared/sharedEditing/ChangeHistoryDialog';
 import { useResetOnChange } from '@/frontend/hooks/useResetOnChange';
+import { useInterval, useLater, useTimeout } from '@/frontend/hooks/timing';
 
 const discoveredModelMetadata = (model: NormalizedModel, changed = false): Partial<Model> => ({
   ...(changed || model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
@@ -126,7 +127,6 @@ export const ModelModal = ({ open, model, onSave, onClose, onReload }: ModelModa
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [catalogUnavailable, setCatalogUnavailable] = useState(false);
   const promptBuilderRef = useRef<PromptBuilderRef>(null);
-  const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const discoveryRequestIdRef = useRef(0);
   const currentProfile = getProviderProfile(formState.provider, formState.adapter);
   // Ollama ignores keys; like the guided setup, an empty key is stored as the placeholder "ollama".
@@ -161,6 +161,7 @@ export const ModelModal = ({ open, model, onSave, onClose, onReload }: ModelModa
     'maxTokens',
   ] as const, []);
 
+  const highlightLater = useLater();
   const highlightModelField = useCallback((field: string) => {
     const root = [...document.querySelectorAll('[data-ask-flujo-model-id]')]
       .find(element => element.getAttribute('data-ask-flujo-model-id') === model.id) ?? null;
@@ -195,9 +196,10 @@ export const ModelModal = ({ open, model, onSave, onClose, onReload }: ModelModa
       return { success: false, message: `${field} must be text.` };
     }
     setFormState(current => ({ ...current, [field]: action.value }));
-    window.requestAnimationFrame(() => highlightModelField(field));
+    // The field shows its new value on the next frame; highlight it then.
+    highlightLater(() => highlightModelField(field), 'frame');
     return { success: true, message: `Updated ${field} in the unsaved form. Review it, then Save.` };
-  }, [askEditableFields, highlightModelField]);
+  }, [askEditableFields, highlightLater, highlightModelField]);
 
   useAskFlujoPage({
     scopeId: `model:${model.id}`,
@@ -319,61 +321,25 @@ export const ModelModal = ({ open, model, onSave, onClose, onReload }: ModelModa
   // Load the complete catalogue once per modal/profile/endpoint/credential
   // identity. Typing filters the in-memory list locally and does not create a
   // provider request per keystroke.
-  useEffect(() => {
-    if (debounceTimeoutRef.current) {
-      clearTimeout(debounceTimeoutRef.current);
-    }
-
-    if (open && canDiscoverProviderModels && hasDiscoveryCredential) {
-      debounceTimeoutRef.current = setTimeout(() => {
-        log.debug('Automatic provider discovery triggered', {
-          baseUrl: formState.baseUrl,
-          profileId: currentProfile.id,
-        });
-        fetchModels(
-          formState.baseUrl ?? '',
-          undefined,
-          currentProfile.id,
-          discoveryCredential,
-        );
-      }, 100);
-    }
-
-    return () => {
-      if (debounceTimeoutRef.current) {
-        clearTimeout(debounceTimeoutRef.current);
-      }
-    };
-  }, [
-    open,
-    formState.baseUrl,
-    discoveryCredential,
-    isApiKeyBound,
-    boundToGlobalVar,
-    currentProfile.id,
-    canDiscoverProviderModels,
-    hasDiscoveryCredential,
-    fetchModels,
-  ]);
+  useTimeout(() => {
+    log.debug('Automatic provider discovery triggered', {
+      baseUrl: formState.baseUrl,
+      profileId: currentProfile.id,
+    });
+    fetchModels(
+      formState.baseUrl ?? '',
+      undefined,
+      currentProfile.id,
+      discoveryCredential,
+    );
+  }, open && canDiscoverProviderModels && hasDiscoveryCredential ? 100 : null, `${discoveryIdentity}:${model.id}`);
 
   // Refresh CLI catalogues while the editor is open.
-  useEffect(() => {
-    if (!open || !['codex', 'antigravity-cli'].includes(currentProfile.id)) return;
-    // Pick up account/catalogue changes and a completed background CLI update.
-    const interval = setInterval(() => {
-      fetchModels('', undefined, currentProfile.id, discoveryCredential);
-    }, 60_000);
-    return () => clearInterval(interval);
-  }, [open, currentProfile.id, discoveryCredential, fetchModels]);
-
-  // Cleanup timeout on component unmount
-  useEffect(() => {
-    return () => {
-      if (debounceTimeoutRef.current) {
-        clearTimeout(debounceTimeoutRef.current);
-      }
-    };
-  }, []);
+  // Pick up account/catalogue changes and a completed background CLI update.
+  useInterval(
+    () => fetchModels('', undefined, currentProfile.id, discoveryCredential),
+    open && ['codex', 'antigravity-cli'].includes(currentProfile.id) ? 60_000 : null,
+  );
 
   // Reset form when modal opens/closes or model changes
   const resetForm = () => {
