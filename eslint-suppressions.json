@@ -433,19 +433,6 @@
       "count": 1
     }
   },
-  "src/frontend/components/Chat/ChatMessages.tsx": {
-    "react-hooks/error-boundaries": {
-      "count": 2
-    }
-  },
-  "src/frontend/components/Chat/index.tsx": {
-    "react-hooks/immutability": {
-      "count": 3
-    },
-    "react-hooks/purity": {
-      "count": 3
-    }
-  },
   "src/frontend/components/ClientOnly.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1

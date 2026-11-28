@@ -569,6 +569,16 @@ const Chat: React.FC = () => {
   // small additive diff across a ~5100-line file. `error` (the plain string)
   // keeps driving any existing consumer; `errorInfo` feeds ChatErrorDetails.
   const [errorInfo, setErrorInfo] = useState<NormalizedChatError | null>(null);
+  // #216: the conversation-level docked MCP Apps canvas.
+  const [canvasState, setCanvasState] = useState<CanvasState>(emptyCanvasState);
+  const [canvasStateOwnerId, setCanvasStateOwnerId] = useState<string | null>(
+    currentConversationId,
+  );
+  const [canvasDockLayout, setCanvasDockLayout] = useState<CanvasDockLayout>({
+    placement: 'bottom',
+    reservedWidth: 0,
+    reservedHeight: 0,
+  });
   const [subflowRecoveryOptions, setSubflowRecoveryOptions] = useKeyedState<SubflowRecoveryOptions | null>(
     detailedConversation?.status === 'error' ? detailedConversation.id : null,
     null,
@@ -909,6 +919,13 @@ const Chat: React.FC = () => {
   // Refs
   const openaiRef = useRef<OpenAI | null>(null);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const stopPolling = () => {
+    if (pollingIntervalRef.current) {
+      log.debug('Stopping polling interval');
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+    }
+  };
   const eventSourceRef = useRef<EventSource | null>(null);
   const eventStreamGenerationRef = useRef(0);
   // After the server resets a stream, reconnect a few seconds later from this position.
@@ -3024,6 +3041,9 @@ const Chat: React.FC = () => {
     },
   ) => {
     if (!content.trim() && attachments.length === 0) return;
+    // One time for everything this send creates (steering, queued or new message).
+    // eslint-disable-next-line react-hooks/purity -- this handler runs only when a message is sent; the compiler cannot follow this long handler and treats it as render code
+    const sentAt = Date.now();
     if (!detailedConversation) {
        log.error("Cannot send message, detailed conversation not loaded.");
        setError(t('chat.page.detailsMissing'));
@@ -3061,7 +3081,7 @@ const Chat: React.FC = () => {
             id: messageId,
             role: 'user',
             content,
-            timestamp: Date.now(),
+            timestamp: sentAt,
           };
           updateDetailedConversationState({
             ...detailedConversation,
@@ -3084,7 +3104,7 @@ const Chat: React.FC = () => {
           // Capture the one-shot node pick now so it applies only to THIS message.
           nodeOverride: nodeOverride ?? null,
           mcpSkillSelections: selectedMcpSkillSelections,
-          timestamp: Date.now(),
+          timestamp: sentAt,
         };
         setQueuedMessages(prev => enqueueMsg(prev, convId, queued));
         setNodeOverride(null);
@@ -3172,7 +3192,7 @@ const Chat: React.FC = () => {
       id: uuidv4(),
       role: 'user',
       content,
-      timestamp: Date.now(),
+      timestamp: sentAt,
       attachments: attachments.length > 0 ? attachments : undefined,
       processNodeId: nodeIdToAssign // Assign the determined processNodeId
     };
@@ -3412,14 +3432,6 @@ const Chat: React.FC = () => {
 
 
   // Function to stop polling (legacy interval; live updates now use SSE)
-  const stopPolling = () => {
-    if (pollingIntervalRef.current) {
-      log.debug('Stopping polling interval');
-      clearInterval(pollingIntervalRef.current);
-      pollingIntervalRef.current = null;
-    }
-  };
-
   // The live event stream is opened imperatively at run start (see
   // sendToChatCompletions / debug handlers) so it is connected before events
   // are emitted. Here we only ensure it is torn down when the component unmounts.
@@ -3770,7 +3782,7 @@ const Chat: React.FC = () => {
   // #97: stable MCP App -> conversation return channels. ui/message starts a
   // follow-up user turn. ui/update-model-context is deliberately separate: it
   // only replaces that app's wire context for a future turn.
-  const handleSendMessageRef = useRef(handleSendMessage);
+  const handleSendMessageRef = useRef<typeof handleSendMessage | null>(null);
   useLayoutEffect(() => { handleSendMessageRef.current = handleSendMessage; });
   useEffect(() => {
     const listener = (event: Event) => {
@@ -3780,8 +3792,10 @@ const Chat: React.FC = () => {
         emitBigTutorialEvent({ type: 'chat-run-status', conversationId, status: 'error' });
         return;
       }
+      const send = handleSendMessageRef.current;
+      if (!send) return;
       emitBigTutorialEvent({ type: 'chat-run-status', conversationId, status: 'running' });
-      void handleSendMessageRef.current(message).catch(() => {
+      void send(message).catch(() => {
         emitBigTutorialEvent({ type: 'chat-run-status', conversationId, status: 'error' });
       });
     };
@@ -3794,7 +3808,9 @@ const Chat: React.FC = () => {
       !appCallbackConversationId
       || currentConversationIdRef.current !== appCallbackConversationId
     ) return false;
-    void handleSendMessageRef.current(text);
+    const send = handleSendMessageRef.current;
+    if (!send) return false;
+    void send(text);
     return true;
   }, [appCallbackConversationId]);
   const handleAppModelContext = useCallback((
@@ -3827,15 +3843,7 @@ const Chat: React.FC = () => {
   }, [appCallbackConversationId]);
 
   // --- #216: conversation-level docked MCP Apps canvas ---------------------
-  const [canvasState, setCanvasState] = useState<CanvasState>(emptyCanvasState);
-  const [canvasStateOwnerId, setCanvasStateOwnerId] = useState<string | null>(
-    currentConversationId,
-  );
-  const [canvasDockLayout, setCanvasDockLayout] = useState<CanvasDockLayout>({
-    placement: 'bottom',
-    reservedWidth: 0,
-    reservedHeight: 0,
-  });
+  // (its state is declared with the other screen state above)
   const handleCanvasLayoutChange = useCallback((next: CanvasDockLayout) => {
     setCanvasDockLayout((current) => (
       current.placement === next.placement
@@ -4001,6 +4009,7 @@ const Chat: React.FC = () => {
       }
     }
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- updateCanvasApp stamps each refreshed View with the current time, which rendering may not read
     setCanvasState((prev) => {
       let next = prev;
       for (const key of next.order) {
@@ -4997,7 +5006,8 @@ const Chat: React.FC = () => {
   });
   useTimeout(() => {
     const convId = currentConversationId;
-    if (!convId || !queueHead || !queueDrainable) return;
+    const send = handleSendMessageRef.current;
+    if (!convId || !queueHead || !queueDrainable || !send) return;
     setQueueDraining(true);
     // Non-lossy drain (#221): peek the head first; only remove it from the queue
     // AFTER the send has committed the optimistic bubble. On failure, re-enqueue
@@ -5009,7 +5019,7 @@ const Chat: React.FC = () => {
         // bubble disappears from the "synthetic" layer and gets promoted to a
         // real optimistic bubble inside handleSendMessage.
         setQueuedMessages(prev => removeQueuedMsg(prev, convId, capturedHead.id));
-        await handleSendMessage(capturedHead.content, capturedHead.attachments, {
+        await send(capturedHead.content, capturedHead.attachments, {
           fromQueue: true,
           nodeOverride: capturedHead.nodeOverride,
           queuedId: capturedHead.id,

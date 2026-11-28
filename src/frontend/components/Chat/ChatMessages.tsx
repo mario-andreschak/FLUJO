@@ -557,6 +557,15 @@ const ProgressiveStructuredResult: React.FC<{ content: string }> = ({ content })
  * Small results keep the rich MCP renderer. Large results are parsed and
  * paginated in a worker so React never constructs the complete object tree.
  */
+/** Parses a tool result once, so drawing it never happens inside a try/catch. */
+function parseToolResult(content: string): { json: true; value: unknown } | { json: false } {
+  try {
+    return { json: true, value: JSON.parse(content) };
+  } catch {
+    return { json: false };
+  }
+}
+
 const ToolResultView: React.FC<{ content: unknown; showRaw: boolean }> = ({ content, showRaw }) => {
   if (typeof content !== 'string') {
     return (
@@ -572,48 +581,47 @@ const ToolResultView: React.FC<{ content: unknown; showRaw: boolean }> = ({ cont
   }
   if (showRaw) return <Box component="pre" sx={{ ...resultPreSx, maxHeight: '300px' }}>{content}</Box>;
 
+  const parsed = parseToolResult(content);
+  const parsedRecord = parsed.json ? asRecord(parsed.value) : undefined;
   return (
     <Box sx={{ width: '100%', minWidth: 0, maxHeight: '560px', overflow: 'auto' }}>
       {(() => {
-        try {
-          const parsedContent: unknown = JSON.parse(content);
-          const parsedRecord = asRecord(parsedContent);
-          if (Array.isArray(parsedRecord?.content)) {
-            return (
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                {parsedRecord.content.map((item, index) => {
-                  const itemRecord = asRecord(item);
-                  const itemType = typeof itemRecord?.type === 'string' ? itemRecord.type : 'unknown';
-                  const itemData = typeof itemRecord?.data === 'string' ? itemRecord.data : undefined;
-                  const itemMimeType = typeof itemRecord?.mimeType === 'string' ? itemRecord.mimeType : undefined;
-                  if (itemType === 'text' && typeof itemRecord?.text === 'string') {
-                    return <ReactMarkdown key={index} remarkPlugins={[remarkGfm]} components={MARKDOWN_LINK_COMPONENTS}>{itemRecord.text}</ReactMarkdown>;
-                  }
-                  if (itemType === 'image' && itemData && itemMimeType) {
-                    return (
-                      // eslint-disable-next-line @next/next/no-img-element -- tool images are data URLs, which the Next image optimizer does not support
-                      <img key={index} src={`data:${itemMimeType};base64,${itemData}`} alt={`Tool Result Image ${index + 1}`} style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', marginTop: '8px' }} />
-                    );
-                  }
-                  if (itemType === 'audio' && itemData && itemMimeType) {
-                    return <audio key={index} controls src={`data:${itemMimeType};base64,${itemData}`} style={{ width: '100%', marginTop: '8px' }} />;
-                  }
-                  if (itemType === 'video' && itemData && itemMimeType) {
-                    return <video key={index} controls src={`data:${itemMimeType};base64,${itemData}`} style={{ maxWidth: '100%', maxHeight: '560px', marginTop: '8px' }} />;
-                  }
-                  return (
-                    <Box key={index} component="pre" sx={resultPreSx}>
-                      {`Unsupported content type: ${itemType}\n${JSON.stringify(item, null, 2)}`}
-                    </Box>
-                  );
-                })}
-              </Box>
-            );
-          }
-          return <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN_LINK_COMPONENTS}>{'```json\n' + JSON.stringify(parsedContent, null, 2) + '\n```'}</ReactMarkdown>;
-        } catch {
+        if (!parsed.json) {
           return <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN_LINK_COMPONENTS}>{content}</ReactMarkdown>;
         }
+        if (Array.isArray(parsedRecord?.content)) {
+          return (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+              {parsedRecord.content.map((item, index) => {
+                const itemRecord = asRecord(item);
+                const itemType = typeof itemRecord?.type === 'string' ? itemRecord.type : 'unknown';
+                const itemData = typeof itemRecord?.data === 'string' ? itemRecord.data : undefined;
+                const itemMimeType = typeof itemRecord?.mimeType === 'string' ? itemRecord.mimeType : undefined;
+                if (itemType === 'text' && typeof itemRecord?.text === 'string') {
+                  return <ReactMarkdown key={index} remarkPlugins={[remarkGfm]} components={MARKDOWN_LINK_COMPONENTS}>{itemRecord.text}</ReactMarkdown>;
+                }
+                if (itemType === 'image' && itemData && itemMimeType) {
+                  return (
+                    // eslint-disable-next-line @next/next/no-img-element -- tool images are data URLs, which the Next image optimizer does not support
+                    <img key={index} src={`data:${itemMimeType};base64,${itemData}`} alt={`Tool Result Image ${index + 1}`} style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', marginTop: '8px' }} />
+                  );
+                }
+                if (itemType === 'audio' && itemData && itemMimeType) {
+                  return <audio key={index} controls src={`data:${itemMimeType};base64,${itemData}`} style={{ width: '100%', marginTop: '8px' }} />;
+                }
+                if (itemType === 'video' && itemData && itemMimeType) {
+                  return <video key={index} controls src={`data:${itemMimeType};base64,${itemData}`} style={{ maxWidth: '100%', maxHeight: '560px', marginTop: '8px' }} />;
+                }
+                return (
+                  <Box key={index} component="pre" sx={resultPreSx}>
+                    {`Unsupported content type: ${itemType}\n${JSON.stringify(item, null, 2)}`}
+                  </Box>
+                );
+              })}
+            </Box>
+          );
+        }
+        return <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN_LINK_COMPONENTS}>{'```json\n' + JSON.stringify(parsed.value, null, 2) + '\n```'}</ReactMarkdown>;
       })()}
     </Box>
   );
