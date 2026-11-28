@@ -1,4 +1,5 @@
 import { flowService } from '@/backend/services/flow';
+import { rewriteSavedFlow } from '@/backend/services/flow/flowRewrite';
 import {
   PersonaDomainBusyError,
   PersonaDomainConflictError,
@@ -15,6 +16,7 @@ import { getPersonaDeletionTombstone, listPersonas } from '@/backend/services/en
 import { withAutomationStarter } from '@/backend/services/accounts/automationStarter';
 import { recordChange, type SharedEditor } from '@/backend/services/sharedItems/guard';
 import type { Flow } from '@/shared/types/flow';
+import { planAnswersEvery } from '@/shared/types/deletePlan';
 import {
   FLOW_IN_USE_CODE,
   type FlowAutomationRole,
@@ -195,14 +197,6 @@ export function flowInUseBody(usage: FlowUsage, changed = false) {
   };
 }
 
-/** A plan answer that no longer fits the places, so the person must look again. */
-function answersFit(usage: FlowUsage, plan: FlowDeletePlan): boolean {
-  return usage.uses.every((use) => {
-    const choice = plan.choices[use.key];
-    return Boolean(choice) && ('replaceWith' in choice || use.canRemove);
-  });
-}
-
 async function checkReplacements(usage: FlowUsage, plan: FlowDeletePlan): Promise<string | null> {
   for (const use of usage.uses) {
     const choice = plan.choices[use.key];
@@ -275,32 +269,6 @@ function rewriteSubflowSteps(parent: Flow, flowId: string, choice: FlowUseChoice
   };
 }
 
-async function switchSubflowParent(
-  parentId: string,
-  flowId: string,
-  choice: FlowUseChoice,
-  editor: SharedEditor | null,
-): Promise<string | null> {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const parent = await flowService.getFlow(parentId);
-    if (!parent || !parent.nodes.some((node) => subflowStepTargets(node).includes(flowId))) return null;
-    const before = structuredClone(parent);
-    const next = rewriteSubflowSteps(structuredClone(parent), flowId, choice);
-    const result = await flowService.saveFlow(
-      next,
-      typeof parent.updatedAt === 'number' ? { expectedUpdatedAt: parent.updatedAt } : {},
-    );
-    if (result.success) {
-      await recordChange(editor, { kind: 'flow', itemId: parentId, action: 'saved', before, after: next });
-      return null;
-    }
-    if (result.error !== 'Flow changed since inspection.') {
-      return `Could not change flow "${parent.name}": ${result.error ?? 'unknown error'}.`;
-    }
-  }
-  return 'Another save kept changing a flow that calls this one. Try again in a moment.';
-}
-
 function notDeleted(reason: string): string {
   return `${reason} The flow was not deleted. Places that were already switched stay switched.`;
 }
@@ -346,7 +314,7 @@ export async function deleteFlowAndMoveUses(
   if (!usage) return { status: 'not-found' };
   if (usage.uses.length > 0 && !plan) return { status: 'in-use', usage, changed: false };
   const effectivePlan: FlowDeletePlan = plan ?? { choices: {} };
-  if (!answersFit(usage, effectivePlan)) return { status: 'in-use', usage, changed: true };
+  if (!planAnswersEvery(usage.uses, effectivePlan)) return { status: 'in-use', usage, changed: true };
   const replacementError = await checkReplacements(usage, effectivePlan);
   if (replacementError) return { status: 'refused', error: replacementError };
 
@@ -391,7 +359,13 @@ export async function deleteFlowAndMoveUses(
 
   for (const use of usage.uses) {
     if (use.place.kind !== 'subflow') continue;
-    const error = await switchSubflowParent(use.place.flowId, flowId, effectivePlan.choices[use.key], editor);
+    const choice = effectivePlan.choices[use.key];
+    const error = await rewriteSavedFlow(
+      use.place.flowId,
+      (parent) => parent.nodes.some((node) => subflowStepTargets(node).includes(flowId)),
+      (parent) => rewriteSubflowSteps(parent, flowId, choice),
+      editor,
+    );
     if (error) return { status: 'refused', error: notDeleted(error) };
     summary.flows.push(use.place.flowName);
   }

@@ -1268,7 +1268,7 @@ describe('installPackage — public identity and credential boundary', () => {
       entities: { flows: { f: 'unowned-flow' }, models: {}, servers: [], plannedExecutions: [] } } });
     store.set('package_installs', inherited);
     expect(await getLastInstallSummary('inherited')).toBeNull();
-    expect(await inspectPackageUninstall('inherited')).toEqual({ exists: false, requiresPersonaControl: false });
+    expect(await inspectPackageUninstall('inherited')).toEqual({ exists: false, requiresPersonaControl: false, answersTouchPersonaAutomations: false });
     expect(await uninstallPackage('inherited')).toMatchObject({ ok: true, removed: [], skipped: [], errors: [] });
     expect(schedulerGetMock).not.toHaveBeenCalled();
     expect(store.get('package_installs')).toBe(inherited);

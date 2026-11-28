@@ -3,22 +3,54 @@ import path from 'node:path';
 
 /**
  * Issue #1389: only the flow page's route checked whether a Persona still used
- * a flow, and the MCP `delete_flow` tool deleted it anyway. A deleted flow that
- * a Persona, automation or other flow still uses leaves it pointing at nothing.
- * Server code deletes a flow a person or agent picked only through
- * `deleteFlowAndMoveUses` (src/backend/services/flow/flowDeletion.ts), which
- * moves every place first. The raw `flowService.deleteFlow` stays for the
- * places below, each of which removes a flow nothing else can know about yet.
+ * a flow, the MCP `delete_flow` tool deleted it anyway, deleting a Connected
+ * App (MCP server) never checked at all, and package uninstall deleted both
+ * without asking. Something deleted while a Persona, automation or flow still
+ * uses it leaves that place pointing at nothing.
+ *
+ * Server code deletes a flow only through `deleteFlowAndMoveUses`
+ * (src/backend/services/flow/flowDeletion.ts) and a Connected App only through
+ * `deleteMcpServerAndMoveUses` (src/backend/services/mcp/serverDeletion.ts),
+ * which move every place first. The raw removals stay for the places below,
+ * each of which removes something nothing else can know about yet.
  */
 const SERVER_ROOTS = ['backend', 'app'].map((dir) => path.join(process.cwd(), 'src', dir));
-const RAW_DELETE = /\bflowService\.deleteFlow\(|\bthis\.deleteFlow\(/;
 
-const ALLOWED: Readonly<Record<string, string>> = {
-  'src/backend/services/flow/flowDeletion.ts': 'the one entry: moves every place, then deletes',
-  'src/backend/services/flow/index.ts': 'rolls back a child flow it created a moment earlier',
-  'src/backend/services/enduringAgents/personaComposition.ts': 'rolls back a Persona copy it created a moment earlier',
-  'src/backend/services/packages/installPackage.ts': 'uninstall removes the flows the package itself created',
-};
+interface RawDelete {
+  what: string;
+  pattern: RegExp;
+  /** Files that import the raw service, or live beside it. */
+  reaches: (relative: string, text: string) => boolean;
+  entry: string;
+  allowed: Readonly<Record<string, string>>;
+}
+
+const RAW_DELETES: readonly RawDelete[] = [
+  {
+    what: 'flow',
+    pattern: /\bflowService\.deleteFlow\(|\bthis\.deleteFlow\(/,
+    // Client pages call the browser flow service, which goes through the API route.
+    reaches: (relative, text) => text.includes("from '@/backend/services/flow'") || relative.startsWith('src/backend/services/flow/'),
+    entry: 'deleteFlowAndMoveUses (src/backend/services/flow/flowDeletion.ts)',
+    allowed: {
+      'src/backend/services/flow/flowDeletion.ts': 'the one entry: moves every place, then deletes',
+      'src/backend/services/flow/index.ts': 'rolls back a child flow it created a moment earlier',
+      'src/backend/services/enduringAgents/personaComposition.ts': 'rolls back a Persona copy it created a moment earlier',
+    },
+  },
+  {
+    what: 'Connected App',
+    pattern: /\.deleteServerConfig\(/,
+    // Client pages call the browser MCP service, which goes through the API route.
+    reaches: (relative, text) => text.includes("from '@/backend/services/mcp'") || relative.startsWith('src/backend/services/mcp/'),
+    entry: 'deleteMcpServerAndMoveUses (src/backend/services/mcp/serverDeletion.ts)',
+    allowed: {
+      'src/backend/services/mcp/serverDeletion.ts': 'the one entry: moves every place, then deletes',
+      'src/backend/services/mcp/directInstall.ts': 'rolls back a server it saved a moment earlier that offers no tools',
+      'src/backend/services/mcp/registryInstall.ts': 'rolls back a server it installed a moment earlier that offers no tools',
+    },
+  },
+];
 
 function sourceFiles(dir: string): string[] {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -28,26 +60,27 @@ function sourceFiles(dir: string): string[] {
   });
 }
 
-describe('one way to delete a flow someone picked', () => {
-  it('server code deletes flows only through deleteFlowAndMoveUses', () => {
-    const offenders = SERVER_ROOTS.flatMap(sourceFiles).flatMap((file) => {
-      const relative = path.relative(process.cwd(), file).split(path.sep).join('/');
-      if (ALLOWED[relative]) return [];
-      const text = fs.readFileSync(file, 'utf8');
-      // Client pages call the browser flow service, which goes through the API route.
-      if (!text.includes("from '@/backend/services/flow'") && !relative.startsWith('src/backend/services/flow/')) return [];
-      return text.split(/\r?\n/).flatMap((line, index) => (RAW_DELETE.test(line)
+const files = SERVER_ROOTS.flatMap(sourceFiles).map((file) => ({
+  relative: path.relative(process.cwd(), file).split(path.sep).join('/'),
+  text: fs.readFileSync(file, 'utf8'),
+}));
+
+describe.each(RAW_DELETES)('one way to delete a $what someone picked', (rule) => {
+  it(`server code deletes a ${rule.what} only through its checked entry`, () => {
+    const offenders = files.flatMap(({ relative, text }) => {
+      if (rule.allowed[relative] || !rule.reaches(relative, text)) return [];
+      return text.split(/\r?\n/).flatMap((line, index) => (rule.pattern.test(line)
         ? [`${relative}:${index + 1}: ${line.trim()}`]
         : []));
     });
     if (offenders.length > 0) {
-      throw new Error('Delete a flow with deleteFlowAndMoveUses (src/backend/services/flow/flowDeletion.ts) so '
-        + `Personas, automations and other flows that use it are moved first:\n${offenders.join('\n')}`);
+      throw new Error(`Delete a ${rule.what} with ${rule.entry} so `
+        + `Personas, automations and flows that use it are moved first:\n${offenders.join('\n')}`);
     }
   });
 
-  it('every allowed file still deletes flows, so the list only shrinks', () => {
-    const stale = Object.keys(ALLOWED).filter((file) => !RAW_DELETE.test(fs.readFileSync(path.join(process.cwd(), file), 'utf8')));
+  it('every allowed file still uses the raw delete, so the list only shrinks', () => {
+    const stale = Object.keys(rule.allowed).filter((file) => !rule.pattern.test(fs.readFileSync(path.join(process.cwd(), file), 'utf8')));
     expect(stale).toEqual([]);
   });
 });

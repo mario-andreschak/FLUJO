@@ -435,7 +435,7 @@ const CURATED_GROUPS: ApiGroup[] = [
         alsoMethods: ['PUT', 'DELETE'],
         path: '/api/mcp/servers/{name}',
         summary:
-          'GET / PUT / DELETE a server config. PUT merges fields; toggling disabled connects/disconnects; a new name triggers a validated rename.',
+          'GET / PUT / DELETE a server config. PUT merges fields; toggling disabled connects/disconnects; a new name triggers a validated rename. DELETE answers 409 MCP_SERVER_IN_USE with every flow, Persona and automation that uses the server; send { plan: { choices: { [place key]: { replaceWith } | { remove: true } } } } to switch or release them first.',
       },
       {
         method: 'GET',

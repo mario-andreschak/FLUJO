@@ -13,10 +13,15 @@ jest.mock('@/backend/utils/resolveDynamicReferences', () => ({
   applyPresetArguments: jest.fn(async (value: unknown) => value),
 }));
 jest.mock('@/backend/services/flow', () => ({
-  flowService: { migrateMcpServerReferences: jest.fn(async () => ({ success: true, migratedFlows: 0, migratedReferences: 0 })) },
+  flowService: {
+    migrateMcpServerReferences: jest.fn(async () => ({ success: true, migratedFlows: 0, migratedReferences: 0 })),
+    loadFlows: async () => [],
+  },
 }));
 const store: Record<string, unknown> = {};
 jest.mock('@/utils/storage/backend', () => ({
+  // No Personas: deleting a server looks for Personas that use it.
+  listCollectionItems: jest.fn(async () => []),
   saveItem: jest.fn(async (key: string, value: unknown) => { store[key] = value; }),
   loadItem: jest.fn(async (key: string, fallback: unknown) => (key in store ? store[key] : fallback)),
 }));

@@ -2,4 +2,5 @@
 
 Enforced by:
 - `deleteFlowAndMoveUses` in `src/backend/services/flow/flowDeletion.ts`
+- `uninstallPackage` in `src/backend/services/packages/installPackage.ts` (package flows go through it too)
 - `__tests__/architecture/flowDeleteSingleEntry.test.ts` (its allowed list only shrinks), `__tests__/flow/flowDeleteInUse.test.ts`

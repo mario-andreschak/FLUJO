@@ -16,6 +16,7 @@ import {
   type ReplacePersonaAppGrantInput,
 } from '@/shared/types/enduringAgent';
 import type { MCPServerConfig } from '@/shared/types/mcp';
+import type { UseChoice } from '@/shared/types/deletePlan';
 
 import {
   PersonaDomainConflictError,
@@ -308,5 +309,78 @@ export async function authorizePersonaAppLaunch(
       mcpServerName: grant.mcpServerName,
       uri: input.uri,
     };
+  });
+}
+
+/** Whether a Persona uses one Connected App: an app grant, or its own list of selected apps. */
+export function personaUsesApp(
+  persona: Pick<Persona, 'composition'>,
+  grants: readonly Pick<PersonaAppGrant, 'mcpServerName'>[],
+  mcpServerName: string,
+): boolean {
+  return grants.some((grant) => grant.mcpServerName === mcpServerName)
+    || (persona.composition?.appRefs ?? []).includes(mcpServerName);
+}
+
+function swapAppRef(refs: readonly string[], mcpServerName: string, replacement: string | null): string[] {
+  return Array.from(new Set(refs.flatMap((ref) => (
+    ref !== mcpServerName ? [ref] : replacement ? [replacement] : []
+  ))));
+}
+
+/**
+ * Let a Persona give up one Connected App before the app is deleted (#1389):
+ * switch to another app with the same tool choices, or take the app away. The
+ * new grant is written first, then the Persona's selection, and the old grant
+ * is removed last. Each step can run again, so a stop part-way is finished by
+ * the next delete and the Persona never points at an app that is gone.
+ */
+export async function releasePersonaApp(
+  personaId: string,
+  mcpServerName: string,
+  choice: UseChoice,
+): Promise<{ changed: boolean }> {
+  return withPersonaRuntimeLock(personaId, async (lock) => {
+    const persona = await getPersona(personaId);
+    if (!persona || await getPersonaDeletionTombstone(personaId)) return { changed: false };
+    const grants = await listPersonaAppGrants(personaId);
+    if (!personaUsesApp(persona, grants, mcpServerName)) return { changed: false };
+    const replacement = 'replaceWith' in choice ? choice.replaceWith : null;
+    const old = grants.find((grant) => grant.mcpServerName === mcpServerName);
+
+    if (replacement && !grants.some((grant) => grant.mcpServerName === replacement)) {
+      const now = Math.max(Date.now(), (old?.updatedAt ?? 0) + 1);
+      await createPersonaAppGrant(PersonaAppGrantSchema.parse({
+        schemaVersion: ENDURING_AGENT_SCHEMA_VERSION,
+        id: personaAppGrantId(personaId, replacement),
+        personaId,
+        mcpServerName: replacement,
+        ...(old?.enabledTools !== undefined ? { enabledTools: old.enabledTools } : {}),
+        ...(old?.toolParameterPresets !== undefined ? { toolParameterPresets: old.toolParameterPresets } : {}),
+        createdAt: now,
+        updatedAt: now,
+      }));
+    }
+
+    const composition = persona.composition;
+    const appRefs = composition?.appRefs;
+    const suggested = composition?.role?.suggestedAppRefs;
+    const selectionChanges = appRefs?.includes(mcpServerName) || suggested?.includes(mcpServerName);
+    if (composition && selectionChanges) {
+      await updatePersonaWithinRuntimeLock(PersonaSchema.parse({
+        ...persona,
+        composition: {
+          ...composition,
+          ...(appRefs ? { appRefs: swapAppRef(appRefs, mcpServerName, replacement) } : {}),
+          ...(composition.role && suggested
+            ? { role: { ...composition.role, suggestedAppRefs: swapAppRef(suggested, mcpServerName, replacement) } }
+            : {}),
+        },
+        updatedAt: Math.max(Date.now(), persona.updatedAt + 1),
+      }), lock);
+    }
+
+    if (old) await deletePersonaAppGrantRecord(old.id);
+    return { changed: true };
   });
 }
