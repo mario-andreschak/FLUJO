@@ -307,13 +307,16 @@ describe('execution ordering with real graph and loopback SDK dispatch', () => {
     const result = await runFlow(input(conversationId));
     expect(result.status).toBe('completed');
     expect(result.outputText).toBe('fixture answer');
+    // Step boundaries without a tool and a successful end go to the event log
+    // and are written by the final save after run:done (#1408).
     expectOrdered(conversationId, [
-      'event:run:start', 'event:recovery:running',
-      'event:checkpoint:node:before', 'durable-checkpoint:node:before', 'snapshot:node:before:running', 'step:start',
+      'snapshot:none:running', 'event:run:start', 'event:recovery:running',
+      'event:checkpoint:node:before', 'step:start',
       'event:checkpoint:node:after', 'step:process', 'archive:process', 'event:model:dispatch', 'http:process',
       'archive-outcome:completed', 'event:checkpoint:node:after',
-      'event:recovery:completed', 'snapshot:node:after:completed', 'event:run:done',
+      'event:recovery:completed', 'event:run:done', 'durable-checkpoint:node:after', 'snapshot:node:after:completed',
     ]);
+    expect(operations(conversationId)).not.toContain('durable-checkpoint:node:before');
     expect(operations(conversationId).filter(operation => operation === 'http:process')).toHaveLength(1);
     const snapshot = await loadItem<SharedState | undefined>(`conversations/${conversationId}` as StorageKey, undefined);
     expect(snapshot?.status).toBe('completed');
@@ -510,8 +513,8 @@ describe('execution ordering with real graph and loopback SDK dispatch', () => {
     expect(childSnapshot?.recovery?.classification).toBe('completed');
     // Subflow's custom emitter translates run events onto the parent channel;
     // the child's own committed snapshots still delimit its real dispatch.
-    expectOrdered(childId, ['durable-checkpoint:node:before', 'snapshot:node:before:running',
-      'archive:process', 'http:process', 'archive-outcome:completed', 'snapshot:node:after:completed']);
+    expectOrdered(childId, ['snapshot:none:running',
+      'archive:process', 'http:process', 'archive-outcome:completed', 'durable-checkpoint:node:after', 'snapshot:node:after:completed']);
     const globalMilestones = observations.filter(entry =>
       entry.operation === 'step:subflow' || entry.operation === 'http:process' || entry.operation === 'event:run:done'
       || entry.operation === 'event:subflow:start' || entry.operation === 'event:subflow:done');

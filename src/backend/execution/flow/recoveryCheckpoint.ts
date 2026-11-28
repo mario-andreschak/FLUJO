@@ -18,6 +18,9 @@ import { persistConversationState } from './persistConversationState';
 import { mayDeferConversationSave } from './lowLatencySaves';
 import { parseRetryAfterMs } from './retryAfter';
 import { traceSpan } from './turnTrace';
+import { createLogger } from '@/utils/logger';
+
+const log = createLogger('backend/execution/flow/recoveryCheckpoint');
 
 // Route bundles and hot reloads in one process must agree on the recovery owner.
 const recoveryRuntime = globalThis as typeof globalThis & { __flujoRecoveryOwnerId?: string };
@@ -191,6 +194,21 @@ async function persistRecoveryEvent(
     }
     await publication(() => persistConversationState(storageKey, state));
   });
+}
+
+/**
+ * A run's full save outside a checkpoint: a pause, a subflow return or the
+ * final save. Step boundaries may still be only in the event log's queue
+ * (#1408), so it waits for the log first and the snapshot never names a
+ * checkpoint the log does not have. A failed append belongs to the write that
+ * made it and never blocks the snapshot.
+ */
+export async function persistRunSnapshot(storageKey: StorageKey, state: SharedState): Promise<void> {
+  if (state.conversationId && !state.ephemeral) {
+    try { await flushConversationLog(state.conversationId); }
+    catch (error) { log.warn(`Saving ${state.conversationId} after an unacknowledged log append`, { error }); }
+  }
+  await persistConversationState(storageKey, state);
 }
 
 export async function commitRecoveryCheckpoint(

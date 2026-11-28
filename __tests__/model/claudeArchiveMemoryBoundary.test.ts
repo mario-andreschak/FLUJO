@@ -116,11 +116,9 @@ beforeEach(async () => {
 
 afterEach(async () => {
   const errors: unknown[] = [];
+  // The adapter answers without waiting for Claude Code to exit (#1096). Each
+  // bridge must still exit by itself within its 15-second bound above.
   for (const child of children) {
-    if (child.process.exitCode === null && child.process.signalCode === null) {
-      uncertain = true;
-      child.process.kill('SIGKILL');
-    }
     try { await child.drained; } catch (error) { errors.push(error); }
   }
   const pressure = getArchiveWritePressure();

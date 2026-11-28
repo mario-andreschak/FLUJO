@@ -671,18 +671,12 @@ describe('Flow run admission at the public execution boundary', () => {
     const previousSave = save.getMockImplementation()!;
     let terminalAttempts = 0;
     let settled = false;
-    let recoveryReceipt: SharedState | undefined;
     save.mockImplementation(async (key: string, value: SharedState) => {
       if (key === `conversations/${conversationId}` && value.status === 'completed') {
         terminalAttempts++;
-        if (terminalAttempts === 1) {
-          // commitRecoveryTransition persists completion before the final
-          // snapshot write whose failure triggers markTerminal's retry.
-          await previousSave(key, value);
-          recoveryReceipt = structuredClone(persistedStates.at(-1)!);
-          return;
-        }
-        if (terminalAttempts === 2) throw new Error('Final snapshot write failed after recovery completion');
+        // A successful end is saved once, by the final snapshot (#1408); its
+        // failure triggers markTerminal's retry.
+        if (terminalAttempts === 1) throw new Error('Final snapshot write failed');
         retryEntered.resolve();
         await finishRetry.promise;
       }
@@ -698,19 +692,18 @@ describe('Flow run admission at the public execution boundary', () => {
       // Let detached work settle: the previous fire-and-forget terminal mark
       // returned and released admission here while its retry still held state.
       await new Promise<void>(resolve => setImmediate(resolve));
-      expect(terminalAttempts).toBe(3);
+      expect(terminalAttempts).toBe(2);
       expect(settled).toBe(false);
       expect(getFlowRunAdmissionDiagnostics()).toMatchObject({ activeRuns: 1, workspaceConversations: 1 });
       expect(isConversationExecutionLocked(conversationId)).toBe(true);
-      expect(recoveryReceipt?.status).toBe('completed');
-      expect(persistedStates.filter(state => state.status === 'completed')).toEqual([recoveryReceipt]);
+      expect(persistedStates.filter(state => state.status === 'completed')).toEqual([]);
       finishRetry.resolve();
       const result = await running;
       expect(result.status).toBe('completed');
       expect(result.outputText).toBe('Hello from the process node');
       expect(persistedStates.at(-1)?.status).toBe('completed');
-      expect(persistedStates.filter(state => state.status === 'completed')).toHaveLength(2);
-      expect(persistedStates.find(state => state.status === 'completed')).toEqual(recoveryReceipt);
+      expect(persistedStates.at(-1)?.recovery?.classification).toBe('completed');
+      expect(persistedStates.filter(state => state.status === 'completed')).toHaveLength(1);
       expect(isConversationExecutionLocked(conversationId)).toBe(false);
       drained();
     } finally {

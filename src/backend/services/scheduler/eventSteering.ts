@@ -7,6 +7,7 @@ import {
   withdrawSteeringMessage,
 } from '@/backend/execution/flow/steeringInbox';
 import { isPersonaOwnedConversationState } from '@/backend/execution/flow/personaConversationOwnership';
+import { getConversationStates } from '@/backend/execution/flow/conversationStateRegistry';
 import {
   loadPersistedConversationState,
   personaRelatedAction,
@@ -143,13 +144,10 @@ export async function steerEventIntoConversation(
 
 /** The live wiring: this process's running conversations and the Persona dispatcher. */
 export async function steerEventWithRuntime(request: EventSteeringRequest): Promise<EventSteeringOutcome> {
-  // Lazy: the flow runtime and the dispatcher are heavy, and most events never steer.
-  const [{ FlowExecutor }, { submitPersonaFlowDispatch }] = await Promise.all([
-    import('@/backend/execution/flow/FlowExecutor'),
-    import('@/backend/services/enduringAgents/personaDispatcher'),
-  ]);
+  // Lazy: the dispatcher is heavy, and most events never steer.
+  const { submitPersonaFlowDispatch } = await import('@/backend/services/enduringAgents/personaDispatcher');
   return steerEventIntoConversation({
-    liveState: conversationId => FlowExecutor.conversationStates.get(conversationId),
+    liveState: conversationId => getConversationStates().get(conversationId),
     persistedState: loadPersistedConversationState,
     submitPersona: input => submitPersonaFlowDispatch(input, { waitForCompletion: false }),
   }, request);

@@ -70,6 +70,7 @@ import { ToolHandler } from '@/backend/execution/flow/handlers/ToolHandler';
 import { encodeToolName } from '@/backend/execution/flow/handlers/toolNamespace';
 import { harnessComparisonFinished } from '@/backend/services/harness/comparison';
 import { saveCollectionItem, saveItem } from '@/utils/storage/backend';
+import { isEncryptionLocked } from '@/utils/encryption/secure';
 
 jest.setTimeout(60_000);
 
@@ -431,13 +432,13 @@ describe('comparison runs', () => {
       expect(response.status).toBe(409);
     });
 
-    it('stays off until Harness Lab is enabled', async () => {
-      await saveItem(StorageKey.SPEECH_SETTINGS, { speech: {} } as never);
+    it('waits for the workspace to be unlocked', async () => {
+      jest.mocked(isEncryptionLocked).mockResolvedValueOnce(true);
       stepFlow('assistant');
 
       const response = await post({ id: randomUUID(), input: { name: 'Test', variants: [{ flowId: 'assistant' }], cases: [{ input: 'Hello' }] } });
 
-      expect(response.status).toBe(403);
+      expect(response.status).toBe(423);
     });
 
     it.each([

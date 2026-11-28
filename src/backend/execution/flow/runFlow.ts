@@ -15,7 +15,6 @@ import { withConversationExecutionLock } from '@/backend/execution/flow/conversa
 import { claimFlowRunAdmission, recheckFlowRunAdmission, type FlowRunAdmissionPermit } from './runAdmission';
 import { traceMark, traceSpan } from './turnTrace';
 import { assertSubflowLaneCount, preflightSubflowHandoffArguments, subflowWorkerLimit, withSubflowPreparationBudget, type SubflowPreparationBudget } from './subflowPreparationBudget';
-import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 import {
   forget as forgetConversationCacheEntry,
   markTerminal as markConversationTerminal,
@@ -65,6 +64,7 @@ import {
   commitRecoveryTransition,
   commitToolCheckpoint,
   markDanglingToolEffectsUnknown,
+  persistRunSnapshot,
   setRecoveryTransition,
 } from '@/backend/execution/flow/recoveryCheckpoint';
 import { acknowledgeSubflowContinuation } from '@/backend/execution/flow/subflowRecovery';
@@ -101,8 +101,8 @@ import {
 
 const log = createLogger('backend/execution/flow/runFlow');
 
-// Persist conversation state WITHOUT the in-memory-only debug execution trace.
-const persistState = persistConversationState;
+// Full saves write the event log first and leave out the in-memory debug trace.
+const persistState = persistRunSnapshot;
 
 export type { FlowRunInput, FlowRunMessageInput, FlowRunResult, FlowRunStatus } from './runFlowContract';
 
@@ -1621,7 +1621,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
             // and every later transition clears any previous marker.
             sharedState.pendingSubflowReturn = handoff.implicitSubflowReturn;
             sharedState.currentNodeId = nextNodeId;
-            if (advancedSubflow) await persistConversationState(storageKey, sharedState);
+            if (advancedSubflow) await persistState(storageKey, sharedState);
             sharedState.handoffRequested = undefined;
             emit({
               type: 'handoff',

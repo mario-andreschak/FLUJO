@@ -23,6 +23,8 @@ jest.mock('@/backend/execution/flow/runFlow', () => ({
   runFlow: (...args: unknown[]) => mockRunFlow(...args),
 }));
 jest.mock('@/utils/encryption/secure', () => ({ isEncryptionLocked: async () => false }));
+// Each automatic fire checks the accounts file on disk (#574); this suite's storage is in memory.
+jest.mock('@/backend/services/accounts/background', () => ({ backgroundWorkPause: async () => ({ paused: false }) }));
 jest.mock('@/backend/services/flow', () => ({ flowService: { getFlow: async () => null } }));
 
 const input = {
