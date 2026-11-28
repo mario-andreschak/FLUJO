@@ -113,17 +113,8 @@ import {
   type McpEventSubscribeResult,
   type McpEventUnsubscribeRequest,
 } from "./serverEvents";
-import {
-  MCP_EVENT_NOTIFICATIONS,
-  registerMcpEventStreamHandlers,
-  routeMcpEventNotification,
-  type McpEventStream,
-  type McpEventStreamHandlers,
-  type McpEventStreamRequest,
-} from "./serverEventStream";
-import type { ExtensionNotificationHandlers } from "./betaClient";
-import { registerResourceNotificationHandlers, registerToolListChangedHandler } from "./resourceNotifications";
-import { CLAUDE_CHANNEL_METHOD, receiveClaudeChannelNotification, registerClaudeChannelHandler } from "./inboundEvents";
+import { type McpEventStream, type McpEventStreamHandlers, type McpEventStreamRequest } from "./serverEventStream";
+import { newerClientNotifications, registerServerNotifications, type ServerNotificationsHost } from "./serverNotifications";
 import { cachedMcpList, invalidateMcpLists } from "./listCache";
 import {
   usesNegotiatingClient,
@@ -309,6 +300,16 @@ export class MCPService {
     set.add(uri);
     this.pendingResourceUpdates.set(serverName, set);
     log.debug(`onResourceUpdated: server=${serverName} uri=${uri}`);
+  }
+
+  /** The service members the server notification handlers use. */
+  private notificationHost(): ServerNotificationsHost {
+    return {
+      onResourceListChanged: (name) => this.onResourceListChanged(name),
+      onResourceUpdated: (name, uri) => this.onResourceUpdated(name, uri),
+      getClient: (name) => this.getClient(name),
+      clients: () => this.clients,
+    };
   }
 
   /**
@@ -803,12 +804,10 @@ export class MCPService {
       // handshake per server, so existing servers keep working.
       await assertBundledFlujoWorkloadEffectCurrent();
       assertMcpRuntimeAuthorityRetired(config.name);
-      client = useBeta ? createNewBetaClient(config, bindToCurrentWorkspace(() => {
-        if (this.getClient(config.name) === client) this.onResourceListChanged(config.name);
-      }), () => {
-        invalidateMcpLists(client, 'tools');
-        invalidateMcpLists(this.clients.get(config.name), 'tools');
-      }, this.extensionNotificationHandlers(config.name, () => client)) : createNewClient(config);
+      const notifications = useBeta ? newerClientNotifications(config.name, () => client, this.notificationHost()) : undefined;
+      client = notifications
+        ? createNewBetaClient(config, notifications.onResourcesChanged, notifications.onToolsChanged, notifications.extensionNotifications)
+        : createNewClient(config);
       if (executionExtensionContext) pendingProtectedClient = client;
       const transport = useBeta
         ? await createBetaTransport(config, transportOptions)
@@ -823,36 +822,7 @@ export class MCPService {
         );
       }
 
-      // Register resource-change notification handlers so FLUJO can detect when a server's
-      // resource listing changes (notifications/resources/list_changed) or a subscribed
-      // resource updates (notifications/resources/updated). Both paths use a method-string
-      // cast so they work without importing the v2 SDK types here.
-      if (!useBeta) {
-        // v1 SDK: use the Zod-schema-based setNotificationHandler from resourceNotifications.ts
-        registerResourceNotificationHandlers(
-          client,
-          config.name,
-          bindToCurrentWorkspace((name: string) => this.onResourceListChanged(name)),
-          bindToCurrentWorkspace((name: string, uri: string) => this.onResourceUpdated(name, uri)),
-        );
-        const notifiedClient = client;
-        registerToolListChangedHandler(client, config.name, bindToCurrentWorkspace(() => {
-          invalidateMcpLists(notifiedClient, 'tools');
-          invalidateMcpLists(this.clients.get(config.name), 'tools');
-        }));
-        // Claude channel messages (#1401): only automations that chose this
-        // source listen. Late messages from a replaced client are ignored.
-        registerClaudeChannelHandler(client, config.name, bindToCurrentWorkspace((notification: unknown) => {
-          receiveClaudeChannelNotification(
-            notifiedClient,
-            config.name,
-            notification,
-            () => this.getClient(config.name) === notifiedClient,
-          );
-        }));
-        // MCP events push streams (#1401): routed to the stream that asked.
-        registerMcpEventStreamHandlers(client, config.name);
-      }
+      if (!useBeta) registerServerNotifications(client, config.name, this.notificationHost());
 
       // Add stderr capture. Duck-typed on the stderr stream (present on both the v1
       // and v2-beta stdio transports when spawned with stderr: 'pipe') instead of a
@@ -1562,37 +1532,6 @@ export class MCPService {
 
   async pollServerEvent(serverName: string, request: McpEventPollRequest): Promise<McpEventPollResult> {
     return serviceEvents.pollServerEvent(this, serverName, request);
-  }
-
-  /**
-   * Notification handlers for the newer client, registered with a schema while
-   * it is built: resource changes, Claude channel messages and MCP events push
-   * streams (#1401). `currentClient` returns the client being built, so a
-   * replaced client's late messages are ignored.
-   */
-  private extensionNotificationHandlers(serverName: string, currentClient: () => Client | undefined): ExtensionNotificationHandlers {
-    const isCurrent = (client: Client | undefined): client is Client => Boolean(client) && this.getClient(serverName) === client;
-    const handlers: ExtensionNotificationHandlers = {
-      "notifications/resources/list_changed": bindToCurrentWorkspace(() => {
-        if (isCurrent(currentClient())) this.onResourceListChanged(serverName);
-      }),
-      "notifications/resources/updated": bindToCurrentWorkspace((params: unknown) => {
-        const uri = (params as { uri?: unknown } | undefined)?.uri;
-        if (typeof uri === "string" && isCurrent(currentClient())) this.onResourceUpdated(serverName, uri);
-      }),
-      [CLAUDE_CHANNEL_METHOD]: bindToCurrentWorkspace((params: unknown) => {
-        const client = currentClient();
-        if (!client) return;
-        receiveClaudeChannelNotification(client, serverName, { params }, () => this.getClient(serverName) === client);
-      }),
-    };
-    for (const method of MCP_EVENT_NOTIFICATIONS) {
-      handlers[method] = (params: unknown) => {
-        const client = currentClient();
-        if (client) routeMcpEventNotification(client, method, params);
-      };
-    }
-    return handlers;
   }
 
   /**
