@@ -211,8 +211,10 @@ describe('durable MCP server Tasks', () => {
       await expect(inWorkspace(() => store.create(anotherOwner, 'tasks-workspace', { run: async () => ({}) }))).rejects.toMatchObject({ code: 'TASK_LIMIT' });
     } finally { gate.resolve({}); }
     for (const task of tasks) await waitFor(task.id, 'completed', task.auth);
-    // About 130 locked ledger transactions: 6 s on its own, 20 s beside heavy tests.
-  }, 60_000);
+    // About 100 locked, flushed ledger transactions: 5 s on its own, 43 s in a
+    // full two-worker MCP run on Windows (2026-11-28), where neighbouring files
+    // start PowerShell permission checks and every flush waits for the disk.
+  }, 120_000);
   it('lets running tasks watch the ledger without queueing for its lock every tick', async () => {
     const gate = deferred<Record<string, unknown>>();
     const recheck = jest.fn(async () => null);
