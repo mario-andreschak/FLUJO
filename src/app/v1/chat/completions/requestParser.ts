@@ -24,6 +24,28 @@ export class InvalidPersonaChatMetadataError extends Error {
   }
 }
 
+/** `metadata.requireApproval` was something other than on or off (#1284, R1). */
+export class InvalidApprovalMetadataError extends Error {
+  readonly code = 'invalid_require_approval';
+
+  constructor() {
+    super('metadata.requireApproval must be "true" or "false". Leave it out to keep the saved "Require tool approvals" setting of the conversation.');
+    this.name = 'InvalidApprovalMetadataError';
+  }
+}
+
+/**
+ * The request's approval choice. Left out (or null) keeps the conversation's
+ * saved setting; "true" or "false" (or the JSON booleans) saves that choice for
+ * this run and the ones after it. Anything else is refused rather than guessed.
+ */
+export function parseRequireApproval(value: unknown): boolean | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (value === true || value === 'true') return true;
+  if (value === false || value === 'false') return false;
+  throw new InvalidApprovalMetadataError();
+}
+
 export interface PersonaChatCompletionTarget {
   personaId: string;
   behaviorSlotKey?: string;
@@ -114,7 +136,8 @@ export interface ChatCompletionRequest {
 export interface ParsedChatCompletionRequest extends Omit<ChatCompletionRequest, 'metadata' | 'conversation_id'> { // Omit metadata and deprecated conversation_id
   flujo: boolean;
   conversation_id?: string; // Keep conversation_id here for the result
-  requireApproval: boolean;
+  /** Undefined when the request left it out: the run keeps the conversation's saved setting. */
+  requireApproval: boolean | undefined;
   flujodebug: boolean; // Add flujodebug here
   processNodeId?: string; // Add processNodeId for message edits
   compactToolPayloads: boolean;
@@ -174,7 +197,7 @@ async function parseAdmittedRequest(request: NextRequest, permit: ChatIngressPer
       max_tokens,
       // Add flags for GET requests (always false as metadata isn't supported)
       flujo: false,
-      requireApproval: false, // Always false for GET
+      requireApproval: undefined, // GET carries no metadata: a new conversation, approval off
       flujodebug: false, // Always false for GET
       compactToolPayloads: false,
       appendMessages: false,
@@ -234,7 +257,7 @@ async function parseAdmittedRequest(request: NextRequest, permit: ChatIngressPer
       const flujo = data.metadata?.flujo === "true";
       // Prefer conversationId (camelCase) from metadata, fallback to deprecated body field
       const conversationId = data.metadata?.conversationId || data.conversation_id;
-      const requireApproval = data.metadata?.requireApproval === "true";
+      const requireApproval = parseRequireApproval((data.metadata as { requireApproval?: unknown } | undefined)?.requireApproval);
       const flujodebug = data.metadata?.flujodebug === "true"; // Extract flujodebug
       const compactToolPayloads = data.metadata?.compactToolPayloads === "true";
       const appendMessages = data.metadata?.appendMessages === "true";

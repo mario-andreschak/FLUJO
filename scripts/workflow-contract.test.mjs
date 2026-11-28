@@ -507,6 +507,19 @@ for (const [label, change, expected] of [
     const upload = journeyJob(files).steps.find(step => step.uses?.startsWith('actions/upload-artifact@'));
     upload.with.path = upload.with.path.split('\n').filter(line => !line.includes('/evidence/front-door/')).join('\n');
   }, /signed-in front door/],
+  ['a first-use job without the tool approval check', files => {
+    journeyJob(files).steps = journeyJob(files).steps.filter(step => step.run !== 'npm run journey:tool-approval');
+  }, /tool approvals in the browser/],
+  ['an optional tool approval check', files => { journeyStep(files, 'npm run journey:tool-approval')['continue-on-error'] = true; }, /first-use journey/],
+  ['a tool approval check before the production build', files => {
+    const steps = journeyJob(files).steps;
+    const [check] = steps.splice(steps.findIndex(step => step.run === 'npm run journey:tool-approval'), 1);
+    steps.splice(steps.findIndex(step => step.run === 'npm run build'), 0, check);
+  }, /tool approvals in the browser/],
+  ['a tool approval check that drops its evidence', files => {
+    const upload = journeyJob(files).steps.find(step => step.uses?.startsWith('actions/upload-artifact@'));
+    upload.with.path = upload.with.path.split('\n').filter(line => !line.includes('/evidence/tool-approval-journey/')).join('\n');
+  }, /tool approvals in the browser/],
   ['a first-use job without the tool result size limit check', files => {
     journeyJob(files).steps = journeyJob(files).steps.filter(step => step.run !== 'npm run check:tool-result-limit');
   }, /tool result size limit/],

@@ -6,6 +6,7 @@ import {
   withdrawPendingApproval,
 } from '@/backend/execution/flow/toolApprovalRegistry';
 import { CALL_TOOL_TOOL_NAME } from '@/backend/execution/flow/toolLoading/deferredTools';
+import { approvalSettingNow } from '@/backend/execution/flow/approvalSetting';
 
 /**
  * FLUJO's one tool-approval gate (#1284, docs/architecture/tool-approval-single-gate-proposal.md).
@@ -94,11 +95,12 @@ export function waitForLiveToolDecision(
       reject(error);
     };
     const onAbort = () => withdraw(signal?.reason ?? new Error('The run stopped before approval.'));
-    // The answer always arrives later, from the /respond route or a cancel.
+    // The answer always arrives later, from the /respond route, the approval
+    // inbox (which lists this wait under its own receipt) or a cancel.
     registerPendingApproval(conversationId, toolCall, (approved) => {
       stopWaiting();
       resolve(approved);
-    });
+    }, Date.now() + waitMs);
     const timer = setTimeout(() => withdraw(new ToolApprovalWaitExpiredError(toolCall.function.name, waitMs)), waitMs);
     timer.unref?.();
     signal?.addEventListener('abort', onAbort, { once: true });
@@ -109,8 +111,14 @@ export function waitForLiveToolDecision(
 export interface LiveToolApprovalOptions extends LiveDecisionOptions {
   /** The conversation whose chat shows the card. Missing means nobody can answer. */
   conversationId?: string;
-  /** The conversation's Require Tool Approval setting for this run. */
+  /** The conversation's Require Tool Approval setting when this run started. */
   requireApproval: boolean;
+  /**
+   * A person may change the setting while this run goes on: each call then
+   * reads the conversation's latest saved value (approvalSetting.ts). Only for
+   * runs someone is watching; a headless run keeps the value it started with.
+   */
+  followSetting?: boolean;
   /** A flow step's own rule for a tool, when the step has one. */
   stepRequiresApproval?: (name: string) => boolean;
   /** No-approver outcome of a headless run; only `fail` changes anything here. */
@@ -125,13 +133,16 @@ export interface LiveToolApprovalOptions extends LiveDecisionOptions {
 export function createLiveToolApproval(
   options: LiveToolApprovalOptions,
 ): ((call: ToolApprovalCall) => Promise<boolean>) | undefined {
-  if (!options.requireApproval && !options.stepRequiresApproval) return undefined;
+  const follows = options.followSetting === true && Boolean(options.conversationId) && options.onApprovalRequired === undefined;
+  if (!options.requireApproval && !options.stepRequiresApproval && !follows) return undefined;
+  const settingNow = () => (follows ? approvalSettingNow(options.conversationId, options.requireApproval) : options.requireApproval);
   return async (call) => {
     // `call_tool` only forwards to a step tool, and that call asks this gate
     // itself with the real tool name and arguments (#1448). Asking twice would
     // show the person the wrapper instead of the tool.
     if (call.name === CALL_TOOL_TOOL_NAME) return true;
-    if (!options.requireApproval && !options.stepRequiresApproval?.(call.name)) return true;
+    const approvalOn = settingNow();
+    if (!approvalOn && !options.stepRequiresApproval?.(call.name)) return true;
     if (options.onApprovalRequired === 'fail') {
       throw new ToolApprovalUnavailableError(call.name, 'approvalPolicy: fail');
     }

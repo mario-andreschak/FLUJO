@@ -12,6 +12,8 @@ const DECISION_POINTS = {
   withdrawPendingApproval: [GATE],
   resolvePendingApproval: [
     'src/app/v1/chat/conversations/[conversationId]/respond/route.ts',
+    // The approval inbox answers a live wait by its receipt, like the chat card.
+    'src/app/api/approvals/[id]/route.ts',
     'src/backend/services/model/adapters/codexAdapter.ts',
   ],
   clearPendingApprovals: [

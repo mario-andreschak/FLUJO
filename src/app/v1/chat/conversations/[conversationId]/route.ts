@@ -40,6 +40,10 @@ import { listPendingQuestions } from '@/backend/services/questionRegistry';
 import { listPendingElicitations } from '@/backend/services/mcp/elicitationRegistry';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { requireApprovalOf } from '@/backend/execution/flow/toolApprovalGate';
+import { listPendingToolCalls } from '@/backend/execution/flow/toolApprovalRegistry';
+import { saveApprovalSettingDuringRun } from '@/backend/execution/flow/approvalSetting';
+import { hasRegisteredRun } from '@/backend/execution/flow/cancellationCoordinator';
+import { persistConversationState } from '@/backend/execution/flow/persistConversationState';
 
 const log = createLogger('app/v1/chat/conversations/[conversationId]/route');
 
@@ -256,9 +260,11 @@ async function GET_handler(
       // A tool deadline can finish the run before its input mailbox expires.
       // Do not restore that orphaned prompt after the terminal stream closes.
       const inputClosed = sharedState.personaArchived || ['completed', 'error', 'capped'].includes(sharedState.status ?? '');
+      const liveToolCalls = inputClosed ? [] : listPendingToolCalls(conversationId);
       return NextResponse.json({ ...conversationData, pendingInputs: {
         questions: inputClosed ? [] : listPendingQuestions(conversationId),
         elicitations: inputClosed ? [] : listPendingElicitations(conversationId),
+        ...(liveToolCalls.length > 0 ? { toolCalls: liveToolCalls } : {}),
         nextSeq: executionEventBus.currentSeq(conversationId),
       } }, { headers: { 'Cache-Control': 'private, no-store' } });
     } else {
@@ -359,6 +365,25 @@ async function PATCH_handler(
 
 
   const storageKey = `conversations/${conversationId}` as StorageKey;
+
+  // Only "Require tool approvals" changed while a run is going: save it into
+  // that run now instead of after it ends, so its next batch uses it (#1284, R8).
+  if (Object.keys(allowedUpdates).length === 1 && typeof allowedUpdates.requireApproval === 'boolean'
+    && hasRegisteredRun(conversationId)) {
+    try {
+      const saved = await saveApprovalSettingDuringRun(conversationId, allowedUpdates.requireApproval,
+        (state) => persistConversationState(storageKey, state));
+      if (saved) {
+        log.info('Saved the approval setting into the running conversation', { requestId, conversationId });
+        return NextResponse.json(conversationSummaryOf(conversationId, saved), { status: 200 });
+      }
+    } catch (error) {
+      if (error instanceof ConversationLogReadPressureError) throw error;
+      log.error('Could not save the approval setting during a run', { requestId, conversationId,
+        error: error instanceof Error ? { name: error.name, message: error.message } : error });
+      return NextResponse.json({ error: 'Internal server error during update' }, { status: 500 });
+    }
+  }
 
   return withConversationExecutionLock(conversationId, async () => {
     try {
@@ -475,28 +500,7 @@ async function PATCH_handler(
     }
 
     // 5. Return updated summary
-    const updatedSummary: ConversationListItem = {
-      id: conversationId, // Use the conversationId from params
-      title: updatedState.title,
-      flowId: updatedState.flowId || null,
-      createdAt: updatedState.createdAt,
-      updatedAt: updatedState.updatedAt,
-      // Pass the status through as-is. A never-run conversation has status
-      // undefined; defaulting it to 'completed' here made the frontend show a
-      // "Conversation completed" badge as soon as a flow was selected.
-      status: updatedState.status,
-      ...((updatedState.personaAttribution?.personaId ?? updatedState.personaTargetId)
-        ? { personaId: updatedState.personaAttribution?.personaId ?? updatedState.personaTargetId }
-        : {}),
-      ...(updatedState.personaAttribution?.activityId
-        ? { activityId: updatedState.personaAttribution.activityId }
-        : {}),
-      ...(updatedState.personaAttribution?.behaviorRevisionId
-        ? { behaviorRevisionId: updatedState.personaAttribution.behaviorRevisionId }
-        : {}),
-      ...(updatedState.personaArchived ? { personaArchived: true as const } : {}),
-    };
-    return NextResponse.json(updatedSummary, { status: 200 });
+    return NextResponse.json(conversationSummaryOf(conversationId, updatedState), { status: 200 });
 
     } catch (error) {
 
@@ -512,6 +516,31 @@ async function PATCH_handler(
   });
 }
 
+
+/** The sidebar summary a PATCH answers with. */
+function conversationSummaryOf(conversationId: string, updatedState: SharedState): ConversationListItem {
+  return {
+    id: conversationId, // Use the conversationId from params
+    title: updatedState.title,
+    flowId: updatedState.flowId || null,
+    createdAt: updatedState.createdAt,
+    updatedAt: updatedState.updatedAt,
+    // Pass the status through as-is. A never-run conversation has status
+    // undefined; defaulting it to 'completed' here made the frontend show a
+    // "Conversation completed" badge as soon as a flow was selected.
+    status: updatedState.status,
+    ...((updatedState.personaAttribution?.personaId ?? updatedState.personaTargetId)
+      ? { personaId: updatedState.personaAttribution?.personaId ?? updatedState.personaTargetId }
+      : {}),
+    ...(updatedState.personaAttribution?.activityId
+      ? { activityId: updatedState.personaAttribution.activityId }
+      : {}),
+    ...(updatedState.personaAttribution?.behaviorRevisionId
+      ? { behaviorRevisionId: updatedState.personaAttribution.behaviorRevisionId }
+      : {}),
+    ...(updatedState.personaArchived ? { personaArchived: true as const } : {}),
+  };
+}
 
 // DELETE handler to remove conversation state
 async function DELETE_handler(
