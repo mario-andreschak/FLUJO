@@ -15,3 +15,6 @@ packages/avatar-sdk/** -text
 # endings change); only the generator script is text.
 __tests__/fixtures/chat-attachments/** -text
 __tests__/fixtures/chat-attachments/generate.mjs text
+
+# MCP bundle test fixtures are zip files; a signature covers their exact bytes.
+*.mcpb binary

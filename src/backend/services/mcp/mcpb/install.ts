@@ -6,7 +6,8 @@
  *    it, what it will run, which settings it needs and whether it fits this
  *    computer. Nothing is written.
  * 2. {@link installMcpbBundle} receives the same file again with the digest
- *    from the review and the settings. A file that changed is refused. The
+ *    from the review and the settings. A file that changed is refused, and so
+ *    is a file whose signature does not hold up (see ./signature.ts). The
  *    bundle is unpacked into `mcp-servers/mcpb/<name>` and saved as a local
  *    (stdio) server through the normal MCP service, so the usual start rules
  *    apply: host access in multi-user mode and owner approval in protected
@@ -58,6 +59,8 @@ import {
   type McpbLaunchPlan,
   type McpbManifest,
 } from './manifest';
+import { signatureProblemText } from './signature';
+import { assertUserConfigPaths } from './userConfigPaths';
 
 const log = createLogger('backend/services/mcp/mcpb/install');
 
@@ -189,14 +192,37 @@ function withSavedValues(fields: McpbUserConfigField[], existing: MCPServerConfi
   });
 }
 
-function reviewWarnings(manifest: McpbManifest, plan: McpbLaunchPlan, bundledFile: string | undefined, archive: OpenedMcpbArchive): McpbReviewWarning[] {
+/** The confirmed signer of a file, when its signature is trusted. */
+function trustedSigner(archive: OpenedMcpbArchive): McpbSource['signer'] {
+  const { status, signer } = archive.signature;
+  return status === 'signed' && signer ? { name: signer.name, fingerprint: signer.fingerprint } : undefined;
+}
+
+/** A renewed certificate keeps its name, so only a different name (or none) counts as a change. */
+function signerChanged(existing: MCPServerConfig | undefined, archive: OpenedMcpbArchive): boolean {
+  const before = mcpbSource(existing)?.signer;
+  return Boolean(before) && trustedSigner(archive)?.name !== before?.name;
+}
+
+function reviewWarnings(
+  manifest: McpbManifest,
+  plan: McpbLaunchPlan,
+  bundledFile: string | undefined,
+  archive: OpenedMcpbArchive,
+  existing: MCPServerConfig | undefined,
+): McpbReviewWarning[] {
   const warnings: McpbReviewWarning[] = [];
   if (plan.secretInCommandLine) warnings.push('secret-in-command-line');
   if (bundledFile) warnings.push('runs-bundled-program');
   if (manifest.server.type === 'uv') warnings.push('installs-python-packages');
   if (!KNOWN_MANIFEST_VERSIONS.has(manifestVersionOf(manifest))) warnings.push('newer-format');
-  if (archive.signature === 'damaged') warnings.push('signature-damaged');
+  if (signerChanged(existing, archive)) warnings.push('signer-changed');
   return warnings;
+}
+
+function assertSignatureHoldsUp(archive: OpenedMcpbArchive): void {
+  if (archive.signature.status !== 'invalid') return;
+  throw new McpbError(`FLUJO will not install this bundle: its signature does not hold up. ${signatureProblemText(archive.signature)}`, 'invalid-signature');
 }
 
 /** Fill every setting with a stand-in so the review can show the command without real values. */
@@ -252,11 +278,19 @@ export async function reviewMcpbBundle(bytes: Buffer, limits: McpbLimits = mcpbL
     promptsGenerated: manifest.prompts_generated === true,
     privacyPolicies: (manifest.privacy_policies ?? []).flatMap((url) => safeUrl(url) ?? []),
     userConfig: fields,
-    signature: { status: archive.signature },
+    signature: archive.signature,
     files: { count: archive.entries.length, packedBytes: archive.packedBytes, unpackedBytes: archive.unpackedBytes },
     suggestedServerName: suggestion.name,
-    ...(suggestion.existing && existingSource ? { existing: { serverName: suggestion.existing.name, version: existingSource.version } } : {}),
-    warnings: reviewWarnings(manifest, plan, bundledFile, archive),
+    ...(suggestion.existing && existingSource
+      ? {
+        existing: {
+          serverName: suggestion.existing.name,
+          version: existingSource.version,
+          ...(existingSource.signer ? { signer: existingSource.signer.name } : {}),
+        },
+      }
+      : {}),
+    warnings: reviewWarnings(manifest, plan, bundledFile, archive, suggestion.existing),
   };
 }
 
@@ -385,6 +419,7 @@ async function prepareInstall(input: InstallMcpbInput, serverName: string, limit
   if (archive.digest !== input.reviewedDigest) {
     throw new McpbError('This file is not the one you reviewed. Review it again before installing.', 'changed-since-review', 409);
   }
+  assertSignatureHoldsUp(archive);
   if (!platformSupported(manifest)) {
     throw new McpbError(`This bundle is not made for this computer (${process.platform}). It supports: ${manifestPlatforms(manifest).join(', ')}.`, 'wrong-platform');
   }
@@ -396,6 +431,7 @@ async function prepareInstall(input: InstallMcpbInput, serverName: string, limit
 
   const fields = userConfigFields(manifest);
   const checked = checkUserConfig(fields, input.userConfig, savedSecretKeys(existing));
+  await assertUserConfigPaths(fields, checked.values);
   const keptSecrets = new Set(checked.keptSecrets);
   const sensitiveKeys = new Set(fields.filter((field) => field.sensitive).map((field) => field.key));
   const installDir = mcpbInstallDir(serverName);
@@ -404,6 +440,7 @@ async function prepareInstall(input: InstallMcpbInput, serverName: string, limit
   assertEntryPoint(manifest, plan, installDir, archive, bundledFile);
 
   const userConfig = Object.fromEntries(Object.entries(checked.values).filter(([key]) => !sensitiveKeys.has(key)));
+  const signer = trustedSigner(archive);
   const source: McpbSource = {
     type: 'mcpb',
     bundleName: manifest.name,
@@ -411,6 +448,7 @@ async function prepareInstall(input: InstallMcpbInput, serverName: string, limit
     digest: archive.digest,
     ...(Object.keys(userConfig).length ? { userConfig } : {}),
     ...(Object.keys(plan.secretEnv).length ? { secretEnv: plan.secretEnv } : {}),
+    ...(signer ? { signer } : {}),
   };
   const config = {
     name: serverName,
