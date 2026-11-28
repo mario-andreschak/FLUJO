@@ -8,7 +8,6 @@ import { createLogger } from '@/utils/logger';
 import { getHarnessExecution } from '@/backend/services/harness/executionScope';
 import { createHash, randomUUID } from 'node:crypto';
 import { assertExecutionExtensionCurrent, executionExtensionCodexProfile, executionExtensionSinglePhysicalAttempt, issueExecutionModelStepContext, ExecutionExtensionError } from '@/backend/execution/extensions';
-import { takeSteeringMessages, requeueSteeringMessages, subscribeSteeringMessages, markSteeringDelivered } from '@/backend/execution/flow/steeringInbox';
 import {
   ModelCallInput,
   ModelCallResult,
@@ -65,7 +64,13 @@ import { compactMessagesVisually, type EffectiveVisualCompaction } from './visua
 import { COMPACTION_SUMMARY_MARKER } from './summarizingCompaction';
 import { withExactSourceRecall } from '../compaction/exactSourceRecall';
 import { isOwnerCredentialBoundModel, normalizeMaxTokens, validateOwnerCredentialBinding, type Model } from '@/shared/types/model';
-import { isSelfOrchestratingAdapter, normalizeModelTemperature, resolveModelAdapter, supportsLocalModelAuth, type ModelAdapter, type ModelProvider } from '@/shared/types/model/provider';
+import {
+  normalizeModelTemperature,
+  resolveModelAdapter,
+  supportsLocalModelAuth,
+  type ModelAdapter,
+  type ModelProvider,
+} from '@/shared/types/model/provider';
 import {
   CODEX_EMERGENCY_COMPACTION_MARKER,
   CodexInputLimitError,
@@ -84,14 +89,13 @@ import {
   planAutomaticRetry,
   waitForRetryWindow,
 } from '../retryAfter';
-import { getCurrentWorkspace, runWithWorkspace } from '@/utils/workspace';
 import {
   writeRunResource,
   listRunResources,
 } from '@/backend/services/runResources';
 import { executeRunResourceTool, nativeRunResourceResult, READ_RESOURCE_TOOL_NAME } from './runResourceTools';
 import { withSubflowOutputConsumption } from '../subflowOutputBudget';
-import type { ModelSteering, ModelStreamDelta, ModelToolProgress, SdkRequestSnapshot } from '@/backend/services/model/adapters/types';
+import type { ModelStreamDelta, ModelToolProgress, SdkRequestSnapshot } from '@/backend/services/model/adapters/types';
 import type { ModelMediaPart } from '@/shared/types/model/media';
 import { requireFunctionToolCalls } from '@/shared/types/openai';
 import {
@@ -132,12 +136,14 @@ import {
 import { persistModelMedia, type GeneratedImagePart } from './modelMedia';
 import { processToolCallsAdmitted, resolveToolUiLink } from './toolCallProcessing';
 import { getCompactionGlobalSettings, historyKeepRecentMessages, isAutoUnloadOllamaEnabled, isExperimentalFlagEnabled, toolDescriptionCap } from './modelHandlerSettings';
-import { isStreamedAssistantProse, persistStreamedMessage, removeFailedStreamedAssistantProse } from './streamedAssistantMessages';
+import { isStreamedAssistantProse, removeFailedStreamedAssistantProse } from './streamedAssistantMessages';
 import { buildRunResourceMarkers, captureOversizedToolResultsForRefit, ensureReadResourceArmed, estimateOutgoingInputTokens, isContextOverflowError, OVERFLOW_TOOL_RESULT_HEAD_CHARS, resolveOutgoingInputBudget } from './contextWindowFit';
 import { extractProviderErrorDetails, shapeCompletionError } from './providerErrorShape';
 import type { GenerateCompletionOptions } from './modelCompletionContract';
 import { compactWireProjection } from './wireCompaction';
 import { buildSelfOrchestratedToolExecutors } from './selfOrchestratedToolExecutors';
+import { createLiveModelProjection } from './liveModelProjection';
+import { createModelSteering } from './modelSteering';
 
 export { extractGeneratedImageParts } from './modelMedia';
 
@@ -440,138 +446,18 @@ export class ModelHandler {
       signal: input.signal ?? input.executionAuthority?.signal,
     });
 
-    // Live sink for self-orchestrating adapters (Claude subscription): surface
-    // each assistant/tool message on the conversation's event stream AS it is
-    // produced inside the adapter's agentic loop, rather than only when the whole
-    // (possibly hour-long) call returns. The message carries a stable id that the
-    // transcript materialization below reuses, so this live copy and the final
-    // persisted copy dedupe in the UI. Emitting also keeps the frontend's
-    // "no activity" timer reset while background tool calls are in flight.
-    const liveMessageIds = new Set<string>();
-    let acceptLiveProjection = true;
-    let liveProjectionFailure: unknown;
-    let liveProjectionChain: Promise<void> = Promise.resolve();
-    const enqueueLiveProjection = (task: () => Promise<void>): void => {
-      liveProjectionChain = liveProjectionChain.then(async () => {
-        if (liveProjectionFailure) return;
-        try {
-          await task();
-        } catch (error) {
-          liveProjectionFailure = error;
-        }
-      });
-    };
-    const finishLiveProjection = async (): Promise<void> => {
-      // Close the callback gate before draining: an adapter that resolves and
-      // then invokes a late callback cannot append to a newer generation.
-      acceptLiveProjection = false;
-      await liveProjectionChain;
-      if (liveProjectionFailure) throw liveProjectionFailure;
-    };
-    const flushLiveProjection = async (): Promise<void> => {
-      await liveProjectionChain;
-      if (liveProjectionFailure) throw liveProjectionFailure;
-    };
-    const onTranscriptMessage = emit
-      ? (message: FlujoChatMessage) => {
-          if (!acceptLiveProjection || input.executionAuthority?.signal.aborted) return;
-          const withNode: FlujoChatMessage = nodeId ? { ...message, processNodeId: nodeId } : message;
-          enqueueLiveProjection(() => commitFlowDurableMutation(durableContext, async () => {
-            // A native partial draft with this id is now durable and must survive
-            // a later failure in the same self-orchestrating run.
-            liveMessageIds.delete(message.id);
-            emit({ type: 'message', message: withNode, node: nodeId ? { nodeId } : undefined });
-            // Fold under the SAME authority as the event.  The bus append is
-            // independently fenced by conversationLog when it reaches disk.
-            if (conversationId) persistStreamedMessage(conversationId, withNode);
-          }));
-        }
-      : undefined;
+    const live = createLiveModelProjection({
+      emit, conversationId, nodeId, durableContext, executionAuthority: input.executionAuthority,
+    });
+    const { liveMessageIds, onTranscriptMessage, onModelDelta, onToolProgress } = live;
+    const enqueueLiveProjection = live.enqueue;
+    const finishLiveProjection = live.finish;
+    const flushLiveProjection = live.flush;
 
-    // Native adapter token/tool deltas are live-only. Keep their stable ids so a
-    // failed attempt can explicitly retract its transient UI drafts.
-    const onModelDelta = emit
-      ? (delta: ModelStreamDelta) => {
-          if (!acceptLiveProjection || input.executionAuthority?.signal.aborted) return;
-          liveMessageIds.add(delta.messageId);
-          emit({
-            type: 'model:delta',
-            messageId: delta.messageId,
-            delta: delta.contentDelta,
-            // Never push large base64 blobs through the live SSE channel.
-            // Binary media is persisted and delivered with the durable message.
-            mediaPart:
-              delta.mediaPart &&
-              !delta.mediaPart.data &&
-              !delta.mediaPart.url?.startsWith('data:')
-                ? delta.mediaPart
-                : undefined,
-            toolCallDelta: delta.toolCallDelta,
-            node: nodeId ? { nodeId } : undefined,
-          });
-        }
-      : undefined;
-
-    // Claude/Codex own their tool loops inside createCompletion(), so their MCP
-    // progress callbacks cannot pass through processToolCalls below. Project
-    // them onto the same live event used by the ordinary tool loop.
-    const onToolProgress = emit
-      ? (progress: ModelToolProgress) => {
-          emit({
-            type: 'tool:progress',
-            toolCallId: progress.toolCallId,
-            name: progress.name,
-            progress: progress.progress,
-            total: progress.total,
-            message: progress.message,
-            node: nodeId ? { nodeId } : undefined,
-          });
-        }
-      : undefined;
-
-    // Self-orchestrating SDK adapters own several model/tool turns inside one
-    // createCompletion call, so runFlow cannot reach its between-step steering
-    // drain while they are active. Claim a batch, persist it before sending,
-    // then acknowledge acceptance or return it to the inbox on rejection.
-    const steeringWorkspace = getCurrentWorkspace();
-    const steering: ModelSteering | undefined = conversationId &&
-      isSelfOrchestratingAdapter(modelAdapter)
-      ? {
-        take: () => runWithWorkspace(steeringWorkspace, async () => {
-          await assertFlowExecutionCurrent(durableContext);
-          await input.executionAuthority?.pollRelatedInputs?.();
-          const pending = takeSteeringMessages(conversationId);
-          if (!pending.length) return undefined;
-          for (const message of pending) {
-            if (!message.processNodeId && nodeId) message.processNodeId = nodeId;
-          }
-          let accepted = false;
-          let returned = false;
-          return {
-            messages: pending,
-            beforeSend: () => runWithWorkspace(steeringWorkspace, async () => {
-              await flushLiveProjection();
-              await assertFlowExecutionCurrent(durableContext);
-            }),
-            acknowledge: () => runWithWorkspace(steeringWorkspace, async () => {
-              accepted = true;
-              await flushLiveProjection();
-              await assertFlowExecutionCurrent(durableContext);
-              const ids = pending.map(message => message.id).filter(Boolean);
-              markSteeringDelivered(conversationId, ids);
-              if (ids.length) await input.executionAuthority?.acknowledgeRelatedInputs?.(ids);
-            }),
-            requeue: () => runWithWorkspace(steeringWorkspace, () => {
-              if (accepted || returned) return;
-              returned = true;
-              requeueSteeringMessages(conversationId, pending);
-            }),
-          };
-        }),
-        subscribe: listener => runWithWorkspace(steeringWorkspace, () =>
-          subscribeSteeringMessages(conversationId, listener)),
-        }
-      : undefined;
+    const steering = createModelSteering({
+      conversationId, modelAdapter, nodeId, durableContext,
+      executionAuthority: input.executionAuthority, flushLiveProjection,
+    });
 
     // Cancellation watch for the in-flight provider call: pressing Stop sets the
     // conversation's isCancelled flag (own or an ancestor's, for subflow
@@ -672,7 +558,7 @@ export class ModelHandler {
       sessionResume,
       systemPromptPolicy: input.systemPromptPolicy,
       onSessionEvent: event => {
-        if (!acceptLiveProjection || (event.kind !== 'accounting' && shouldAbort?.())) return;
+        if (!live.isAccepting() || (event.kind !== 'accounting' && shouldAbort?.())) return;
         enqueueLiveProjection(async () => {
           await input.executionAuthority?.assertCurrent();
           emit?.({ type: 'model:status', node: { nodeId, nodeName }, ...event });
