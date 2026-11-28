@@ -27,6 +27,7 @@ import {
   acceptOutcome,
   humanStepIssues,
   isAcceptingOutcome,
+  humanRouteOf,
 } from '@/utils/shared/humanStep';
 import { contentDigest, humanTaskCall, humanTaskDigest } from '../humanTask';
 import { syncHumanTaskEntry, updateHumanTaskEntry } from '@/backend/services/humanTasks/humanTaskIndex';
@@ -83,12 +84,6 @@ export class HumanNode extends BaseNode<HumanNodeParams, SharedState, Record<str
     if (issues.length > 0) {
       return fail(sharedState, `Human step "${properties.name || nodeId}": ${issues[0].message}`, issues[0].code);
     }
-    if (sharedState.parentRunId) {
-      return fail(sharedState,
-        `Human step "${properties.name || nodeId}" cannot wait inside a subflow yet. Move it to the main flow.`,
-        'human_step_in_subflow');
-    }
-
     const task = await this.openRequest(sharedState, nodeId, node_params);
     if (typeof task === 'string') return fail(sharedState, task, 'human_step_too_long');
 
@@ -246,6 +241,12 @@ export class HumanNode extends BaseNode<HumanNodeParams, SharedState, Record<str
     }
     log.info('Applied a person\'s answer', { nodeId: task.nodeId, requestId: task.requestId, outcome: decision.outcome });
 
+    const ordered = node_params?.orderedOutgoingEdges ?? Array.from(this.successors.keys());
+    const routes = node_params?.humanRoutes ?? {};
+    const drawn = ordered.filter((edge) => routes[edge] === humanRouteOf(decision.outcome));
+    // A connection drawn for this very answer (yes, no or timed out) is the author's choice.
+    if (drawn.length > 0) return this.route(drawn, node_params, sharedState);
+
     const choice = decision.outcome === 'timed_out' ? task.onTimeout : task.onReject;
     if (!accepted && choice === 'stop') {
       const output = decision.outcome === 'timed_out'
@@ -256,19 +257,18 @@ export class HumanNode extends BaseNode<HumanNodeParams, SharedState, Record<str
       return FINAL_RESPONSE_ACTION;
     }
 
-    const edgeConditions = node_params?.edgeConditions;
-    if (edgeConditions && Object.keys(edgeConditions).length > 0) {
-      const routed = selectConditionedEdge(
-        node_params?.orderedOutgoingEdges ?? Array.from(this.successors.keys()),
-        edgeConditions,
-        sharedState.messages,
-        defaultConditionTarget('human'),
-        sharedState,
-      );
-      return routed ?? FINAL_RESPONSE_ACTION;
+    // Otherwise the plain connections, the ones not drawn for a particular answer.
+    return this.route(ordered.filter((edge) => routes[edge] === undefined), node_params, sharedState);
+  }
+
+  /** Take the first connection whose condition matches, or the only one when none has a condition. */
+  private route(edges: string[], node_params: HumanNodeParams | undefined, sharedState: SharedState): string {
+    const conditions = Object.fromEntries(Object.entries(node_params?.edgeConditions ?? {}).filter(([edge]) => edges.includes(edge)));
+    if (Object.keys(conditions).length > 0) {
+      return selectConditionedEdge(edges, conditions, sharedState.messages, defaultConditionTarget('human'), sharedState)
+        ?? FINAL_RESPONSE_ACTION;
     }
-    const actions = this.successors instanceof Map ? Array.from(this.successors.keys()) : Object.keys(this.successors || {});
-    return actions.length > 0 ? actions[0] : 'default';
+    return edges.length > 0 ? edges[0] : 'default';
   }
 
   _clone(): BaseNode {

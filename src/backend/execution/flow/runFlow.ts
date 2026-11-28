@@ -37,7 +37,7 @@ import { isConversationSequenceSafetyError, type ConversationSequenceSafetyError
 import { isConversationPublicationError, type ConversationPublicationError } from './conversationPublication';
 import { executionEventBus } from '@/backend/execution/flow/engine/ExecutionEventBus';
 import { HUMAN_STEP_TOOL_NAME } from '@/utils/shared/humanStep';
-import { putHumanTaskEntry, syncHumanTaskEntry } from '@/backend/services/humanTasks/humanTaskIndex';
+import { recordWaitingHumanTask } from '@/backend/services/humanTasks/humanTaskIndex';
 import { EmitFn } from '@/shared/types/execution/events';
 import OpenAI from 'openai';
 import { TOOL_CALL_ACTION, FINAL_RESPONSE_ACTION, HUMAN_APPROVAL_ACTION, ERROR_ACTION, STAY_ON_NODE_ACTION } from '@/backend/execution/flow/types';
@@ -629,20 +629,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
         return;
       }
     }
-    const waitingTask = sharedState.humanTask;
-    if (waitingTask && !waitingTask.decision && heldCalls.some((call) => call.id === waitingTask.toolCallId)) {
-      await syncHumanTaskEntry(() => putHumanTaskEntry({
-        requestId: waitingTask.requestId,
-        conversationId: effectiveConvId,
-        ...(sharedState.flowId ? { flowId: sharedState.flowId } : {}),
-        nodeId: waitingTask.nodeId,
-        title: waitingTask.title,
-        mode: waitingTask.mode,
-        createdAt: waitingTask.createdAt,
-        expiresAt: waitingTask.expiresAt,
-        status: 'waiting',
-      }), 'waiting');
-    }
+    await recordWaitingHumanTask(sharedState, effectiveConvId, heldCalls.map((call) => call.id));
     emit({ type: 'run:awaiting_approval', pendingToolCalls: heldCalls });
   };
 

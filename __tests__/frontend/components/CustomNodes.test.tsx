@@ -9,8 +9,8 @@ import {
 } from '@/frontend/components/Flow/FlowManager/FlowBuilder/CustomNodes';
 
 jest.mock('@xyflow/react', () => ({
-  Handle: ({ id, type, position }: { id: string; type: string; position: string }) => (
-    <div data-testid={`handle-${id}`} data-type={type} data-position={position} />
+  Handle: ({ id, type, position, 'aria-label': label }: { id: string; type: string; position: string; 'aria-label'?: string }) => (
+    <div data-testid={`handle-${id}`} data-type={type} data-position={position} aria-label={label} />
   ),
   NodeToolbar: ({ children, isVisible }: { children: React.ReactNode; isVisible?: boolean }) => (
     isVisible ? <div>{children}</div> : null
@@ -105,6 +105,11 @@ describe('FlowBuilder CustomNodes', () => {
 
     expect(screen.getByTestId('handle-human-top')).toHaveAttribute('data-type', 'target');
     expect(screen.getByTestId('handle-human-bottom')).toHaveAttribute('data-type', 'source');
+    // A connection from these goes where a no, or a time-out, should lead (#1095).
+    expect(screen.getByTestId('handle-human-no')).toHaveAttribute('data-type', 'source');
+    expect(screen.getByTestId('handle-human-timeout')).toHaveAttribute('data-type', 'source');
+    expect(screen.getByLabelText('No: connect where a no should go')).toBeInTheDocument();
+    expect(screen.getByLabelText('Timed out: connect where a time-out should go')).toBeInTheDocument();
     const summary = within(screen.getByLabelText('Node summary'));
     expect(summary.getByText('Review and edit')).toBeInTheDocument();
     expect(summary.getByText(/Fix anything before it goes out/)).toBeInTheDocument();

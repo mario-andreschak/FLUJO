@@ -29,6 +29,7 @@ import { flowNodeColors, flowNodeLightColors } from '@/frontend/utils/flowPalett
 import { buildNodeInformation } from './nodeInformation';
 import { FlowNamesContext } from './flowNamesContext';
 import { useI18n } from '@/frontend/contexts/I18nContext';
+import { HUMAN_ROUTE_HANDLES } from '@/utils/shared/humanStep';
 
 // Resource, signal, and trigger nodes use shared semantic tokens because the
 // MUI palette slots are already occupied by the other FlowBuilder node types.
@@ -544,6 +545,25 @@ const CustomNode = ({ id, data, nodeType, selected }: CustomNodeProps & { select
             type="source"
             position={Position.Bottom}
             style={getProcessHandleStyle(theme)}
+            title={t('flows.human.handleYes')}
+            aria-label={t('flows.human.handleYes')}
+          />
+          {/* A connection from these goes where a no, or a time-out, should lead (#1095). */}
+          <Handle
+            id={HUMAN_ROUTE_HANDLES.rejected}
+            type="source"
+            position={Position.Left}
+            style={{ ...getProcessHandleStyle(theme), backgroundColor: theme.palette.error.main }}
+            title={t('flows.human.handleNo')}
+            aria-label={t('flows.human.handleNo')}
+          />
+          <Handle
+            id={HUMAN_ROUTE_HANDLES.timed_out}
+            type="source"
+            position={Position.Right}
+            style={{ ...getProcessHandleStyle(theme), backgroundColor: theme.palette.warning.main }}
+            title={t('flows.human.handleTimeout')}
+            aria-label={t('flows.human.handleTimeout')}
           />
         </>
       );

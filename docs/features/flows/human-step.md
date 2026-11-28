@@ -64,15 +64,22 @@ By default a no or a time-out **stops the run** with a message. You can write yo
 own message for each, or keep the default ("Not approved." and "Nobody answered in
 time.").
 
-In the Expert builder you can instead choose **Go on** for a no or a time-out. The
-flow then continues, and you add a condition on `${var:review.outcome}` to an
-outgoing connection to take a different path, for example "rewrite the draft" after
-a no. A flow that uses **Go on** only opens in the Expert builder.
+In the Expert builder a no or a time-out can lead somewhere else instead:
+
+- **Draw it.** The step has a red **No** handle on its left and an orange **Timed out**
+  handle on its right. Connect one to the step that should come next, for example
+  "rewrite the draft" after a no. That connection is taken for that answer, instead
+  of stopping. The handle at the bottom is the path after a yes.
+- **Or choose Go on** for a no or a time-out. The flow then continues on its plain
+  connections, and you can add a condition on `${var:review.outcome}` to one of them.
+
+A flow that uses either of these only opens in the Expert builder.
 
 ## How to answer
 
 - **In the chat:** a card under the conversation shows the question, the content and
-  the questions to fill in, with buttons to accept or turn it down.
+  the questions to fill in, with buttons to accept or turn it down. It works at phone
+  width too. If a sub-flow asked, the card shows in the chat you started.
 - **From another app, a script or a phone:** `GET /api/human-tasks` lists waiting
   steps. `GET /api/human-tasks/{requestId}` shows one step, with a `digest` of what
   the person sees. Answer with `POST /api/human-tasks/{requestId}`:
@@ -88,12 +95,31 @@ a no. A flow that uses **Go on** only opens in the Expert builder.
   twice is safe; you get the first receipt back.
 - **Scheduled runs:** a step in a scheduled run waits in the same approval inbox as
   other approvals.
+- **From an MCP client:** a flow you call as an MCP tool runs saved when it may ask a
+  person. An MCP client that uses Tasks sees the task waiting for input, with a form
+  for the step; its answer goes to the step, and the task then gets the flow's result,
+  even after a restart of FLUJO. Any other MCP call gets a short note right away: the
+  flow waits for a person, in which conversation, and how to answer. The flow goes
+  on by itself once someone answers.
+- **A Persona's step** is answered the same way, but only from this computer.
 
-## Limits
+## Where a Human step can wait
 
-- A run that is not saved cannot wait. This covers flows started as MCP flow tools,
-  API runs with `mode: ephemeral`, and Human steps inside a subflow. There the step
-  ends at once with a clear message instead of waiting.
-- Anyone who can use this FLUJO can answer. Named reviewers are not there yet.
+Everywhere a flow runs: a chat, an automation, an MCP client, FLUJO's own
+`execute_flow` tool, a Persona, and inside a sub-flow. A flow that may ask a person is
+always saved, so its wait survives a restart; FLUJO saves such a run even when it
+would otherwise not keep it (a sub-flow set not to keep its conversation, or a flow
+called as an MCP tool).
+
+- **Inside a sub-flow:** the step waits in the sub-flow's own conversation, and the
+  flow that called it waits too. Other sub-flows of the same step finish meanwhile.
+  Once the person answers, both go on, and nothing that ran before the step runs
+  again. Stopping the outer flow, or sending it a new message, ends the sub-flow's
+  step as well.
+- **A sub-flow that an AI step calls as a tool** cannot make that AI step wait. The AI
+  is told that the sub-flow waits for a person; the sub-flow goes on by itself once
+  answered. A Persona behavior that an AI step calls as a tool runs only for that call,
+  so a Human step there ends the call with a clear message instead of waiting.
+- Anyone who can use this FLUJO can answer.
 
 For how it works inside, see [Human step node (design)](../../architecture/human-step-node.md).

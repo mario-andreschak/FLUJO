@@ -1,6 +1,9 @@
 /** Durable server Tasks. Only metadata and workspace-key encrypted payloads reach disk.
  * A persisted handle precedes execution. Dead process owners fail without replay;
  * uncertain process observations retain ownership rather than stealing a job.
+ * A job that hands over to a saved FLUJO run (a flow that waits for a person, #1095)
+ * keeps no process at all: its status, input requests and result are read from that
+ * run, so the handle survives a restart.
  */
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
@@ -33,7 +36,24 @@ export interface ServerTaskExecution {
 }
 export interface ServerTaskCreation {
   ttlMs?: number; pollIntervalMs?: number;
-  run(context: ServerTaskExecution): Promise<Record<string, unknown>>;
+  run(context: ServerTaskExecution): Promise<Record<string, unknown> | ServerTaskHandoff>;
+}
+/** Returned by a job whose work now lives in a saved run that may wait for a person. */
+export class ServerTaskHandoff {
+  constructor(readonly conversationId: string) {}
+}
+/** What a saved run means for the task bound to it. Input requests are derived, never stored. */
+export type ServerTaskContinuationView =
+  | { status: 'working' }
+  | { status: 'input_required'; inputRequests: InputRequestsV2 }
+  | { status: 'completed'; result: Record<string, unknown> }
+  | { status: 'failed'; message: string };
+/** Reads and answers the saved runs tasks are bound to. Registered by the Flows-as-tools server. */
+export interface ServerTaskContinuations {
+  view(conversationId: string): Promise<ServerTaskContinuationView>;
+  /** Answer one input request. Throws ServerTaskError('TASK_INPUT_INVALID') when it does not fit. */
+  answer(conversationId: string, key: string, response: unknown): Promise<void>;
+  cancel(conversationId: string): Promise<void>;
 }
 export class ServerTaskError extends Error {
   constructor(readonly code: 'TASK_ACCESS_DENIED' | 'TASK_NOT_FOUND' | 'TASK_LIMIT' | 'TASK_INPUT_INVALID'
@@ -48,6 +68,8 @@ interface TaskRecord extends ServerTaskMetadata {
   executionPending: boolean;
   payload?: string; errorCode?: 'TASK_INTERRUPTED' | 'TASK_FAILED' | 'TASK_AUTH_REVOKED' | 'TASK_EXPIRED';
   acceptedInputIds: string[];
+  /** The saved run this task follows; no process owns the job any more. */
+  boundConversationId?: string;
 }
 interface TaskPayload { result?: Record<string, unknown>; inputRequests?: InputRequestsV2; inputResponses?: InputResponsesV2 }
 interface Ledger { schemaVersion: 1; tasks: TaskRecord[] }
@@ -60,14 +82,21 @@ interface SharedTasks {
   live: Map<string, LiveTask>; chains: Map<string, Promise<unknown>>;
   /** Callback settlement receipts contain IDs only, never retained payloads or authority. */
   settled: Map<string, Set<string>>;
+  continuations?: ServerTaskContinuations;
 }
 declare global { var __flujo_server_tasks_v1: SharedTasks | undefined }
-const shared = globalThis.__flujo_server_tasks_v1 ??= { live: new Map(), chains: new Map(), settled: new Map() };
+const shared: SharedTasks = globalThis.__flujo_server_tasks_v1 ??= { live: new Map(), chains: new Map(), settled: new Map() };
 // Existing Next route bundles can have initialized the previous shared shape.
 shared.settled ??= new Map();
 const LIMITS = Object.freeze({ records: 128, active: 32, perOwnerActive: 4, payloadBytes: 32 * 1024,
   ledgerBytes: 6 * 1024 * 1024, inputCount: 16, ttlMs: 24 * 60 * 60 * 1000 });
 const terminal = (status: ServerTaskStatus) => ['completed', 'failed', 'cancelled'].includes(status);
+const BOUND_ID = /^[A-Za-z0-9_-]{1,128}$/;
+
+/** Let bound tasks read and answer their saved runs. */
+export function setServerTaskContinuations(continuations: ServerTaskContinuations): void {
+  shared.continuations = continuations;
+}
 function fail(code: ConstructorParameters<typeof ServerTaskError>[0]): never { throw new ServerTaskError(code); }
 const metadata = (record: TaskRecord): ServerTaskMetadata => ({ taskId: record.taskId, status: record.status,
   createdAt: record.createdAt, lastUpdatedAt: record.lastUpdatedAt, ttlMs: record.ttlMs, pollIntervalMs: record.pollIntervalMs });
@@ -144,13 +173,15 @@ export class ServerTaskStore {
       for (const item of value.tasks) {
         if (!isRecord(item) || typeof item.taskId !== 'string' || !/^[0-9a-f-]{36}$/.test(item.taskId)
           || Object.keys(item).some(key => !['taskId', 'status', 'createdAt', 'lastUpdatedAt', 'ttlMs', 'pollIntervalMs',
-            'ownerId', 'credentialId', 'workspaceId', 'policyRevision', 'expiresAt', 'process', 'payload', 'errorCode', 'acceptedInputIds', 'executionPending'].includes(key))
+            'ownerId', 'credentialId', 'workspaceId', 'policyRevision', 'expiresAt', 'process', 'payload', 'errorCode', 'acceptedInputIds', 'executionPending',
+            'boundConversationId'].includes(key))
           || ids.has(item.taskId) || !['working', 'input_required', 'completed', 'failed', 'cancelled'].includes(String(item.status))
           || !isValidWorkspaceName(item.workspaceId) || typeof item.ownerId !== 'string' || item.ownerId.length > 64
           || typeof item.credentialId !== 'string' || item.credentialId.length > 64
           || typeof item.policyRevision !== 'string' || item.policyRevision.length > 256
           || typeof item.executionPending !== 'boolean'
-          || (!terminal(item.status as ServerTaskStatus) && item.executionPending !== true)
+          || (item.boundConversationId !== undefined && (typeof item.boundConversationId !== 'string' || !BOUND_ID.test(item.boundConversationId)))
+          || (!terminal(item.status as ServerTaskStatus) && item.executionPending !== true && item.boundConversationId === undefined)
           || !Number.isSafeInteger(item.expiresAt) || !Number.isSafeInteger(item.ttlMs)
           || Number(item.ttlMs) < 1000 || Number(item.ttlMs) > LIMITS.ttlMs
           || !Number.isSafeInteger(item.pollIntervalMs) || Number(item.pollIntervalMs) < 100
@@ -291,7 +322,8 @@ export class ServerTaskStore {
         const result = await options.run({ signal: live.controller.signal, assertAuthorized,
           requestInput: requests => this.requestInput(auth, workspace, task.taskId, live, requests) });
         await assertAuthorized();
-        await this.finish(auth, workspace, task.taskId, result);
+        if (result instanceof ServerTaskHandoff) await this.bind(auth, workspace, task.taskId, result.conversationId);
+        else await this.finish(auth, workspace, task.taskId, result);
         released = true;
       } catch {
         try { await this.finish(auth, workspace, task.taskId); released = true; }
@@ -329,10 +361,47 @@ export class ServerTaskStore {
       await this.write(ledger, permitted ? () => this.assertAuthority(auth, workspace) : undefined);
     });
   }
+  /** The job now lives in a saved run: keep the handle for as long as the protocol allows. */
+  private async bind(auth: OwnerRequestAuthorization, workspace: string, id: string, conversationId: string): Promise<void> {
+    if (!BOUND_ID.test(conversationId)) fail('TASK_INPUT_INVALID');
+    await this.transaction(workspace, async ledger => {
+      const task = ledger.tasks.find(record => record.taskId === id);
+      if (!task || terminal(task.status)) return;
+      await this.assertAuthority(auth, workspace);
+      const created = Date.parse(task.createdAt);
+      task.expiresAt = Math.max(task.expiresAt, Math.min(created + LIMITS.ttlMs, auth.principal.expiresAt));
+      task.ttlMs = Math.max(task.ttlMs, Math.min(LIMITS.ttlMs, task.expiresAt - created));
+      task.boundConversationId = conversationId;
+      task.executionPending = false;
+      task.lastUpdatedAt = new Date(this.now()).toISOString();
+      await this.write(ledger, () => this.assertAuthority(auth, workspace));
+    });
+  }
+  /** Bring a bound task in line with its run; a finished run settles the task once. */
+  private async follow(task: TaskRecord, auth: OwnerRequestAuthorization, workspace: string, ledger: Ledger): Promise<ServerTaskView | undefined> {
+    if (!task.boundConversationId || terminal(task.status)) return undefined;
+    const view = shared.continuations ? await shared.continuations.view(task.boundConversationId) : { status: 'working' as const };
+    if (view.status === 'working' || view.status === 'input_required') {
+      return { ...metadata(task), status: view.status, resultType: 'complete',
+        ...(view.status === 'input_required' ? { inputRequests: view.inputRequests } : {}) };
+    }
+    if (view.status === 'completed') {
+      task.payload = await this.seal(task, { result: view.result });
+      task.status = 'completed';
+    } else {
+      task.status = 'failed'; task.errorCode = 'TASK_FAILED'; delete task.payload;
+    }
+    task.lastUpdatedAt = new Date(this.now()).toISOString();
+    await this.write(ledger, () => this.assertAuthority(auth, workspace));
+    return undefined;
+  }
   async get(auth: OwnerRequestAuthorization, workspace: string, id: string): Promise<ServerTaskView> {
     await this.assertAuthority(auth, workspace);
     return this.transaction(workspace, async ledger => {
-      const task = await this.owned(ledger, auth, workspace, id), payload = await this.open(task);
+      const owned = await this.owned(ledger, auth, workspace, id);
+      const followed = await this.follow(owned, auth, workspace, ledger);
+      if (followed) return followed;
+      const task = owned, payload = await this.open(task);
       if ((task.status === 'completed' && !isRecord(payload.result))
         || (task.status === 'input_required' && !isRecord(payload.inputRequests))) fail('TASK_STORAGE_UNAVAILABLE');
       await this.assertAuthority(auth, workspace);
@@ -344,14 +413,18 @@ export class ServerTaskStore {
   }
   async cancel(auth: OwnerRequestAuthorization, workspace: string, id: string): Promise<{ resultType: 'complete' }> {
     await this.assertAuthority(auth, workspace);
-    await this.transaction(workspace, async ledger => {
+    const bound = await this.transaction(workspace, async ledger => {
       const task = await this.owned(ledger, auth, workspace, id);
       if (!terminal(task.status)) {
         task.status = 'cancelled'; delete task.payload; task.lastUpdatedAt = new Date(this.now()).toISOString();
         await this.write(ledger, () => this.assertAuthority(auth, workspace));
         this.retire(id);
+        return task.boundConversationId;
       }
+      return undefined;
     });
+    // Cancelling the task stops the saved run it follows; it never counts as an answer.
+    if (bound) await shared.continuations?.cancel(bound);
     return { resultType: 'complete' };
   }
   async update(auth: OwnerRequestAuthorization, workspace: string, id: string, responses: InputResponsesV2): Promise<{ resultType: 'complete' }> {
@@ -359,6 +432,22 @@ export class ServerTaskStore {
     boundedJson(responses, LIMITS.payloadBytes);
     const ids = Object.keys(responses);
     if (ids.length > LIMITS.inputCount || ids.some(key => key.length > 128 || !key.length)) fail('TASK_INPUT_INVALID');
+    const bound = await this.transaction(workspace, async ledger => {
+      const task = await this.owned(ledger, auth, workspace, id);
+      return task.boundConversationId && !terminal(task.status) ? task.boundConversationId : undefined;
+    });
+    if (bound) {
+      // The saved run owns its steps: each answer goes there, once. Keys it no longer
+      // asks for (answered before, or answered in FLUJO) are acknowledged, as the extension expects.
+      const view = shared.continuations ? await shared.continuations.view(bound) : undefined;
+      if (view?.status !== 'input_required') return { resultType: 'complete' };
+      for (const key of ids) {
+        if (!Object.hasOwn(view.inputRequests, key)) continue;
+        await this.assertAuthority(auth, workspace);
+        await shared.continuations!.answer(bound, key, responses[key]);
+      }
+      return { resultType: 'complete' };
+    }
     await this.transaction(workspace, async ledger => {
       const task = await this.owned(ledger, auth, workspace, id);
       // The extension acknowledges unknown/already-satisfied keys. This includes

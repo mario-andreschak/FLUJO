@@ -4345,8 +4345,8 @@ const Chat: React.FC = () => {
   /**
    * Answer a waiting Human step (#1095). The answer is checked and saved first; a refusal
    * comes back to the card, which keeps what was typed. Once saved, the run goes on in
-   * the background and this view follows it through the event stream. A Persona's step
-   * goes through /respond instead, because only its dispatcher may continue it.
+   * the background and this view follows it through the event stream. The same address
+   * answers a step a sub-flow asked and a Persona's step (through its dispatcher).
    */
   const handleAnswerHumanStep = async (
     target: { toolCallId: string; requestId: string },
@@ -4360,27 +4360,9 @@ const Chat: React.FC = () => {
     // Listen before answering, so no event of the continued run can slip past.
     await openEventStream(conversationId);
     try {
-      await chatService.answerHumanTask(target.requestId, action, human);
+      await chatService.answerHumanTask(target.requestId, action, { ...human, conversationId });
     } catch (err) {
       const body = err instanceof ChatApiError ? err.body as { code?: string; error?: string; fieldErrors?: Record<string, string> } | undefined : undefined;
-      if (body?.code === 'persona_owned') {
-        try {
-          setIsLoading(true);
-          setLoadingConversationId(conversationId);
-          markConvRunning(conversationId, true);
-          rememberAnsweredToolCall(answeredToolCallIdsRef.current, target.toolCallId);
-          const data = await chatService.respondToToolCall(conversationId, action, target.toolCallId, human);
-          handleApiResponse(data, conversationId);
-          return { ok: true };
-        } catch (fallbackError) {
-          answeredToolCallIdsRef.current.delete(target.toolCallId);
-          if (loadingConversationIdRef.current === conversationId) setIsLoading(false);
-          markConvRunning(conversationId, false);
-          const fallbackBody = fallbackError instanceof ChatApiError
-            ? fallbackError.body as { error?: string; fieldErrors?: Record<string, string> } | undefined : undefined;
-          return { ok: false, error: fallbackBody?.error ?? t('chat.humanStep.failed'), fieldErrors: fallbackBody?.fieldErrors };
-        }
-      }
       log.warn('Could not answer a Human step', { conversationId, requestId: target.requestId, err });
       return { ok: false, error: body?.error ?? t('chat.humanStep.failed'), fieldErrors: body?.fieldErrors };
     }

@@ -5,6 +5,8 @@ import { createLogger } from '@/utils/logger';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { bindExecutionModelStepOrdinals } from '@/backend/execution/flow/modelStepOrdinals';
 import { syncHumanTaskEntry, updateHumanTaskEntry } from '@/backend/services/humanTasks/humanTaskIndex';
+import { dropWaitingChildSteps } from '@/backend/services/humanTasks/dropHumanTask';
+import { releaseWaitingSubflows } from './subflowHumanWait';
 import { SharedState, isUnattendedFlowInvocation } from '@/backend/execution/flow/types';
 import { DEFAULT_CONVERSATION_TITLE } from '@/utils/shared/conversationTitle';
 import { initializeRecovery } from '@/backend/execution/flow/recoveryCheckpoint';
@@ -176,6 +178,11 @@ export async function installRunInputs(installation: RunInputInstallation): Prom
         status: 'cancelled', finishedAt: new Date().toISOString(),
       }), 'replaced by a new message');
     }
+  }
+  if (userTurn) {
+    // It also replaces the waits of sub-flow children this run showed.
+    const replacedChildren = releaseWaitingSubflows(sharedState);
+    if (!sharedState.ephemeral) dropWaitingChildSteps(replacedChildren, 'A new message replaced the run that waited for this step.');
   }
   if (userTurn && sharedState.staticHold) {
     // A new message replaces an open wait. The dangling-call repair below answers the

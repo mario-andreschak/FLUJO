@@ -16,9 +16,13 @@ import { isOwnerPolicyConfigured, resolveOwnerRequest, type OwnerRequestAuthoriz
 import { isWorkerMode } from '@/backend/services/workspace/workerMode';
 import { executionExtensionAdapter, hasExecutionExtensionContext } from '@/backend/execution/extensions';
 import { getAuthorizedBundledFlujoWorkloadToolNames } from '@/backend/services/security/bundledFlujoWorkload';
-import { flowToolsListTools, flowToolsCallTool } from './flowTools';
+import { flowToolsListTools, flowToolsCallTool, runFlowTool } from './flowTools';
 import { authoringCallTool, authoringToolDefinitions, isAuthoringTool } from './flowAuthoringTools';
-import { serverTaskStore, ServerTaskError } from './serverTasks';
+import { serverTaskStore, ServerTaskError, ServerTaskHandoff, setServerTaskContinuations } from './serverTasks';
+import { flowToolContinuations } from './flowToolContinuations';
+
+// A task whose flow waits for a person follows the saved run, even after a restart (#1095).
+setServerTaskContinuations(flowToolContinuations);
 
 const TASKS_EXTENSION = 'io.modelcontextprotocol/tasks';
 const OWNER_SCOPES = ['mcp:access', 'control:admin', 'secrets:read'] as const;
@@ -152,7 +156,7 @@ export async function handleModernFlowsMcpRequest(request: Request): Promise<Res
                 await assertTasks(ctx);
               };
               await assertTaskAuthorized();
-              const result = await flowToolsCallTool(name, args, {
+              const { result, waitingIn } = await runFlowTool(name, args, {
                 abortSignal: execution.signal,
                 assertAuthorized: assertTaskAuthorized,
                 requestInput: async (requests) => {
@@ -167,6 +171,8 @@ export async function handleModernFlowsMcpRequest(request: Request): Promise<Res
                 },
               });
               await assertTaskAuthorized();
+              // The run is saved and waits for a person: the task follows it from now on.
+              if (waitingIn) return new ServerTaskHandoff(waitingIn);
               return CallToolResultV2Schema.parse({ ...result, resultType: 'complete' });
             },
           });

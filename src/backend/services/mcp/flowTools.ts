@@ -15,14 +15,22 @@
  *    flow description wins verbatim); inputSchema = a single `input` string that
  *    is sent to the flow as the user message.
  *  - Runs are ephemeral (mode: 'ephemeral'): a tools/call never pollutes the chat
- *    sidebar or the conversations store.
+ *    sidebar or the conversations store. A flow that may wait for a person (a Human
+ *    step or a step approval) runs saved instead, so it can stop and come back (#1095).
+ *    When it stops, the caller gets the conversation that waits: an MCP task follows
+ *    it (input_required, then the result), a plain call gets a clear hand-over text.
  */
 import { createLogger } from '@/utils/logger';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { flowService } from '@/backend/services/flow/index';
 import { buildFlowToolNameMap } from '@/shared/utils/flowToolNaming';
 import { buildFlowToolDescription } from '@/backend/execution/flow/buildHandoffDescription';
+import { randomUUID } from 'node:crypto';
 import { runFlow } from '@/backend/execution/flow/runFlow';
+import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
+import { flowMayWaitForPerson } from '@/utils/shared/flowApproval';
+import { getHarnessExecution } from '@/backend/services/harness/executionScope';
+import { waitingHandoffText } from './flowToolContinuations';
 import { ElicitResultV2Schema, type InputRequestsV2, type InputResponsesV2 } from '@modelcontextprotocol/ext-tasks/core/v2';
 
 const log = createLogger('backend/services/mcp/flowTools');
@@ -97,6 +105,21 @@ export async function flowToolsCallTool(
   args: Record<string, unknown>,
   options: FlowToolExecutionOptions = {},
 ): Promise<CallToolResult> {
+  return (await runFlowTool(toolName, args, options)).result;
+}
+
+/** What a flow tool call produced; `waitingIn` names the saved run that now waits for a person. */
+export interface FlowToolRun {
+  result: CallToolResult;
+  waitingIn?: string;
+}
+
+export async function runFlowTool(
+  toolName: string,
+  args: Record<string, unknown>,
+  options: FlowToolExecutionOptions = {},
+): Promise<FlowToolRun> {
+  const done = (result: CallToolResult): FlowToolRun => ({ result });
   const assertCurrent = async () => {
     options.abortSignal?.throwIfAborted();
     await options.assertAuthorized?.();
@@ -117,19 +140,23 @@ export async function flowToolsCallTool(
 
   if (!flowId) {
     log.warn('tools/call for unknown flow tool', { toolName });
-    return {
+    return done({
       content: [{ type: 'text', text: `Error: no flow is exposed as tool '${toolName}'.` }],
       isError: true,
-    };
+    });
   }
+  // A flow that may wait for a person runs saved, so its wait survives a restart.
+  const saved = !getHarnessExecution() && await flowMayWaitForPerson(flows.find((flow) => flow.id === flowId),
+    async (id) => flows.find((flow) => flow.id === id));
+  const conversationId = saved ? randomUUID() : undefined;
 
   const input = extractInput(args);
 
   try {
     if (args.confirm === true) {
-      if (!options.requestInput) return {
+      if (!options.requestInput) return done({
         content: [{ type: 'text', text: 'Confirmation requires negotiated MCP Tasks and form elicitation.' }], isError: true,
-      };
+      });
       const responses = await options.requestInput({ confirmation: {
         method: 'elicitation/create',
         params: {
@@ -141,16 +168,17 @@ export async function flowToolsCallTool(
       } });
       await assertCurrent();
       const response = ElicitResultV2Schema.parse(responses.confirmation);
-      if (response.action !== 'accept' || response.content?.confirmed !== true) return {
+      if (response.action !== 'accept' || response.content?.confirmed !== true) return done({
         content: [{ type: 'text', text: 'Flow execution declined.' }],
-      };
+      });
     }
     await assertCurrent();
     const result = await runFlow({
       flowId,
       prompt: input,
       source: 'mcp',
-      mode: 'ephemeral',
+      mode: saved ? 'conversation' : 'ephemeral',
+      ...(conversationId ? { conversationId, userTurn: true } : {}),
       flujo: true,
       requireApproval: false,
       ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
@@ -162,30 +190,45 @@ export async function flowToolsCallTool(
     await assertCurrent();
 
     if (result.flowNotFound) {
-      return {
+      return done({
         content: [{ type: 'text', text: `Error: flow not found: ${result.flowNotFound.name}` }],
         isError: true,
-      };
+      });
     }
 
     if (result.status === 'error') {
       const message = result.error?.message ?? 'Unknown error during flow execution.';
-      return {
+      return done({
         content: [{ type: 'text', text: `Error: ${message}` }],
         isError: true,
+      });
+    }
+
+    if (result.status === 'awaiting_tool_approval' && conversationId) {
+      // Saved and stopped for a person: never an empty success. The run goes on in FLUJO,
+      // under FLUJO's own authority, so this call's authority must not stay on it.
+      const live = FlowExecutor.conversationStates.get(conversationId);
+      if (live) delete live.executionAuthority;
+      const handoff = waitingHandoffText(conversationId, result.sharedState);
+      return {
+        waitingIn: conversationId,
+        result: {
+          content: [{ type: 'text', text: handoff.text }],
+          structuredContent: handoff.structured,
+        },
       };
     }
 
-    return {
+    return done({
       content: [{ type: 'text', text: result.outputText ?? '' }],
-    };
+    });
   } catch (err) {
     // Authority loss/cancellation must retire the job, never look like success.
     await assertCurrent();
     log.error('flowToolsCallTool failed', { toolName, flowId, err });
-    return {
+    return done({
       content: [{ type: 'text', text: `Error running flow: ${err instanceof Error ? err.message : String(err)}` }],
       isError: true,
-    };
+    });
   }
 }

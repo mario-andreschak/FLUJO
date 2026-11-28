@@ -15,11 +15,16 @@ import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/cli
 // Keep the real HTTP SDK, extension codecs, durable store and private policy.
 // Controlled work makes cancellation/authorization races deterministic without
 // calling a provider or executing an actual user's authored Flow.
-jest.mock('@/backend/services/mcp/flowTools', () => ({
-  flowToolsListTools: jest.fn(async () => ({ tools: [{ name: 'owned_flow', description: 'Owned test flow',
-    inputSchema: { type: 'object', properties: { input: { type: 'string' } }, required: ['input'] } }] })),
-  flowToolsCallTool: jest.fn(),
-}));
+jest.mock('@/backend/services/mcp/flowTools', () => {
+  const flowToolsCallTool = jest.fn();
+  return {
+    flowToolsListTools: jest.fn(async () => ({ tools: [{ name: 'owned_flow', description: 'Owned test flow',
+      inputSchema: { type: 'object', properties: { input: { type: 'string' } }, required: ['input'] } }] })),
+    flowToolsCallTool,
+    // A task runs the same call; these flows never wait for a person (see humanStepWaits.test.ts for that).
+    runFlowTool: async (...args: unknown[]) => ({ result: await flowToolsCallTool(...args) }),
+  };
+});
 jest.mock('@/backend/services/mcp/flowAuthoringTools', () => ({
   authoringToolDefinitions: () => [{ name: 'validate_flow_spec', inputSchema: { type: 'object' } }],
   isAuthoringTool: (name: string) => name === 'validate_flow_spec',

@@ -17,10 +17,11 @@ import {
   SubflowNodeProperties,
   ResourceNodeProperties,
   SignalNodeProperties,
-  StaticNodeProperties
+  StaticNodeProperties,
+  type HumanNodeParams
 } from './types';
 import { isEdgeCondition } from '@/utils/shared/edgeConditions';
-import type { HumanStepProperties } from '@/utils/shared/humanStep';
+import { humanRouteOfEdge, type HumanStepProperties } from '@/utils/shared/humanStep';
 
 // Create a logger instance for this file
 const log = createLogger('backend/flow/execution/FlowConverter');
@@ -217,6 +218,12 @@ export class FlowConverter {
             sourceNode.node_params.edgeConditions = sourceNode.node_params.edgeConditions || {};
             sourceNode.node_params.edgeConditions[action] = condition;
             log.info(`Retained edge condition for routing`, { edgeId: action, source: edge.source });
+          }
+          // A Human step's connection drawn for one answer (yes, no, timed out), #1095.
+          const humanRoute = sourceNode.node_params.type === 'human' ? humanRouteOfEdge(edge) : undefined;
+          if (humanRoute) {
+            const params = sourceNode.node_params as HumanNodeParams;
+            params.humanRoutes = { ...params.humanRoutes, [action]: humanRoute };
           }
 
           // A bidirectional edge is one connector carrying both transitions:

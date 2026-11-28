@@ -19,6 +19,8 @@ import type { ElicitResult } from '@modelcontextprotocol/sdk/types.js';
 import { resolvePendingQuestion, declinePendingQuestion, InvalidQuestionAnswerError } from '@/backend/services/questionRegistry';
 import { applyApprovalDecision, refusedHumanStepAnswer } from '@/backend/execution/flow/resumeAfterApproval';
 import type { HumanAnswer } from '@/utils/shared/humanStep';
+import { findDelegatedHumanTask } from '@/backend/execution/flow/humanTask';
+import { answerHumanTask, continueAnsweredHumanTask } from '@/backend/services/humanTasks/answerHumanTask';
 import { processChatCompletion } from '@/app/v1/chat/completions/chatCompletionService';
 import { ChatCompletionRequest } from '@/app/v1/chat/completions/requestParser';
 import { flowService } from '@/backend/services/flow/index';
@@ -303,6 +305,20 @@ async function POST_handler(
     if (sharedState.status !== 'awaiting_tool_approval' || !sharedState.pendingToolCalls) {
       log.warn(`Conversation is not awaiting tool approval`, { requestId, conversationId, status: sharedState.status });
       return NextResponse.json({ error: 'Conversation is not awaiting tool approval' }, { status: 400 });
+    }
+
+    // A sub-flow's Human step that this run only shows: answer it where it was asked.
+    const delegated = findDelegatedHumanTask(sharedState, { toolCallId });
+    if (delegated) {
+      const answered = await answerHumanTask({
+        requestId: delegated.requestId, accept: action === 'approve', answer: human ?? {}, channel: 'chat',
+        conversationId: delegated.conversationId, fromThisComputer: assertLocalRequest(request, { strictLoopback: true }) === null,
+      });
+      if (answered.kind === 'refused') {
+        return NextResponse.json({ error: answered.error, fieldErrors: answered.fieldErrors }, { status: answered.status });
+      }
+      continueAnsweredHumanTask(answered);
+      return NextResponse.json({ status: 'running', conversation_id: conversationId, receipt: answered.receipt }, { status: 202 });
     }
 
     // Persona-owned conversations are continuations of the Activity pinned in

@@ -1,4 +1,5 @@
 import type { Flow } from '@/shared/types/flow';
+import { humanRouteOfEdge } from './humanStep';
 import {
   getGuidedSubagentLinks,
   isCanonicalGuidedSubagent,
@@ -100,6 +101,7 @@ export function flowUsesAdvancedFeatures(flow: Pick<Flow, 'nodes' | 'edges'>): b
       const reverse = `${edge.target}\u0000${edge.source}`;
       if (!guidedSubagentPairs.has(forward) && !guidedSubagentPairs.has(reverse)) return true;
     }
-    return !!data?.condition || data?.edgeType === 'resource';
+    // A connection drawn for one answer of a Human step is a branch the simple builder cannot show.
+    return !!data?.condition || data?.edgeType === 'resource' || humanRouteOfEdge(edge) !== undefined;
   });
 }

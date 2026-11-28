@@ -172,3 +172,37 @@ export function expireHumanTask(state: Pick<SharedState, 'humanTask'>, now: Date
 export function approvalActionFor(decision: HumanTaskDecision): 'approve' | 'reject' {
   return decision.outcome === 'approved' || decision.outcome === 'submitted' ? 'approve' : 'reject';
 }
+
+/** A sub-flow child's Human step that its parent waits for. The child owns the step and its answer. */
+export interface DelegatedHumanTask {
+  requestId: string;
+  toolCallId: string;
+  conversationId: string;
+  invocationId: string;
+  laneId: string;
+}
+
+/**
+ * The Human steps of sub-flow children this parent waits for at its current step.
+ * The parent shows each one's call; an answer always goes to the child that asked.
+ */
+export function delegatedHumanTasks(
+  state: Pick<SharedState, 'currentNodeId' | 'activeSubflowInvocationByNode' | 'subflowInvocations'> | undefined,
+): DelegatedHumanTask[] {
+  const invocationId = state?.currentNodeId ? state.activeSubflowInvocationByNode?.[state.currentNodeId] : undefined;
+  const invocation = invocationId ? state?.subflowInvocations?.[invocationId] : undefined;
+  if (!invocation) return [];
+  return invocation.lanes.flatMap((lane) => lane.status === 'waiting'
+    ? (lane.humanTasks ?? []).map((task) => ({ ...task, conversationId: lane.conversationId, invocationId: invocation.id, laneId: lane.id }))
+    : []);
+}
+
+/** The child step behind one of the parent's waiting calls, found by call id or request id. */
+export function findDelegatedHumanTask(
+  state: Parameters<typeof delegatedHumanTasks>[0],
+  ids: { toolCallId?: string; requestId?: string },
+): DelegatedHumanTask | undefined {
+  return delegatedHumanTasks(state).find((task) =>
+    (ids.toolCallId === undefined || task.toolCallId === ids.toolCallId)
+    && (ids.requestId === undefined || task.requestId === ids.requestId));
+}

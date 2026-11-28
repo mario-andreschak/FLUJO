@@ -150,6 +150,19 @@ describe('Human step in flow validation', () => {
     expect(codes(stops)).not.toContain('human-continue-without-route');
   });
 
+  it('counts a connection drawn from the "No" handle as checking the answer, and as a branch only Expert view shows', () => {
+    const drawNo = (flow: ReturnType<typeof flowOf>) => {
+      flow.edges[2] = { ...flow.edges[2], sourceHandle: 'human-no' } as typeof flow.edges[number];
+      return flow;
+    };
+
+    expect(codes(issuesOf(drawNo(flowOf({ prompt: 'Send?', onReject: 'continue' }))))).not.toContain('human-continue-without-route');
+    expect(flowUsesAdvancedFeatures(flowOf({ prompt: 'Send?' }) as never)).toBe(false);
+    expect(flowUsesAdvancedFeatures(drawNo(flowOf({ prompt: 'Send?' })) as never)).toBe(true);
+    expect(getConnectionError('human', 'human-no', 'process', 'process-top')).toBeNull();
+    expect(getConnectionError('human', 'human-timeout', 'finish', 'finish-top')).toBeNull();
+  });
+
   it('counts the answer as a variable later steps may read', () => {
     expect(codes(issuesOf(flowOf({ prompt: 'Send?' })))).not.toContain('var-ref-uncaptured');
     expect(codes(issuesOf(flowOf({ prompt: 'Send?', outputVariable: 'other' })))).toContain('var-ref-uncaptured');

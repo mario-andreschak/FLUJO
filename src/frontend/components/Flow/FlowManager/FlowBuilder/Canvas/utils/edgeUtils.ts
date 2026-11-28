@@ -3,6 +3,7 @@ import { FlowNode } from '@/frontend/types/flow/flow';
 import { mcpEdgeOptions, resourceEdgeOptions } from '../types';
 import { getConnectionError, isMcpHandle, isResourceHandle, isAttachmentEdge } from './connectionRules';
 import { EdgeCondition } from '@/utils/shared/edgeConditions';
+import { humanRouteOfEdge } from '@/utils/shared/humanStep';
 
 /** A subflow node's outgoing flow-control paths: standard edges it is the
  * source of, plus bidirectional edges pointing at it (whose reverse
@@ -178,11 +179,13 @@ export function createEdgeFromConnection(
     // A `condition` (Tier 2b) is spread into `data` only when supplied, so a
     // plain flow-control edge stays byte-for-byte what it was — and identical to
     // the compiler's controlEdge output (pinned by flowSpecCompiler.test.ts).
+    // A Human step's "No" and "Timed out" handles mark the answer the edge is for (#1095).
+    const humanOutcome = sourceNode?.type === 'human' ? humanRouteOfEdge({ sourceHandle }) : undefined;
     return {
       id: edgeId,
       ...params,
       type: 'custom',
-      data: { edgeType: 'standard', ...(condition ? { condition } : {}) },
+      data: { edgeType: 'standard', ...(condition ? { condition } : {}), ...(humanOutcome ? { humanOutcome } : {}) },
       animated: true
     } as Edge;
   }

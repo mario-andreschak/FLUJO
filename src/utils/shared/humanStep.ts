@@ -310,3 +310,104 @@ export function parseHumanTaskCall(call: { function?: { name?: string; arguments
     return undefined;
   }
 }
+
+/**
+ * Which answer an outgoing connection of a Human step is for. A connection without
+ * one is the step's plain path: it is taken after a yes, and after a no or a time-out
+ * only when the author chose to go on.
+ */
+export type HumanRoute = 'accepted' | 'rejected' | 'timed_out';
+export const HUMAN_ROUTES: readonly HumanRoute[] = ['accepted', 'rejected', 'timed_out'];
+
+/** The canvas handle a connection for each answer starts from. */
+export const HUMAN_ROUTE_HANDLES: Record<HumanRoute, string> = {
+  accepted: 'human-bottom',
+  rejected: 'human-no',
+  timed_out: 'human-timeout',
+};
+
+/** The answer a connection is for: its saved `humanOutcome`, else the handle it starts from. */
+export function humanRouteOfEdge(edge: { sourceHandle?: string | null; data?: unknown } | null | undefined): HumanRoute | undefined {
+  const saved = (edge?.data as { humanOutcome?: unknown } | undefined)?.humanOutcome;
+  if (typeof saved === 'string' && (HUMAN_ROUTES as readonly string[]).includes(saved)) return saved as HumanRoute;
+  if (edge?.sourceHandle === HUMAN_ROUTE_HANDLES.rejected) return 'rejected';
+  if (edge?.sourceHandle === HUMAN_ROUTE_HANDLES.timed_out) return 'timed_out';
+  return undefined;
+}
+
+/** The route an outcome takes. */
+export function humanRouteOf(outcome: HumanOutcome): HumanRoute {
+  return isAcceptingOutcome(outcome) ? 'accepted' : outcome === 'timed_out' ? 'timed_out' : 'rejected';
+}
+
+/** The form an MCP client shows for a waiting step (flat fields only, as MCP form elicitation allows). */
+export interface HumanElicitationForm {
+  message: string;
+  requestedSchema: {
+    type: 'object';
+    properties: Record<string, Record<string, string | number | boolean | string[] | Record<string, unknown>>>;
+    required?: string[];
+  };
+}
+
+/** The key of a waiting step in an MCP task's input requests. */
+export function humanInputKey(requestId: string): string {
+  return `human:${requestId}`;
+}
+
+/** Map a waiting step onto an MCP form. What the person sees stays exactly the frozen request. */
+export function humanElicitationForm(view: Pick<HumanTaskView, 'mode' | 'title' | 'prompt' | 'candidate' | 'fields'>): HumanElicitationForm {
+  const message = [view.title, view.prompt, view.candidate !== undefined ? `---\n${view.candidate}` : '']
+    .filter((part) => part && part.trim()).join('\n\n');
+  if (view.mode === 'approval') {
+    return { message, requestedSchema: { type: 'object', properties: {
+      approved: { type: 'boolean', title: 'Approve', description: 'Yes approves, no turns it down.' },
+    }, required: ['approved'] } };
+  }
+  if (view.mode === 'edit') {
+    return { message, requestedSchema: { type: 'object', properties: {
+      value: { type: 'string', title: 'Text', maxLength: MAX_HUMAN_TEXT_CHARS, default: view.candidate ?? '' },
+    }, required: ['value'] } };
+  }
+  const properties: HumanElicitationForm['requestedSchema']['properties'] = {};
+  for (const field of view.fields ?? []) {
+    const title = field.label?.trim() || field.name;
+    switch (field.type) {
+      case 'text':
+      case 'longText':
+        properties[field.name] = { type: 'string', title, maxLength: field.maxLength ?? MAX_HUMAN_TEXT_CHARS };
+        break;
+      case 'number':
+      case 'integer':
+        properties[field.name] = {
+          type: field.type, title,
+          ...(isFiniteNumber(field.min) ? { minimum: field.min } : {}),
+          ...(isFiniteNumber(field.max) ? { maximum: field.max } : {}),
+        };
+        break;
+      case 'boolean':
+        properties[field.name] = { type: 'boolean', title };
+        break;
+      case 'choice':
+        properties[field.name] = { type: 'string', title, enum: field.options ?? [] };
+        break;
+      case 'multiChoice':
+        properties[field.name] = { type: 'array', title, items: { type: 'string', enum: field.options ?? [] } };
+        break;
+    }
+  }
+  const required = (view.fields ?? []).filter((field) => field.required).map((field) => field.name);
+  return { message, requestedSchema: { type: 'object', properties, ...(required.length ? { required } : {}) } };
+}
+
+/** Turn an MCP form answer back into a Human step answer. Decline and cancel both turn it down. */
+export function humanAnswerFromForm(
+  view: Pick<HumanTaskView, 'mode'>,
+  result: { action: 'accept' | 'decline' | 'cancel'; content?: Record<string, unknown> },
+): { accept: boolean; value?: unknown } {
+  if (result.action !== 'accept') return { accept: false };
+  const content = result.content ?? {};
+  if (view.mode === 'approval') return { accept: content.approved === true };
+  if (view.mode === 'edit') return { accept: true, value: content.value };
+  return { accept: true, value: content };
+}

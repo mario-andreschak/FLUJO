@@ -62,7 +62,7 @@ Every exclusion MUST carry an inline rationale comment next to the `FlowSpecNode
 | `resource` | Included | **Advanced** | Data artifact; declarative binding (`server`+`uri` or `runName`). Fixed for round-trip loss like `signal`. |
 | `signal` | Included | **Advanced** | Pass-through event emitter (`topic`+`payloadTemplate`); fixed for round-trip loss in issue #117. |
 | `static` | Included | **Advanced** | Pass-through conversation injector (`entries`+`injectOnce`); this decision (#380) fixes the same class of round-trip loss. |
-| `human` | Included | Guided when a no or a time-out stops the run; **Advanced** when `onReject` or `onTimeout` is `continue` | Waits for a person, then goes on through ordinary edges; its whole setup is declarative (see [Human step](human-step-node.md)). `SimpleFlowStep.human` authors the Guided form. |
+| `human` | Included | Guided when a no or a time-out stops the run; **Advanced** when `onReject` or `onTimeout` is `continue`, or an edge is drawn for one answer (`humanOutcome`) | Waits for a person, then goes on through ordinary edges or the edge drawn for its answer; its whole setup is declarative (see [Human step](human-step-node.md)). `SimpleFlowStep.human` authors the Guided form. |
 | `mcp` | Excluded | — | Attachment configured via a process node's `servers`, never authored as a standalone spec node. |
 | `trigger` | Excluded | — | Externally-triggered entry point configured outside the flow graph. |
 

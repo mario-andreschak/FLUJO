@@ -1,7 +1,7 @@
 import type { DecisionRule, FlowDecision } from '@/utils/shared/decisionRules';
 import type { EdgeConditionTarget, RecordedVariableSource } from '@/utils/shared/edgeConditions';
 import type { DecisionQuestion } from '@/utils/shared/modelDecision';
-import type { HumanField, HumanNoChoice, HumanOutcome, HumanStepMode, HumanStepProperties } from '@/utils/shared/humanStep';
+import type { HumanField, HumanNoChoice, HumanOutcome, HumanRoute, HumanStepMode, HumanStepProperties } from '@/utils/shared/humanStep';
 import type { ModelInputSnapshot } from '@/shared/types/execution/modelInput';
 import type { DebuggerStateView } from '@/shared/types/execution/debuggerState';
 export type {
@@ -22,6 +22,7 @@ import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
 import type { MCPToolParameterPresets, McpSkillSelection } from '@/shared/types/mcp';
 import OpenAI from 'openai';
 import type { ModelMediaPart } from '@/shared/types/model/media';
+import type { FlujoFunctionToolCall } from '@/shared/types/openai';
 import type { NormalizedChatError } from '@/shared/types/execution/errors';
 import type { MeetingToolAction } from '@/shared/types/meeting';
 import type { FlujoSystemPromptSectionId } from '@/shared/utils/flujoSystemPrompt';
@@ -567,11 +568,23 @@ export interface SubflowLaneResult {
     conversationId?: string;
     /** Stable caller-visible handle for a resumable keyed child conversation. */
     sessionKey?: string;
+    /** The child stopped at a Human step and waits, saved, for a person (#1095). */
+    waiting?: SubflowHumanWait[];
+}
+
+/** A sub-flow child that waits for a person: its step and the call the parent shows for it. */
+export interface SubflowHumanWait {
+    requestId: string;
+    toolCallId: string;
+    conversationId: string;
+    call: FlujoFunctionToolCall;
 }
 
 export type SubflowInvocationLaneStatus =
     | 'pending'
     | 'running'
+    /** The child stopped at a Human step and is saved; `humanTasks` names the steps (#1095). */
+    | 'waiting'
     | 'completed'
     | 'error'
     | 'cancelled';
@@ -598,6 +611,8 @@ export interface SubflowInvocationLane extends SubflowLanePlan {
     resumedVisit?: boolean;
     /** Issue #390: 1-based ordinal of the visit currently executing. */
     sessionVisit?: number;
+    /** While `waiting`: the child's Human steps (its own, or its children's). The parent shows their calls; answers go to the step's owner. */
+    humanTasks?: Array<{ requestId: string; toolCallId: string }>;
 }
 
 export type SubflowInvocationStatus = 'running' | 'blocked' | 'ready' | 'folded';
@@ -700,6 +715,8 @@ export interface StaticNodeParams extends BaseNodeParams<StaticNodeProperties> {
 export interface HumanNodeParams extends BaseNodeParams<HumanStepProperties> {
     /** Routing conditions on this node's outgoing edges, keyed by edge id. */
     edgeConditions?: Record<string, EdgeCondition>;
+    /** Outgoing edges drawn for one answer (yes, no, timed out), keyed by edge id. */
+    humanRoutes?: Record<string, HumanRoute>;
     /** Outgoing control edges in author order, so the first match is deterministic. */
     orderedOutgoingEdges?: string[];
     type: 'human';
@@ -715,7 +732,7 @@ export interface HumanTaskDecision {
     valueDigest?: string;
     decidedAt: string;
     /** Where the answer came from. `expiry` is the deadline, never a person. */
-    channel: 'chat' | 'api' | 'approvals' | 'expiry' | 'evaluation';
+    channel: 'chat' | 'api' | 'approvals' | 'mcp' | 'expiry' | 'evaluation';
     idempotencyKey?: string;
 }
 
@@ -1942,6 +1959,8 @@ export interface SubflowNodeExecResult extends BaseExecResult {
     lanes?: SubflowLaneResult[];
     /** True when SOME (but not all) lanes succeeded under 'collect-all'. */
     partial?: boolean;
+    /** Children that stopped at a Human step; the parent waits for them before it joins (#1095). */
+    waiting?: SubflowHumanWait[];
 }
 
 // Union type for all exec results

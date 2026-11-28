@@ -34,7 +34,7 @@ the call comes in:
 | AI that runs its own tool loop (Claude subscription, Codex, Antigravity) | The run waits live | The same chat card and `/respond` route |
 | Sub-flow | The child run waits live, in the conversation the person is viewing | The same chat card |
 | A tool called from a code-mode program (`run_tool_script`) or through `call_tool` (#1448) | The program waits live; the card shows the real tool and its arguments | The same chat card and `/respond` route |
-| Static node with "wait for a person", Human step | The run pauses and is saved | The chat card, the approval inbox, or `/api/human-tasks` |
+| Static node with "wait for a person", Human step | The run pauses and is saved | The chat card, the approval inbox, or `/api/human-tasks`; a Human step also through an MCP task's input form |
 
 The gate code is `src/backend/execution/flow/toolApprovalGate.ts` and runFlow's
 pause. The lint rule `flujo/single-tool-approval-gate` fails when other code
