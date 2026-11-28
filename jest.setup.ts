@@ -74,7 +74,12 @@ afterAll(async () => {
   await flushStatisticsEvents();
 
   setWorkspaceLayoutPreparation(undefined);
-  if (!enduranceDataRoot) fs.rmSync(jestDataRoot, { recursive: true, force: true });
+  // A process a test left behind can hold this folder for a moment. It lives in
+  // the run's private temp root, which the global teardown removes again.
+  if (!enduranceDataRoot) {
+    try { fs.rmSync(jestDataRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); }
+    catch (error) { console.warn(`[jest] Kept ${jestDataRoot} for the run cleanup: ${(error as Error).message}`); }
+  }
   // Deliberately do not restore an inherited FLUJO_DATA_DIR. Jest's next test
   // environment replaces it with another isolated root, and the worker exits
   // after its final environment. Keeping this temp path selected also confines
