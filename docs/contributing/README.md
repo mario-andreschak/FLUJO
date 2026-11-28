@@ -101,8 +101,9 @@ node scripts/flujo-drive.mjs stop
 ```
 
 `launch` prints the address to open (for example `http://127.0.0.1:4301/`) and
-returns once the first page loads; the first start compiles pages and can take a
-few minutes. `stop` stops only that instance and deletes the data folder it
+returns once the first page loads. The first start compiles pages and can take
+ten minutes or more on a slower computer; `launch` says so every minute while it
+waits. `stop` stops only that instance and deletes the data folder it
 created. The tool can also click through pages for you; see the
 [feature map](../feature-map/README.md).
 

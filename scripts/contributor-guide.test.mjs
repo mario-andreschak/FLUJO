@@ -131,6 +131,9 @@ test('a server step waits for the guide\'s address to answer, presses Ctrl+C and
   await assert.rejects(runServerStep(stubborn, state, { logFile: path.join(dir, 'stubborn.log'), readyMs: 20_000, stopMs: 1_000 }), /after Ctrl\+C/);
   const silent = { script: 'sleep 30', url: `http://127.0.0.1:${await freePort()}/` };
   await assert.rejects(runServerStep(silent, state, { logFile: path.join(dir, 'silent.log'), readyMs: 1_000, stopMs: 1_000 }), /did not answer/);
+  const restart = "console.log('Server is approaching the used memory threshold, restarting...')";
+  const looping = { script: `node -e "${restart}; ${restart}; setTimeout(() => {}, 30000)"`, url: silent.url };
+  await assert.rejects(runServerStep(looping, state, { logFile: path.join(dir, 'looping.log'), readyMs: 20_000, stopMs: 1_000 }), /ran out of memory while compiling/);
   const crashed = { script: 'node -e "process.exit(3)"', url: silent.url };
   await assert.rejects(runServerStep(crashed, state, { logFile: path.join(dir, 'crashed.log'), readyMs: 20_000, stopMs: 1_000 }), /stopped before it answered at http:\/\/127\.0\.0\.1:\d+\/ \(exit 3\)/);
 });

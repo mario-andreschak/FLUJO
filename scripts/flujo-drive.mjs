@@ -40,7 +40,8 @@ export const USAGE = `Usage: node scripts/flujo-drive.mjs <command> [options]
 
 Instance (one per checkout, never the instance on port 4200):
   launch [--port N] [--data-dir DIR] [--timeout SECONDS]
-                      Start a throwaway FLUJO with an empty data folder; returns once a page renders.
+                      Start a throwaway FLUJO with an empty data folder; returns once a page renders
+                      (waits up to 30 minutes by default, and stops early if it keeps running out of memory).
   doctor              Read-only: is the instance this tool started alive, on its port, and serving pages?
   warm [ROUTE...]     Load every page once (default: all pages without [params]) so dev mode compiles them
                       before you drive; the first compile of a large page takes up to a few minutes.
@@ -187,6 +188,29 @@ export async function probe(baseUrl, apiTimeoutMs = 5_000) {
   return result;
 }
 
+const MEMORY_RESTART = /approaching the used memory threshold, restarting/g;
+
+/**
+ * Why a starting instance will never become ready, read from its log. Next.js restarts the
+ * development server when it nears its heap limit, which throws the compile away; twice means
+ * it will keep looping instead of finishing (#1441).
+ */
+export function startupProblem(logText) {
+  const restarts = logText.match(MEMORY_RESTART)?.length ?? 0;
+  if (restarts < 2) return undefined;
+  return `FLUJO ran out of memory while compiling and restarted ${restarts} times, so it would never finish. `
+    + 'The first compile needs about 5 GB. Remove a smaller --max-old-space-size from NODE_OPTIONS: '
+    + 'the launcher then picks a size that fits this computer.';
+}
+
+function readLog(file) {
+  try {
+    return readFileSync(file, 'utf8');
+  } catch {
+    return '';
+  }
+}
+
 export function tail(file, lines = 25) {
   try {
     return readFileSync(file, 'utf8').split(/\r?\n/).slice(-lines).join('\n');
@@ -220,15 +244,20 @@ async function launch(options, log) {
   const baseUrl = `http://127.0.0.1:${port}/`;
   const state = { pid: child.pid, port, baseUrl, dataDir, ownsDataDir, logFile, root: ROOT, startedAt: new Date().toISOString() };
   writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), { mode: 0o600 });
-  log(`Starting FLUJO at ${baseUrl} (pid ${child.pid}, data ${dataDir}). The first page compile can take a few minutes.`);
-  const deadline = Date.now() + Number(options.timeout || 600) * 1000;
+  log(`Starting FLUJO at ${baseUrl} (pid ${child.pid}, data ${dataDir}). The first page compile can take ten minutes or more.`);
+  const started = Date.now();
+  const deadline = started + Number(options.timeout || 1800) * 1000;
+  let minutes = 0;
   while (Date.now() < deadline) {
     if (!isAlive(child.pid)) throw new Error(`FLUJO exited during startup. Last log lines:\n${tail(logFile)}`);
+    const problem = startupProblem(readLog(logFile));
+    if (problem) throw new Error(`${problem} It is still running; use "stop".`);
     const { api, page } = await probe(baseUrl);
     if (api && page) {
       log(`Ready: ${baseUrl}\nLog: ${logFile}`);
       return 0;
     }
+    if (Date.now() - started >= (minutes + 1) * 60_000) log(`Still compiling (${++minutes} min so far).`);
     await new Promise((resolve) => { setTimeout(resolve, 2_000); });
   }
   throw new Error(`FLUJO did not become ready in time. It is still running; use "doctor" or "stop". Last log lines:\n${tail(logFile)}`);

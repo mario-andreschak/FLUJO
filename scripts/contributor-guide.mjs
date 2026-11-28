@@ -13,7 +13,7 @@ import { appendFileSync, createWriteStream, existsSync, mkdirSync, mkdtempSync, 
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { probe } from './flujo-drive.mjs';
+import { probe, startupProblem } from './flujo-drive.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const GUIDE = 'docs/contributing/README.md';
@@ -24,7 +24,7 @@ const PLACEHOLDER = /<[A-Za-z][\w -]*>|YOUR-[A-Z]+/;
 const STOP_HINT = /stop (?:it )?with Ctrl\+C/i;
 const LOCAL_URL = /https?:\/\/(?:127\.0\.0\.1|localhost):\d+\/?/;
 const STEP_TIMEOUT_MS = 30 * 60_000;
-const SERVER_READY_MS = 15 * 60_000;
+const SERVER_READY_MS = 30 * 60_000;
 const SERVER_STOP_MS = 30_000;
 
 /**
@@ -218,6 +218,8 @@ export async function runServerStep(step, state, { logFile, echo, readyMs = SERV
     const ready = Date.now() + readyMs;
     for (;;) {
       if (exited(child)) throw new Error(`stopped before it answered at ${step.url} (exit ${child.exitCode ?? child.signalCode})`);
+      const problem = startupProblem(existsSync(logFile) ? readFileSync(logFile, 'utf8') : '');
+      if (problem) throw new Error(problem);
       const { api, page } = await check(step.url);
       if (api && page) break;
       if (Date.now() > ready) throw new Error(`did not answer at ${step.url} within ${readyMs / 60_000} minutes`);
