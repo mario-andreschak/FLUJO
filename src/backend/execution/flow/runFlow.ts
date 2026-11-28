@@ -1,4 +1,3 @@
-import { effectiveAllowedToolNames } from '@/utils/shared/decisionRules';
 import { recordVariableSource } from '@/utils/shared/edgeConditions';
 import {
   applyExecutionRunInput,
@@ -74,14 +73,9 @@ import { resolveToolCallContextWindow } from './toolResultContextWindow';
 import { Flow } from '@/shared/types/flow';
 import { StorageKey } from '@/shared/types/storage';
 import { FEATURES } from '@/config/features';
-import { validateFlowForRun, validateFlowObjectForRun } from '@/backend/execution/flow/validateFlowForRun';
 import { MAX_SUBFLOW_DEPTH } from '@/backend/execution/flow/constants';
 import { isCancelledByAncestry, isConversationDeleted } from '@/backend/execution/flow/cancellation';
 import { buildConversationTitle, isDefaultConversationTitle, DEFAULT_CONVERSATION_TITLE } from '@/utils/shared/conversationTitle';
-import { entryConditionStartNodeId } from '@/utils/shared/edgeConditions';
-import { isQuickChatFlowId } from '@/utils/shared/quickChat';
-import { intersectAllowedModels } from '@/utils/shared/flowModelBoundary';
-import { isQuickChatEnabled, QUICK_CHAT_DISABLED_CODE, QUICK_CHAT_DISABLED_MESSAGE } from '@/backend/services/workspace/modelAccess';
 import { setElicitationContext, clearElicitationContext } from '@/backend/services/mcp/elicitationContext';
 import { decodeToolName, isToolOfferedInStep } from '@/backend/execution/flow/handlers/toolNamespace';
 import { GRACEFUL_CAP_SUMMARY_INSTRUCTION, GRACEFUL_CAP_TOOL_RESULT } from '@/backend/execution/flow/handlers/gracefulCap';
@@ -103,7 +97,6 @@ import { normalizeSessionKey } from '@/backend/execution/flow/sessionManagement'
 import { hydrateLazyToolPayloads } from '@/backend/execution/flow/lazyToolPayloads';
 import { combineAbortSignals } from '@/backend/execution/flow/combineAbortSignals';
 import { registerCancellableRun } from '@/backend/execution/flow/cancellationCoordinator';
-import { nodeAfterFinishStep } from '@/backend/execution/flow/finishReentry';
 import { answerFromHandoffArguments, lacksFinishAnswer, markNoAnswer, NO_ANSWER_TEXT } from '@/backend/execution/flow/finishAnswer';
 import type { FlowRunInput, FlowRunMessageInput, FlowRunResult, FlowRunStatus } from './runFlowContract';
 import { publishRunFlowEvent } from './runFlowEvents';
@@ -114,6 +107,8 @@ import { decisionsOfThisRun, describeRunError, runSuccessOutput } from './runFlo
 import { validateFlowRunInput } from './runInputValidation';
 import { assertLoadedStateMayRun, loadRunState } from './runStateLoading';
 import { createRunStatistics } from './runStatistics';
+import { routeTurnStart } from './runTurnRouting';
+import { runPreflightChecks } from './runPreflight';
 import {
   ATTACH_BREAKPOINT,
   matchToolBreakpoint,
@@ -842,87 +837,10 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     log.warn(`Conversation-log reconcile failed for ${effectiveConvId}; continuing`, error);
   }
 
-  // --- Direct a new user turn to its intended node (one-time, at turn start) ---
-  if (userTurn && stateSource !== 'new' && !data.processNodeId) {
-    const lastMsg = sharedState.messages.length > 0
-      ? sharedState.messages[sharedState.messages.length - 1]
-      : undefined;
-    if (lastMsg?.role === 'user' && lastMsg.processNodeId && lastMsg.processNodeId !== sharedState.currentNodeId) {
-      log.info(`New user turn for ${effectiveConvId}: directing execution to node ${lastMsg.processNodeId} (was ${sharedState.currentNodeId}).`);
-      sharedState.currentNodeId = lastMsg.processNodeId;
-      FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
-    }
-    // A message without a step would otherwise run the Finish step again: no
-    // model is called and the run still says "completed".
-    if (sharedState.flowId && sharedState.currentNodeId) {
-      try {
-        // A caller that sends the whole history sends it without step ids, so
-        // the saved history from before this turn still names the last step.
-        const reentryNodeId = nodeAfterFinishStep(
-          sharedState.flowSnapshot ?? await flowService.getFlow(sharedState.flowId),
-          sharedState.currentNodeId,
-          [...messagesBeforeTurn, ...sharedState.messages],
-        );
-        if (reentryNodeId) {
-          log.info(`New user turn for ${effectiveConvId} after a Finish step: continuing at node ${reentryNodeId} (was ${sharedState.currentNodeId}).`);
-          sharedState.currentNodeId = reentryNodeId;
-          FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
-        }
-      } catch (error) {
-        // The entry check below reads the same flow and ends this turn with a
-        // clear message when the flow store cannot be read.
-        log.warn(`Could not read the flow to leave the Finish step for ${effectiveConvId}`, error);
-      }
-    }
-  }
-
-  // --- Replay an errored turn from its entry node (issue #151) ---
-  // The Retry button re-sends the existing history with NO new user message, so
-  // the redirect above (which only fires for a fresh trailing user turn) leaves
-  // execution parked at the errored mid-flow node. Resuming directly there when
-  // that node uses `latest-message`/`isolated` narrows the wire to just the
-  // current turn's tail and drops all prior conversation — the reported context
-  // loss. Instead, when resuming an ERRORED conversation with no fresh user turn
-  // and no explicit edit target, re-enter at the turn's ENTRY node (the
-  // processNodeId of the last user message) so a full-history entry node rebuilds
-  // context before routing forward. Falls back to the flow's start node when that
-  // message is unstamped. Persisted conversations only (never ephemeral runs).
-  if (resumingAfterError && userTurn && !ephemeral && stateSource !== 'new' && !data.processNodeId) {
-    const lastMsg = sharedState.messages.length > 0
-      ? sharedState.messages[sharedState.messages.length - 1]
-      : undefined;
-    // A fresh trailing user turn is already handled by the redirect above; only
-    // act on a Retry (history ends on an assistant/tool message).
-    if (lastMsg?.role !== 'user') {
-      let entryNodeId: string | undefined;
-      for (let i = sharedState.messages.length - 1; i >= 0; i--) {
-        if (sharedState.messages[i].role === 'user') {
-          entryNodeId = sharedState.messages[i].processNodeId;
-          break;
-        }
-      }
-      if (!entryNodeId && sharedState.flowId) {
-        try {
-          const flow = sharedState.flowSnapshot
-            ?? await flowService.getFlow(sharedState.flowId);
-          entryNodeId = flow?.nodes?.find((n) => n.type === 'start')?.id;
-        } catch (err) {
-          log.warn(`Could not resolve start node for error-resume of ${effectiveConvId}`, err);
-        }
-      }
-      if (entryNodeId && entryNodeId !== sharedState.currentNodeId) {
-        log.info(`Error-resume for ${effectiveConvId}: replaying turn from entry node ${entryNodeId} (was ${sharedState.currentNodeId}).`);
-        sharedState.currentNodeId = entryNodeId;
-        FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
-      }
-    }
-  }
-
-  // --- Force a fresh compiled flow at the start of each user turn ---
-  if (userTurn && sharedState.flowId) {
-    FlowExecutor.clearFlowCache(sharedState.flowId);
-    log.debug(`Cleared compiled-flow cache for ${sharedState.flowId} at start of user turn ${effectiveConvId}.`);
-  }
+  await routeTurnStart({
+    sharedState, effectiveConvId, userTurn, stateSource, ephemeral,
+    processNodeId: data.processNodeId, resumingAfterError, messagesBeforeTurn,
+  });
 
   // --- 2. Main Execution Logic ---
   let currentAction: string | undefined = undefined;
@@ -1113,116 +1031,9 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     }
   }
 
-  // --- Pre-run consistency check (blocking) ---
-  // Only at the start of a run: a genuine new user turn or a brand-new
-  // conversation (which covers subflow child runs — this lives in the keystone
-  // so EVERY caller gets it, not just the OpenAI route). Internal resumes
-  // (debug step/continue, tool-approval respond) continue an already-started
-  // run and must not be re-blocked. If the flow has error-level issues
-  // (deleted model, renamed/deleted MCP server, missing Start node, dangling
-  // tool references, …), abort before any node runs. The standard terminal/
-  // error path below formats the result (and emits run:done).
-  if ((userTurn || stateSource === 'new') && sharedState.flowId) {
-    try {
-      // Validate the pinned execution definition, including saved-flow runs.
-      // Legacy conversations without a snapshot retain the by-id path.
-      const validation = await traceSpan('preflight.validate', async () => sharedState.flowSnapshot
-        ? await validateFlowObjectForRun(sharedState.flowSnapshot)
-        : await validateFlowForRun(sharedState.flowId));
-      if (!validation.isRunnable) {
-        const errs = validation.issues.filter(i => i.severity === 'error');
-        const message =
-          `This flow can't run yet — please fix the following before running:\n` +
-          errs.map(e => `• ${e.message}`).join('\n');
-        log.warn(`Pre-run validation blocked flow ${sharedState.flowId} for conv ${effectiveConvId}`, {
-          errorCount: errs.length,
-          codes: errs.map(e => e.code),
-        });
-        sharedState.lastResponse = {
-          success: false,
-          error: message,
-          errorDetails: { message, type: 'invalid_request_error', code: 'flow_invalid', status: 400 },
-        };
-        currentAction = ERROR_ACTION;
-        preflightError = true;
-      }
-    } catch (validationError) {
-      // A failure to RUN the check must not block the user — log and proceed.
-      log.warn(`Pre-run validation could not complete for ${sharedState.flowId}; proceeding`, validationError);
-    }
-  }
-
-  // --- Allowed models ---
-  // Read on every entry, because a resumed run must keep the same limit. The list can
-  // only narrow within a conversation, and a subflow may not widen its parent's.
-  if (sharedState.flowId && !preflightError) {
-    try {
-      const flowAllowed = (sharedState.flowSnapshot ?? await flowService.getFlow(sharedState.flowId))?.allowedModels;
-      const parentState = input.parentRunId ? FlowExecutor.conversationStates.get(input.parentRunId) : undefined;
-      const parentAllowed = parentState?.allowedModels;
-      // A subflow's model steps stay inside the tools its parent's decision allows.
-      sharedState.inheritedAllowedToolNames = parentState ? effectiveAllowedToolNames(parentState) : undefined;
-      sharedState.allowedModels = intersectAllowedModels(intersectAllowedModels(flowAllowed, parentAllowed), sharedState.allowedModels);
-    } catch (allowedModelsError) {
-      // Skipping this could send data to a model the flow rules out. Only this turn fails.
-      log.warn(`Could not read allowed models for ${sharedState.flowId}; ending this turn`, allowedModelsError);
-      const message = 'FLUJO could not read which models this flow may use. Please send the message again.';
-      sharedState.lastResponse = {
-        success: false,
-        error: message,
-        errorDetails: { message, type: 'api_error', code: 'flow_allowed_models_unreadable', status: 503 },
-      };
-      currentAction = ERROR_ACTION;
-      preflightError = true;
-    }
-  }
-
-  // --- Quick Chat switch ---
-  // A conversation created before the switch was turned off must stop too, and it
-  // would otherwise keep reaching its model. This covers every path into a run.
-  if ((userTurn || stateSource === 'new') && !preflightError && isQuickChatFlowId(sharedState.flowId)) {
-    let allowed = false;
-    try {
-      allowed = await isQuickChatEnabled();
-    } catch (settingsError) {
-      log.warn(`Could not read the Quick Chat switch for ${effectiveConvId}; ending this turn`, settingsError);
-    }
-    if (!allowed) {
-      sharedState.lastResponse = {
-        success: false,
-        error: QUICK_CHAT_DISABLED_MESSAGE,
-        errorDetails: { message: QUICK_CHAT_DISABLED_MESSAGE, type: 'invalid_request_error', code: QUICK_CHAT_DISABLED_CODE, status: 403 },
-      };
-      currentAction = ERROR_ACTION;
-      preflightError = true;
-    }
-  }
-
-  // --- Re-check entry conditions on every user turn ---
-  // A follow-up normally resumes at the last Process step, and an edit or a client
-  // can name a step directly. Either would skip a condition placed before the first
-  // model step, so a flow with such a condition always re-enters at its Start node.
-  if (userTurn && stateSource !== 'new' && sharedState.flowId && !preflightError) {
-    try {
-      const entryNodeId = entryConditionStartNodeId(sharedState.flowSnapshot ?? await flowService.getFlow(sharedState.flowId));
-      if (entryNodeId && entryNodeId !== sharedState.currentNodeId) {
-        log.info(`Entry condition: re-entering ${effectiveConvId} at Start node ${entryNodeId} (was ${sharedState.currentNodeId}).`);
-        sharedState.currentNodeId = entryNodeId;
-        FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
-      }
-    } catch (entryCheckError) {
-      // Unlike the check above, skipping this one could let a message past a
-      // condition. Only this turn fails; the next message reads the flow again.
-      log.warn(`Could not read entry conditions for ${sharedState.flowId}; ending this turn`, entryCheckError);
-      const message = 'FLUJO could not read this flow to check its conditions. Please send the message again.';
-      sharedState.lastResponse = {
-        success: false,
-        error: message,
-        errorDetails: { message, type: 'api_error', code: 'flow_entry_check_failed', status: 503 },
-      };
-      currentAction = ERROR_ACTION;
-      preflightError = true;
-    }
+  if (await runPreflightChecks({ sharedState, input, effectiveConvId, userTurn, stateSource })) {
+    currentAction = ERROR_ACTION;
+    preflightError = true;
   }
 
   // Cancellation covers this run's own flag AND any ancestor's (issue #109): a
