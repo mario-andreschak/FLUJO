@@ -248,4 +248,103 @@ describe('browser capture and recording process boundary', () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+
+  it('records a page opened with browser_open without reloading it, and leaves it open with its state', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-browser-record-open-'));
+    const page = await localPage(`<!doctype html>
+      <p id="load"></p>
+      <div><button id="count" onclick="this.textContent = String(Number(this.textContent) + 1)">0</button></div>
+      <div><button id="tone">tone</button></div>
+      <script>
+        document.querySelector('#load').textContent = 'load-' + Math.random().toString(36).slice(2);
+        document.querySelector('#tone').onclick = () => {
+          const context = new AudioContext();
+          const oscillator = context.createOscillator();
+          oscillator.connect(context.destination);
+          oscillator.start();
+          setTimeout(() => { oscillator.stop(); context.close(); }, 900);
+        };
+      </script>`);
+    let client: Client | undefined;
+    try {
+      client = await connectBrowser(root);
+      const call = async (name: string, args: Record<string, unknown>) => {
+        const result = await client!.callTool({ name, arguments: args }, undefined, { timeout: 30_000 });
+        expect(result.isError).not.toBe(true);
+        return result.structuredContent as Record<string, unknown>;
+      };
+      const pageText = async (sessionId: string) => String((await call('browser_snapshot', { sessionId })).text);
+      const videoSize = async (file: string) => (await fs.stat(file)).size;
+
+      const { sessionId } = await call('browser_open', { url: page.url }) as { sessionId: string };
+      await call('browser_click', { sessionId, selector: '#count' });
+      await call('browser_click', { sessionId, selector: '#count' });
+      const loadMark = /load-\w+/.exec(await pageText(sessionId))?.[0];
+      expect(loadMark).toBeDefined();
+
+      const started = await call('browser_record_start', { sessionId, audio: true });
+      expect(started).toMatchObject({
+        success: true,
+        status: 'recording',
+        sessionId,
+        segment: 1,
+        effectiveResolution: { width: 1280, height: 720 },
+        actualViewport: { width: 1280, height: 720 },
+      });
+      expect(started).not.toHaveProperty('sourceLoaded');
+      expect(started.warnings).toEqual(expect.arrayContaining([expect.stringContaining('the live view is turned off')]));
+      await call('browser_click', { sessionId, selector: '#count' });
+      await call('browser_click', { sessionId, selector: '#tone' });
+      const during = await call('browser_screenshot', { sessionId });
+      expect(during).toMatchObject({ recordingId: started.recordingId, recordingGeometry: expect.objectContaining({ viewportPolicy: 'fixed' }) });
+      await new Promise((resolve) => setTimeout(resolve, 1_200));
+      expect((await call('browser_record_status', { sessionId })).audioBytes as number).toBeGreaterThan(0);
+
+      const stopped = await call('browser_record_stop', { sessionId });
+      expect(stopped).toMatchObject({
+        success: true,
+        status: 'stopped',
+        sessionId,
+        segment: 1,
+        sessionClosed: false,
+        actualEncodedVideoResolution: { width: 1280, height: 720 },
+        audioPath: expect.any(String),
+      });
+      expect(await videoSize(stopped.outputPath as string)).toBeGreaterThan(0);
+      expect(await videoSize(stopped.audioPath as string)).toBeGreaterThan(44);
+
+      const afterFirst = await pageText(sessionId);
+      expect(afterFirst).toContain(loadMark);
+      expect(afterFirst).toMatch(/^3$/m);
+      const listed = await call('browser_list_sessions', {});
+      expect(listed.sessions).toEqual([expect.objectContaining({ sessionId, purpose: 'interactive' })]);
+      const idle = await call('browser_screenshot', { sessionId });
+      expect(idle).toMatchObject({ viewport: { width: 1280, height: 720 } });
+      expect(idle).not.toHaveProperty('recordingId');
+
+      const second = await call('browser_record_start', { sessionId, audio: false, resolution: '640x360' });
+      expect(second).toMatchObject({ status: 'recording', sessionId, segment: 2, effectiveResolution: { width: 640, height: 360 } });
+      expect(second.warnings).toEqual(expect.arrayContaining([expect.stringContaining('resized from 1280x720 to 640x360')]));
+      await call('browser_click', { sessionId, selector: '#count' });
+      const secondStop = await call('browser_record_stop', { sessionId });
+      expect(secondStop).toMatchObject({
+        success: true,
+        sessionClosed: false,
+        segment: 2,
+        actualEncodedVideoResolution: { width: 640, height: 360 },
+      });
+      expect(secondStop.outputPath).not.toBe(stopped.outputPath);
+      expect(await videoSize(secondStop.outputPath as string)).toBeGreaterThan(0);
+
+      const afterSecond = await pageText(sessionId);
+      expect(afterSecond).toContain(loadMark);
+      expect(afterSecond).toMatch(/^4$/m);
+      expect(await call('browser_screenshot', { sessionId })).toMatchObject({ viewport: { width: 1280, height: 720 } });
+      expect(await call('browser_close', { sessionId })).toMatchObject({ closed: true });
+    } finally {
+      await client?.close().catch(() => undefined);
+      await closeServer(page.server);
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });

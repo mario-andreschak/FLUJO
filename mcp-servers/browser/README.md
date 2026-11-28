@@ -80,6 +80,33 @@ still recording changes when it stops, counted from now. When the session limit
 is full, a new recording first closes the oldest kept-open recording session
 that is no longer recording, and says so in `warnings`.
 
+## Recording a page opened with `browser_open`
+
+`browser_record_start { sessionId }` also records a session opened with
+`browser_open`. The recorder attaches to the page as it is: nothing reloads, so
+sign-ins, typed input, scroll position and anything else on the page stay.
+
+- The video has the page's own size, so nothing is scaled. Pass `resolution`
+  to record at another size: the page is resized (without reloading) while it
+  records. Sizes are kept even and within the recording limit (1920×1080 by
+  default); a page of another size is resized to the nearest one, and
+  `warnings` says so.
+- While it records, the page size is fixed, like a recording session: the live
+  view scales the stream instead of resizing the page.
+- When the recording stops, the page gets its earlier size back, can be
+  resized again, and stays open (unless `closeSession: true`). Record the next
+  part with the same `sessionId`, keep using it with the browser tools, or
+  close it with `browser_close`.
+- A session is never closed for being idle while it records; afterwards the
+  normal idle timeout applies again.
+- Audio: the page audio hook is shared by the live view and the recorder, so
+  both can listen at once, and the recorder only listens while a part records.
+  With the live view on (the default), the hook is on the page before it
+  loads, so all its sound is recorded. With the live view turned off, Web
+  Audio sound the page started before the first recording is missing, and the
+  start result says so in `warnings`; audio and video elements and sound
+  started later are recorded.
+
 ## Session lifecycle and ownership
 
 The backend-provided `_meta.flujo.ownerScope` is authoritative. Calls without

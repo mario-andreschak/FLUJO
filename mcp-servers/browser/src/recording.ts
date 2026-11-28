@@ -15,11 +15,19 @@
  *    the page keeps its state. `browser_record_start` with that `sessionId`
  *    records the next segment on the same page; `closeSession: true` on stop
  *    closes it.
+ *  - **Open pages**: `browser_record_start` with the `sessionId` of a
+ *    `browser_open` session borrows that page. The screencast attaches to the
+ *    live page, so nothing reloads and its state is kept. While a part records,
+ *    the page size is fixed (resized without reloading only when the video
+ *    needs another size); afterwards the page gets its own size and resizable
+ *    viewport back and stays open.
  *  - **Duration**: there is no fixed time limit. The limit follows free disk
  *    space (`recordingDisk.ts`), is reported up front, and a running recording
  *    stops early only when the disk is actually running low.
  *  - **Audio** reuses `audioTap.ts`'s in-page tap, driven over its own CDP
- *    session, appended to a WAV file on disk while recording.
+ *    session, appended to a WAV file on disk while recording. The tap is
+ *    shared with the live view; the recording's listener is switched on only
+ *    while a part records.
  *  - **Muxing** is opt-in and never required: if an `ffmpeg` binary is
  *    discoverable (`FLUJO_FFMPEG_PATH` or PATH), video+audio are combined with
  *    an argv-array `ffmpeg` invocation; otherwise both artifacts are returned
@@ -31,7 +39,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import type { Browser, BrowserContext, CDPSession, Page } from 'patchright';
+import type { Browser, BrowserContext, CDPSession, Disposable, Page } from 'patchright';
 import {
   getDataDir,
   isInside,
@@ -41,7 +49,13 @@ import {
   resolveCaptureSource,
   type Resolution,
 } from './capture.js';
-import { audioTapSource } from './audioTap.js';
+import {
+  AUDIO_TAP_PRESENT_EXPRESSION,
+  audioSinkMutedExpression,
+  audioTapSource,
+  evaluateInMainWorlds,
+  trackMainWorlds,
+} from './audioTap.js';
 import {
   checkLowDisk,
   diskBaseline,
@@ -56,6 +70,7 @@ import {
   defaultViewport,
   effectiveBrowserOwnerScope,
   closeSession,
+  closeSessionObject,
   getSession,
   integerEnv,
   installRequestPolicy,
@@ -105,6 +120,18 @@ type Geometry = {
   deviceScaleFactor: number;
 };
 
+/** The session settings a part changes on a borrowed `browser_open` page, put back when the part ends. */
+type PageSettings = Pick<BrowserSession, 'viewportPolicy' | 'configuredViewport' | 'configuredVideoResolution' | 'deviceScaleFactor'>;
+
+type BorrowedPage = {
+  settings: PageSettings;
+  /** The page size before this part resized the page to record it exactly. */
+  restoreViewport?: Resolution;
+};
+
+/** The recording's listener on the page audio tap, connected once per recording session. */
+type AudioTap = { cdp: CDPSession; binding: string; mainWorlds: Set<number> };
+
 /** One recording browser session; it outlives its segments unless asked to close. */
 type RecordingSession = Geometry & {
   sessionId: string;
@@ -112,11 +139,15 @@ type RecordingSession = Geometry & {
   session: BrowserSession;
   context: BrowserContext;
   page: Page;
-  cdp?: CDPSession;
+  audioTap?: AudioTap;
   setupAttempts: string[];
   active?: RecordingState;
+  /** Settles when the part being set up on this session has started (or failed to). */
+  starting?: Promise<void>;
   segmentCount: number;
   closed: boolean;
+  /** Set when the session was opened with browser_open and recording borrows its page. */
+  borrowed?: BorrowedPage;
 };
 
 type AudioWriter = { path: string; stream: WriteStream; rate: number };
@@ -130,6 +161,8 @@ type RecordingState = {
   segment: number;
   startedAt: number;
   audio: boolean;
+  /** The init script that switches the recording's audio listener on in pages loaded during this part. */
+  audioOn?: Disposable;
   audioWriter?: AudioWriter;
   audioBytes: number;
   audioFull: boolean;
@@ -247,11 +280,13 @@ async function discardAudio(state: RecordingState): Promise<void> {
   await fs.rm(writer.path, { force: true }).catch(() => undefined);
 }
 
-/** Install the page audio tap once per recording session; chunks go to the segment that is recording. */
-async function ensureAudioTap(owner: RecordingSession): Promise<void> {
-  if (owner.cdp) return;
+/** Connect the recording's listener to the page audio tap once per recording session; chunks go to the part that is recording. */
+async function ensureAudioTap(owner: RecordingSession, warnings: string[]): Promise<AudioTap> {
+  if (owner.audioTap) return owner.audioTap;
   const cdp = await owner.context.newCDPSession(owner.page);
   const binding = `${AUDIO_BINDING_PREFIX}${owner.sessionId.replace(/[^A-Za-z0-9]/g, '')}`;
+  const mainWorlds = new Set<number>();
+  trackMainWorlds(cdp, mainWorlds);
   cdp.on('Runtime.bindingCalled', (event) => {
     if (event.name !== binding) return;
     const state = owner.active;
@@ -259,23 +294,58 @@ async function ensureAudioTap(owner: RecordingSession): Promise<void> {
     acceptAudioChunk(state, event.payload);
   });
   try {
-    const source = audioTapSource(binding);
-    // BrowserContext.addInitScript is the durable main-world hook. A CDP-only
-    // install could remain in an isolated/default execution context and
-    // disappear when about:blank navigated to the actual page.
-    await owner.context.addInitScript({ content: source });
     await cdp.send('Runtime.enable');
     await cdp.send('Runtime.addBinding', { name: binding });
-    await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source }).catch(() => undefined);
-    const evaluated = await cdp.send('Runtime.evaluate', { expression: source });
-    if ('exceptionDetails' in evaluated && evaluated.exceptionDetails) {
-      throw new Error('Chromium rejected the recording audio initialization script.');
+    if (owner.borrowed) {
+      const present = await cdp.send('Runtime.evaluate', { expression: AUDIO_TAP_PRESENT_EXPRESSION, returnByValue: true });
+      if (present.result.value !== true) {
+        warnings.push(
+          'If this page started sound with Web Audio before the recording began, that sound is missing from the audio track: FLUJO\'s audio hook was not on the page yet because the live view is turned off. '
+          + 'Audio and video elements, and any sound started from now on, are recorded. Start that sound again to include it.',
+        );
+      }
     }
-    owner.cdp = cdp;
+    // Page.addInitScript is the durable main-world hook; a CDP-only install
+    // can stay behind in about:blank's context when the real page loads. It
+    // runs before every later navigation with this listener switched off, so
+    // sound a page sets up between parts is still heard in the next part.
+    await owner.page.addInitScript({ content: audioTapSource(binding, true) });
+    const tap: AudioTap = { cdp, binding, mainWorlds };
+    owner.audioTap = tap;
+    return tap;
   } catch (error) {
     await cdp.detach().catch(() => undefined);
     throw error;
   }
+}
+
+/** Switch the recording's audio listener on for this part, including pages it loads. */
+async function startSegmentAudio(state: RecordingState): Promise<void> {
+  if (!state.audio) return;
+  try {
+    const tap = await ensureAudioTap(state.owner, state.warnings);
+    const on = audioTapSource(tap.binding, false);
+    state.audioOn = await state.owner.page.addInitScript({ content: on });
+    if (await evaluateInMainWorlds(tap.cdp, tap.mainWorlds, on) === 0) {
+      throw new Error('Chromium rejected the recording audio initialization script.');
+    }
+    // A stop that arrived while the listener was being switched on found nothing to switch off.
+    if (state.stopping) await stopSegmentAudio(state);
+  } catch (error) {
+    state.audio = false;
+    await stopSegmentAudio(state);
+    state.warnings.push(`Audio capture could not initialize; video recording continues without audio (${errorText(error)}).`);
+  }
+}
+
+/** Switch the listener off again, so the page stops sending sound nobody records. */
+async function stopSegmentAudio(state: RecordingState): Promise<void> {
+  const on = state.audioOn;
+  state.audioOn = undefined;
+  await on?.dispose().catch(() => undefined);
+  const tap = state.owner.audioTap;
+  if (!tap || state.owner.page.isClosed()) return;
+  await evaluateInMainWorlds(tap.cdp, tap.mainWorlds, audioSinkMutedExpression(tap.binding, true));
 }
 
 async function resolveFfmpeg(): Promise<string | undefined> {
@@ -594,18 +664,146 @@ async function saveSegmentVideo(state: RecordingState, warnings: string[]): Prom
   return destination;
 }
 
-async function closeRecordingSession(owner: RecordingSession, warnings?: string[]): Promise<void> {
+async function closeRecordingSession(owner: RecordingSession): Promise<void> {
   if (owner.closed) return;
   owner.closed = true;
   if (recordingSessions.get(owner.sessionId) === owner) recordingSessions.delete(owner.sessionId);
-  const cdp = owner.cdp;
-  owner.cdp = undefined;
-  await cdp?.detach().catch(() => undefined);
-  const closed = await closeSession(owner.sessionId, owner.ownerScope).catch((error: unknown) => {
-    warnings?.push(`Closing the recording session reported: ${errorText(error)}.`);
-    return false;
+  const tap = owner.audioTap;
+  owner.audioTap = undefined;
+  await tap?.cdp.detach().catch(() => undefined);
+  await closeSessionObject(owner.session);
+}
+
+/** Close the session through the recording when its page closes or it expires, so a running part is saved first. */
+function watchRecordingSession(owner: RecordingSession): void {
+  owner.session.keepAlive = () => Boolean(owner.active && !owner.active.stopping);
+  owner.session.onExpire = () => { void endRecordingSession(owner, 'session-closed'); };
+  owner.page.on('close', () => { void endRecordingSession(owner, 'session-closed'); });
+}
+
+/** Let recording use a page opened with browser_open, without reloading it. */
+function borrowSession(session: BrowserSession, ownerScope: string): RecordingSession {
+  const viewport = session.page.viewportSize() ?? defaultViewport();
+  const owner: RecordingSession = {
+    sessionId: session.id,
+    ownerScope,
+    session,
+    context: session.context,
+    page: session.page,
+    requestedResolution: viewport,
+    effectiveResolution: viewport,
+    actualViewport: viewport,
+    deviceScaleFactor: session.deviceScaleFactor ?? 1,
+    setupAttempts: [],
+    segmentCount: 0,
+    closed: false,
+    borrowed: {
+      settings: {
+        viewportPolicy: session.viewportPolicy,
+        configuredViewport: session.configuredViewport,
+        configuredVideoResolution: session.configuredVideoResolution,
+        deviceScaleFactor: session.deviceScaleFactor,
+      },
+    },
+  };
+  recordingSessions.set(session.id, owner);
+  watchRecordingSession(owner);
+  return owner;
+}
+
+function sameSize(left: Resolution | null | undefined, right: Resolution): boolean {
+  return Boolean(left && left.width === right.width && left.height === right.height);
+}
+
+function sizeText(size: Resolution): string {
+  return `${size.width}x${size.height}`;
+}
+
+function recordingSizeLimits(): { maxWidth: number; maxHeight: number } {
+  return {
+    maxWidth: integerEnv('FLUJO_BROWSER_RECORD_MAX_WIDTH', 1920, 640, 3840),
+    maxHeight: integerEnv('FLUJO_BROWSER_RECORD_MAX_HEIGHT', 1080, 360, 2160),
+  };
+}
+
+type ObservedViewport = Resolution & { dpr: number };
+const OBSERVE_VIEWPORT = '({ width: window.innerWidth, height: window.innerHeight, dpr: window.devicePixelRatio })';
+
+/**
+ * Start a part on a borrowed page. The video has the page's own size (or the
+ * size asked for), so nothing is scaled. When the size has to change, the page
+ * is resized without reloading and gets its old size back when the part ends.
+ */
+async function startBorrowedScreencast(
+  owner: RecordingSession,
+  args: StartRecordingArgs,
+  videoPath: string,
+  warnings: string[],
+): Promise<void> {
+  const { page, session } = owner;
+  const before = page.viewportSize() ?? await page.evaluate<Resolution>('({ width: window.innerWidth, height: window.innerHeight })');
+  const { maxWidth, maxHeight } = recordingSizeLimits();
+  const resolution = normalizeResolution(args.resolution, args.width, args.height, {
+    defaultValue: before,
+    minWidth: 320,
+    minHeight: 240,
+    maxWidth,
+    maxHeight,
+    even: true,
   });
-  if (!closed) await owner.context.close().catch(() => undefined);
+  if (resolution.explicit || args.resolution !== undefined) warnings.push(...resolution.warnings);
+  const attempts: string[] = [];
+  let chosen: Resolution | undefined;
+  let observed: ObservedViewport | undefined;
+  const candidates = resolutionFallbacks(resolution.effective)
+    .filter(({ width, height }) => width <= maxWidth && height <= maxHeight);
+  for (const candidate of candidates) {
+    try {
+      if (!sameSize(page.viewportSize(), candidate)) await page.setViewportSize(candidate);
+      observed = await page.evaluate<ObservedViewport>(OBSERVE_VIEWPORT);
+      await page.screencast.start({ path: videoPath, size: candidate });
+      chosen = candidate;
+      break;
+    } catch (error) {
+      attempts.push(`${sizeText(candidate)}: ${errorText(error)}`);
+    }
+  }
+  if (!chosen || !observed) {
+    if (!page.isClosed() && !sameSize(page.viewportSize(), before)) await page.setViewportSize(before).catch(() => undefined);
+    throw new BrowserMcpError('BROWSER_UNAVAILABLE', `Could not start video recording on this page after safe resolution fallbacks. ${attempts.join(' | ')}`);
+  }
+  if (attempts.length > 0) {
+    warnings.push(`Recording recovered at ${sizeText(chosen)} after ${attempts.length} failed resolution attempt(s).`);
+  }
+  if (!sameSize(before, chosen)) {
+    if (owner.borrowed) owner.borrowed.restoreViewport = before;
+    warnings.push(`The page was resized from ${sizeText(before)} to ${sizeText(chosen)} for this recording, without reloading it. It goes back to ${sizeText(before)} when the recording stops.`);
+  }
+  if (!sameSize(observed, chosen)) {
+    warnings.push(`The page reports a ${sizeText(observed)} window instead of ${sizeText(chosen)}, so the video is scaled to fit.`);
+  }
+  if (observed.dpr !== 1) {
+    warnings.push(`This page draws ${observed.dpr} screen pixels per CSS pixel, so the video is scaled down to ${sizeText(chosen)}.`);
+  }
+  owner.requestedResolution = resolution.requested;
+  owner.effectiveResolution = chosen;
+  owner.actualViewport = { width: observed.width, height: observed.height };
+  owner.deviceScaleFactor = observed.dpr;
+  owner.setupAttempts = attempts;
+  session.viewportPolicy = 'fixed';
+  session.configuredViewport = chosen;
+  session.configuredVideoResolution = chosen;
+  session.deviceScaleFactor = observed.dpr;
+}
+
+/** Give a borrowed page its own settings and size back once a part ends. */
+async function releaseBorrowedPage(owner: RecordingSession): Promise<void> {
+  const borrowed = owner.borrowed;
+  if (!borrowed) return;
+  Object.assign(owner.session, borrowed.settings);
+  const restore = borrowed.restoreViewport;
+  borrowed.restoreViewport = undefined;
+  if (restore && !owner.page.isClosed()) await owner.page.setViewportSize(restore).catch(() => undefined);
 }
 
 /** The page or session went away: save the running segment, then release the session. */
@@ -653,6 +851,7 @@ async function finalizeSegment(
 
   const durationMs = Date.now() - state.startedAt;
   const videoPath = await saveSegmentVideo(state, state.warnings);
+  await stopSegmentAudio(state);
 
   let audioPath: string | undefined;
   if (state.audio && state.audioBytes > 0) {
@@ -667,10 +866,12 @@ async function finalizeSegment(
   }
   const warnings = [...state.warnings];
 
+  const keepOpen = !options.closeSession && !owner.page.isClosed();
+  if (keepOpen) await releaseBorrowedPage(owner);
   if (owner.active === state) owner.active = undefined;
   if (owner.session.recordingId === state.id) owner.session.recordingId = undefined;
-  if (options.closeSession || owner.page.isClosed()) await closeRecordingSession(owner, warnings);
-  else refreshIdleWindow(owner);
+  if (keepOpen) refreshIdleWindow(owner);
+  else await closeRecordingSession(owner);
   const sessionClosed = owner.closed;
 
   let mergedPath: string | undefined;
@@ -962,16 +1163,6 @@ function newSegmentState(
   };
 }
 
-async function attachSegmentAudio(state: RecordingState): Promise<void> {
-  if (!state.audio) return;
-  try {
-    await ensureAudioTap(state.owner);
-  } catch (error) {
-    state.audio = false;
-    state.warnings.push(`Audio capture could not initialize; video recording continues without audio (${errorText(error)}).`);
-  }
-}
-
 async function loadSource(page: Page, args: StartRecordingArgs, warnings: string[]): Promise<boolean | undefined> {
   const hasSource = [args.source, args.url, args.html, args.filePath]
     .some((value) => typeof value === 'string' && value.trim().length > 0);
@@ -1027,7 +1218,10 @@ export type StartRecordingArgs = {
   timeoutMs?: unknown;
 };
 
-/** Record the next segment on a kept-open recording session, or change when its running segment stops. */
+/**
+ * Record the next segment on an open session (a kept-open recording session or
+ * a browser_open page), or change when its running segment stops.
+ */
 async function continueRecording(
   sessionId: string,
   args: StartRecordingArgs,
@@ -1036,17 +1230,27 @@ async function continueRecording(
   ownerScope: string,
 ): Promise<Record<string, unknown>> {
   const openOwner = (): RecordingSession => {
-    const found = recordingSessions.get(sessionId);
-    if (!found || found.closed || found.ownerScope !== ownerScope) {
-      throw new BrowserMcpError(
-        'NOT_FOUND',
-        'No open recording session has this sessionId. Only sessions started by browser_record_start can record more parts; leave sessionId out to start a new recording.',
-      );
+    let session: BrowserSession;
+    try {
+      session = getSession(sessionId, ownerScope);
+    } catch (error) {
+      if (error instanceof BrowserMcpError && error.code === 'NOT_FOUND') {
+        throw new BrowserMcpError(
+          'NOT_FOUND',
+          'No open browser session has this sessionId. Pass the sessionId of a page opened with browser_open or of an earlier recording, or leave sessionId out to start a new recording session.',
+        );
+      }
+      throw error;
     }
-    getSession(sessionId, ownerScope);
-    return found;
+    const found = recordingSessions.get(sessionId);
+    if (found && found.session === session && !found.closed) return found;
+    return borrowSession(session, ownerScope);
   };
   let owner = openOwner();
+  if (owner.starting) {
+    await owner.starting;
+    owner = openOwner();
+  }
   if (owner.active && !owner.active.stopping) {
     const state = owner.active;
     if (durationMs === undefined) {
@@ -1063,7 +1267,7 @@ async function continueRecording(
     await owner.active.done.promise.catch(() => undefined);
     owner = openOwner();
   }
-  if (owner.active) {
+  if (owner.active || owner.starting) {
     throw new BrowserMcpError('INVALID_ARGUMENT', 'Another call started recording on this session at the same time; use its recordingId.');
   }
   if (recordings.size + recordingReservations.size >= MAX_CONCURRENT_RECORDINGS) {
@@ -1071,29 +1275,42 @@ async function continueRecording(
   }
   const id = randomUUID();
   recordingReservations.add(id);
+  const starting = createDeferred<void>();
+  owner.starting = starting.promise;
   let state: RecordingState;
   try {
     const audio = booleanArg(args.audio) !== false;
-    const disk = await recordingDiskBudget(recordingFolders(), owner.effectiveResolution, audio);
+    let disk = await recordingDiskBudget(recordingFolders(), owner.effectiveResolution, audio);
     assertDiskRoom(disk);
-    if (args.resolution !== undefined || args.width !== undefined || args.height !== undefined) {
-      warnings.push(`A recording session keeps its page size, so this part is recorded at ${owner.effectiveResolution.width}x${owner.effectiveResolution.height}.`);
-    }
     const baseline = await diskBaseline(recordingFolders());
     await fs.mkdir(recordingRoot(), { recursive: true });
-    if (owner.closed || owner.active) {
-      throw new BrowserMcpError('INVALID_ARGUMENT', 'The session closed or started another recording while this one was starting; check browser_record_status.');
+    if (owner.closed) {
+      throw new BrowserMcpError('INVALID_ARGUMENT', 'The session closed while this recording was starting; check browser_record_status.');
     }
-    await owner.page.screencast.start({ path: path.join(recordingRoot(), `${id}.webm`), size: owner.effectiveResolution });
+    const videoPath = path.join(recordingRoot(), `${id}.webm`);
+    if (owner.borrowed) {
+      const sizeBefore = owner.effectiveResolution;
+      await startBorrowedScreencast(owner, args, videoPath, warnings);
+      if (!sameSize(sizeBefore, owner.effectiveResolution)) {
+        disk = await recordingDiskBudget(recordingFolders(), owner.effectiveResolution, audio);
+      }
+    } else {
+      if (args.resolution !== undefined || args.width !== undefined || args.height !== undefined) {
+        warnings.push(`A recording session keeps its page size, so this part is recorded at ${sizeText(owner.effectiveResolution)}.`);
+      }
+      await owner.page.screencast.start({ path: videoPath, size: owner.effectiveResolution });
+    }
     const outputPath = typeof args.outputPath === 'string' && args.outputPath.length > 0 ? args.outputPath : undefined;
     state = newSegmentState(owner, { id, audio, outputPath, disk, baseline, warnings });
     owner.active = state;
     owner.session.recordingId = id;
     recordings.set(id, state);
   } finally {
+    owner.starting = undefined;
+    starting.resolve();
     recordingReservations.delete(id);
   }
-  await attachSegmentAudio(state);
+  await startSegmentAudio(state);
   const sourceLoaded = await loadSource(owner.page, args, state.warnings);
   startTimers(state, durationMs);
   if (durationMs !== undefined) state.durationMs = durationMs;
@@ -1115,8 +1332,7 @@ export async function startRecording(
     throw new BrowserMcpError('SESSION_LIMIT', `The recording limit (${MAX_CONCURRENT_RECORDINGS}) has been reached.`);
   }
   const defaults = defaultViewport();
-  const maxWidth = integerEnv('FLUJO_BROWSER_RECORD_MAX_WIDTH', 1920, 640, 3840);
-  const maxHeight = integerEnv('FLUJO_BROWSER_RECORD_MAX_HEIGHT', 1080, 360, 2160);
+  const { maxWidth, maxHeight } = recordingSizeLimits();
   const resolution = normalizeResolution(args.resolution, args.width, args.height, {
     defaultValue: defaults,
     minWidth: 320,
@@ -1264,13 +1480,11 @@ export async function startRecording(
   const state = newSegmentState(owner, { id, audio: audioRequested, outputPath, disk, baseline, warnings: [...resolution.warnings] });
   owner.active = state;
   recordingSessions.set(id, owner);
-  session.keepAlive = () => Boolean(owner.active && !owner.active.stopping);
-  session.onExpire = () => { void endRecordingSession(owner, 'session-closed'); };
-  page.on('close', () => { void endRecordingSession(owner, 'session-closed'); });
+  watchRecordingSession(owner);
   recordingReservations.delete(id);
   recordings.set(id, state);
 
-  await attachSegmentAudio(state);
+  await startSegmentAudio(state);
   const sourceLoaded = await loadSource(page, args, state.warnings) ?? false;
   if (durationMs !== undefined) state.durationMs = durationMs;
   startTimers(state, durationMs);

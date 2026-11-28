@@ -52,7 +52,7 @@ describe('browser audio stream integration', () => {
         window.__audioTestOscillator.start();
         return {
           tapped: window.__flujoAudioTap,
-          muted: window.__flujoAudioMuted,
+          muted: window.__flujoAudioSinks.__flujoAudioChunk,
           destination: window.__audioTestContext.destination.constructor.name
         };
       })()`,
