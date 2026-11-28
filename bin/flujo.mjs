@@ -115,7 +115,7 @@ if (!process.env.FLUJO_BASE_URL || process.env.FLUJO_BASE_URL.trim().length === 
 }
 
 // --- build child-process env, reusing the launcher's single source of truth -
-const { buildLaunchEnv } = await import(pathToFileURL(path.join(packageRoot, 'scripts', 'launch-next.mjs')).href);
+const { buildLaunchEnv, serverNodeArgs } = await import(pathToFileURL(path.join(packageRoot, 'scripts', 'launch-next.mjs')).href);
 const { applyExposureRuntimeEnv, withExposureHostname } = await import(
   pathToFileURL(path.join(packageRoot, 'scripts', 'exposure-mode.mjs')).href
 );
@@ -150,7 +150,7 @@ catch (error) {
 if (process.platform === 'win32' && !instance.env.UV_THREADPOOL_SIZE) {
   instance.env.UV_THREADPOOL_SIZE = '16';
 }
-const child = spawn(process.execPath, [nextBin, ...nextArgs], {
+const child = spawn(process.execPath, [...serverNodeArgs(instance.env), nextBin, ...nextArgs], {
   stdio: 'inherit',
   cwd: packageRoot,
   env: instance.env,

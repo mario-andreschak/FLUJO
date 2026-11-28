@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { scaledHeapMegabytes, withScaledHeap } from '../bin/node-heap.mjs';
-import { withDevelopmentHeap } from './launch-next.mjs';
+import { serverNodeArgs, withDevelopmentHeap } from './launch-next.mjs';
 import { compilerNodeArgs } from './run-tsc.mjs';
 
 const GB = 1024 ** 3;
@@ -42,4 +42,18 @@ test('only the development server gets the scaled heap', () => {
 test('npm run typecheck runs the compiler through the scaling launcher', () => {
   const { scripts } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   assert.equal(scripts.typecheck, 'next typegen && node scripts/run-tsc.mjs --noEmit -p tsconfig.json');
+});
+
+test('the server keeps async context in frames on Node 22, as Node 24 does by default (#757)', () => {
+  const node22 = new Set(['--experimental-async-context-frame', '--no-experimental-async-context-frame', '--use-system-ca']);
+  const node24 = new Set(['--async-context-frame', '--no-async-context-frame', '--use-system-ca']);
+  assert.deepEqual(serverNodeArgs({}, node22), ['--experimental-async-context-frame']);
+  assert.deepEqual(serverNodeArgs({ NODE_OPTIONS: '--use-system-ca' }, node22), ['--experimental-async-context-frame']);
+  assert.deepEqual(serverNodeArgs({}, node24), [], 'Node 24 already does it and does not know the Node 22 flag');
+  assert.deepEqual(serverNodeArgs({ NODE_OPTIONS: '--no-experimental-async-context-frame' }, node22), [], 'a choice in NODE_OPTIONS wins');
+  const launcher = readFileSync(new URL('./launch-next.mjs', import.meta.url), 'utf8');
+  const npmLauncher = readFileSync(new URL('../bin/flujo.mjs', import.meta.url), 'utf8');
+  for (const source of [launcher, npmLauncher]) {
+    assert.match(source, /spawn\(process\.execPath, \[\.\.\.serverNodeArgs\(instance\.env\), nextBin, \.\.\.nextArgs\]/);
+  }
 });

@@ -86,6 +86,21 @@ export function buildLaunchEnv(baseEnv = process.env) {
   return env;
 }
 
+const ASYNC_CONTEXT_FRAME = '--experimental-async-context-frame';
+
+/**
+ * Node arguments for the FLUJO server process itself (#757). Node 22 keeps
+ * AsyncLocalStorage values with async hooks that run for every promise; in a
+ * burst of 300 chats they cost more time than the chats did. Node 24 keeps them
+ * in async context frames by default, and Node 22 has the same code behind a
+ * flag. A choice already made in NODE_OPTIONS wins. These are arguments, not
+ * NODE_OPTIONS, so a child process started with another Node never sees a flag
+ * it may not know.
+ */
+export function serverNodeArgs(env = process.env, allowed = process.allowedNodeEnvironmentFlags) {
+  return allowed.has(ASYNC_CONTEXT_FRAME) && !/async-context-frame/.test(env.NODE_OPTIONS || '') ? [ASYNC_CONTEXT_FRAME] : [];
+}
+
 /**
  * Development compiles FLUJO's pages in the server process and needs more than Node's 2 GB
  * default on computers with less than 15 GB of memory (#1441), so `dev` gets a heap that
@@ -182,7 +197,7 @@ async function launchNext(passthroughArgs) {
     process.exit(1);
   }
 
-  const child = spawn(process.execPath, [nextBin, ...nextArgs], {
+  const child = spawn(process.execPath, [...serverNodeArgs(instance.env), nextBin, ...nextArgs], {
     stdio: 'inherit',
     env: instance.env,
   });
