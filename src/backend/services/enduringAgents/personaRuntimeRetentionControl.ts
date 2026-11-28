@@ -1,359 +1,282 @@
 /**
- * The one place that decides whether Persona runtime retention is off,
- * measuring only (`shadow`) or cleaning up (`active`) for a Persona (#481).
+ * Decides, per workspace, whether Persona history cleanup only measures
+ * (`shadow`) or really cleans up (`active`) (#481). Nobody switches it: every
+ * workspace starts by measuring, switches cleanup on by itself once its own
+ * measurements pass fixed rules, and goes back to measuring by itself on any
+ * anomaly. The state is stored in the workspace, so a restart keeps it.
  *
- * Every retention path asks this module: the hourly sweep and the cleanup that
- * follows a finished Activity. Writes need a grant issued here, and the grant
- * re-reads the live switches before every single write, so turning retention
- * off takes effect within seconds and without a restart.
+ * Writes need a grant issued here. The grant re-reads the stored state and the
+ * Persona lock before every single write, so an anomaly found anywhere stops
+ * the next write.
  */
 
-import {
-  FEATURES,
-  PERSONA_RUNTIME_RETENTION_DEFAULT_CONFIG,
-  PERSONA_RUNTIME_RETENTION_DISABLED_CONFIG,
-  readPersonaRuntimeRetentionEnvironment,
-  validatePersonaRuntimeRetentionConfig,
-  type PersonaRuntimeRetentionConfig,
-  type PersonaRuntimeRetentionEnvironment,
-  type PersonaRuntimeRetentionMode,
-} from '@/config/features';
+import { z } from 'zod';
+
 import { StorageKey } from '@/shared/types/storage/storage';
 import { createLogger } from '@/utils/logger';
 import { loadItem, saveItem } from '@/utils/storage/backend';
-import { getCurrentWorkspace, workspaceCacheKey } from '@/utils/workspace';
+import { getCurrentWorkspace } from '@/utils/workspace';
 
 import {
-  getPersonaRetentionEligibility,
-  type PersonaRetentionEligibility,
-} from './personaRuntimeRetentionCohort';
-import {
   withIssuedPersonaRuntimeLockOperation,
+  withWorkspaceRuntimeLock,
   type PersonaRuntimeLock,
 } from './runtimeLock';
 
 const log = createLogger('enduringAgents/personaRuntimeRetentionControl');
 
-const SETTING_CACHE_TTL_MS = 5_000;
-const UNREADABLE_SETTING_RETRY_MS = 60_000;
-const MODE_RANK: Record<PersonaRuntimeRetentionMode, number> = {
-  disabled: 0,
-  shadow: 1,
-  active: 2,
-};
+const DAY_MS = 24 * 60 * 60 * 1_000;
+const STATE_LOCK = 'persona-runtime-retention';
 
-export const PERSONA_RUNTIME_RETENTION_MODES: readonly PersonaRuntimeRetentionMode[] =
-  ['disabled', 'shadow', 'active'];
+/**
+ * Cleanup switches on after this many measuring runs in a row found nothing
+ * wrong, and only once the first of them is at least this old.
+ */
+export const PERSONA_RUNTIME_RETENTION_GRADUATION = Object.freeze({
+  cleanSweeps: 24,
+  spanMs: 7 * DAY_MS,
+});
 
-export type PersonaRuntimeRetentionModeSource =
-  | 'code-switch'
-  | 'environment-invalid'
-  | 'setting-unreadable'
-  | 'setting'
-  | 'environment'
-  | 'default';
+/**
+ * A run may change at most `factor` times the largest number of records seen
+ * in a clean run since the last anomaly, plus `slack`. More is an anomaly.
+ */
+export const PERSONA_RUNTIME_RETENTION_VOLUME = Object.freeze({
+  factor: 2,
+  slack: 100,
+});
 
-export interface PersonaRuntimeRetentionSetting {
-  /** null means no choice was made: the environment or the default decides. */
-  mode: PersonaRuntimeRetentionMode | null;
-  updatedAt?: number;
-}
+const ModeSchema = z.enum(['shadow', 'active']);
+const AnomalySchema = z.enum(['referenced', 'invalid', 'error', 'volume']);
+const count = z.number().int().nonnegative();
 
-export interface PersonaRuntimeRetentionControlInputs {
-  codeSwitch: boolean;
-  environment: PersonaRuntimeRetentionEnvironment;
-  setting: PersonaRuntimeRetentionMode | null;
-  settingReadable: boolean;
-}
+const StateSchema = z.object({
+  version: z.literal(1),
+  mode: ModeSchema,
+  /** Measuring runs in a row without an anomaly. */
+  cleanSweeps: count,
+  /** Clock time of the first run in that streak. */
+  streakStartedAt: count.optional(),
+  /** Most records any clean run since the last anomaly would change. */
+  candidateBaseline: count.optional(),
+  graduatedAt: count.optional(),
+  rollbacks: count,
+  lastAnomaly: z.object({ kind: AnomalySchema, at: count, mode: ModeSchema }).optional(),
+  lastSweep: z.object({
+    at: count,
+    mode: ModeSchema,
+    personas: count,
+    candidates: count,
+    compacted: count,
+    anomalies: z.array(AnomalySchema),
+  }).optional(),
+}).strict();
 
-export interface PersonaRuntimeRetentionControl {
-  /** Effective configuration; `mode` is what retention does right now. */
-  config: PersonaRuntimeRetentionConfig;
-  /** Which input decided `config.mode`. */
-  source: PersonaRuntimeRetentionModeSource;
-  defaultMode: PersonaRuntimeRetentionMode;
-  codeSwitch: boolean;
-  setting: PersonaRuntimeRetentionMode | null;
-  environmentMode: PersonaRuntimeRetentionMode | null;
-  environmentValid: boolean;
-}
+export type PersonaRuntimeRetentionMode = z.infer<typeof ModeSchema>;
+export type PersonaRuntimeRetentionAnomaly = z.infer<typeof AnomalySchema>;
+export type PersonaRuntimeRetentionState = z.infer<typeof StateSchema>;
+export type PersonaRuntimeRetentionSweepSummary =
+  NonNullable<PersonaRuntimeRetentionState['lastSweep']>;
+export type PersonaRuntimeRetentionTransition = 'graduated' | 'rolled-back' | null;
 
-export interface PersonaRuntimeRetentionControlOptions {
-  /** Replaces the environment for callers that pin a rollout, such as tests. */
-  config?: PersonaRuntimeRetentionConfig;
-}
-
-export interface PersonaRuntimeRetentionDecision {
-  /** What retention may do for this Persona: `disabled` outside the cohort. */
-  mode: PersonaRuntimeRetentionMode;
-  control: PersonaRuntimeRetentionControl;
-  eligibility: PersonaRetentionEligibility | null;
+export interface PersonaRuntimeRetentionStateRead {
+  state: PersonaRuntimeRetentionState;
+  /** False when the stored state is briefly unreadable: measure, never write. */
+  readable: boolean;
 }
 
 export interface PersonaRuntimeRetentionWriteGrant {
   readonly personaId: string;
-  readonly cohortVersion: string;
   /**
-   * Re-checks lock ownership and the live switches. False means stop: no
-   * further retention write may happen under this grant.
+   * Re-checks the workspace, the Persona lock and the stored state. False
+   * means stop: no further cleanup write may happen under this grant.
    */
   authorize(): Promise<boolean>;
 }
 
-type SettingCacheEntry = {
-  value: PersonaRuntimeRetentionSetting;
-  readable: boolean;
-  at: number;
-  ttlMs: number;
+const ANOMALY_REASONS: Record<PersonaRuntimeRetentionAnomaly, string> = {
+  referenced: 'a record it would change is still used by unfinished work',
+  invalid: 'a cleaned-up record would not be valid',
+  error: 'a cleanup run hit an error',
+  volume: 'a run would change far more records than measured before',
 };
 
-declare global {
-  var __flujo_persona_runtime_retention_setting_cache: Map<string, SettingCacheEntry> | undefined;
-}
-
-const settingCache: Map<string, SettingCacheEntry> =
-  global.__flujo_persona_runtime_retention_setting_cache
-  ?? (global.__flujo_persona_runtime_retention_setting_cache = new Map());
 const issuedGrants = new WeakSet<object>();
-const reportedEnvironmentProblems = new Set<string>();
 
-export function isPersonaRuntimeRetentionMode(
-  value: unknown,
-): value is PersonaRuntimeRetentionMode {
-  return typeof value === 'string'
-    && (PERSONA_RUNTIME_RETENTION_MODES as readonly string[]).includes(value);
+export function initialPersonaRuntimeRetentionState(): PersonaRuntimeRetentionState {
+  return { version: 1, mode: 'shadow', cleanSweeps: 0, rollbacks: 0 };
 }
 
-/**
- * Whoever turns retention down wins: the code switch, a malformed environment,
- * an unreadable setting, or the lower of the workspace setting and
- * FLUJO_PERSONA_RUNTIME_RETENTION_MODE. The default applies only when nobody
- * made a choice.
- */
-export function resolvePersonaRuntimeRetentionControl(
-  inputs: PersonaRuntimeRetentionControlInputs,
-): PersonaRuntimeRetentionControl {
-  const described = {
-    defaultMode: PERSONA_RUNTIME_RETENTION_DEFAULT_CONFIG.mode,
-    codeSwitch: inputs.codeSwitch,
-    setting: inputs.setting,
-    environmentMode: inputs.environment.mode,
-    environmentValid: inputs.environment.valid,
-  };
-  const off = (source: PersonaRuntimeRetentionModeSource): PersonaRuntimeRetentionControl => ({
-    ...described,
-    config: { ...PERSONA_RUNTIME_RETENTION_DISABLED_CONFIG },
-    source,
-  });
-  if (!inputs.codeSwitch) return off('code-switch');
-  if (!inputs.environment.valid) return off('environment-invalid');
-  if (!inputs.settingReadable) return off('setting-unreadable');
+/** The most records a run may change before that counts as unusual volume. */
+export function personaRuntimeRetentionVolumeBudget(
+  state: PersonaRuntimeRetentionState,
+): number | null {
+  if (state.candidateBaseline === undefined) return null;
+  return state.candidateBaseline * PERSONA_RUNTIME_RETENTION_VOLUME.factor
+    + PERSONA_RUNTIME_RETENTION_VOLUME.slack;
+}
 
-  const choices: Array<{ mode: PersonaRuntimeRetentionMode; source: PersonaRuntimeRetentionModeSource }> = [];
-  if (inputs.setting) choices.push({ mode: inputs.setting, source: 'setting' });
-  if (inputs.environment.mode) choices.push({ mode: inputs.environment.mode, source: 'environment' });
-  const lowest = choices.reduce<typeof choices[number] | undefined>(
-    (current, choice) => (
-      current && MODE_RANK[current.mode] <= MODE_RANK[choice.mode] ? current : choice
-    ),
-    undefined,
-  );
+/** Any anomaly means measuring only and a fresh streak with a fresh baseline. */
+export function afterPersonaRuntimeRetentionAnomaly(
+  state: PersonaRuntimeRetentionState,
+  kind: PersonaRuntimeRetentionAnomaly,
+  at: number,
+): { state: PersonaRuntimeRetentionState; transition: PersonaRuntimeRetentionTransition } {
+  const rolledBack = state.mode === 'active';
   return {
-    ...described,
-    config: {
-      ...inputs.environment.config,
-      mode: lowest?.mode ?? described.defaultMode,
+    state: {
+      ...state,
+      mode: 'shadow',
+      cleanSweeps: 0,
+      streakStartedAt: undefined,
+      candidateBaseline: undefined,
+      graduatedAt: undefined,
+      rollbacks: state.rollbacks + (rolledBack ? 1 : 0),
+      lastAnomaly: { kind, at, mode: state.mode },
     },
-    source: lowest?.source ?? 'default',
+    transition: rolledBack ? 'rolled-back' : null,
   };
-}
-
-function parseStoredSetting(value: unknown): PersonaRuntimeRetentionSetting | null {
-  if (value === null || value === undefined) return { mode: null };
-  if (typeof value !== 'object' || Array.isArray(value)) return null;
-  const { mode, updatedAt } = value as Record<string, unknown>;
-  if (mode !== null && mode !== undefined && !isPersonaRuntimeRetentionMode(mode)) return null;
-  if (updatedAt !== undefined && (typeof updatedAt !== 'number' || !Number.isFinite(updatedAt))) {
-    return null;
-  }
-  return {
-    mode: mode ?? null,
-    ...(typeof updatedAt === 'number' ? { updatedAt } : {}),
-  };
-}
-
-function settingCacheKey(): string {
-  return workspaceCacheKey('persona-runtime-retention-setting');
-}
-
-function remember(entry: Omit<SettingCacheEntry, 'at'>): SettingCacheEntry {
-  const stored = { ...entry, at: Date.now() };
-  settingCache.set(settingCacheKey(), stored);
-  return stored;
 }
 
 /**
- * An unreadable switch means off. A file whose content is wrong (rather than
- * briefly locked by the system) is rewritten as off, so it is valid again and
- * is not re-read and re-backed-up every few seconds.
+ * Record a finished run. A clean measuring run extends the streak; enough of
+ * them over enough days switch cleanup on. A run that started in another mode
+ * than the state has now raced a change elsewhere and only updates the summary.
  */
-async function healUnreadableSetting(error: unknown): Promise<void> {
-  const transient = typeof (error as NodeJS.ErrnoException | undefined)?.code === 'string';
-  if (transient) return;
-  try {
-    await saveItem(StorageKey.PERSONA_RUNTIME_RETENTION_SETTINGS, {
-      mode: 'disabled',
-      updatedAt: Date.now(),
-    } satisfies PersonaRuntimeRetentionSetting);
-    log.warn('The Persona runtime retention setting was unreadable and has been reset to off.');
-  } catch (healError) {
-    log.warn('Could not reset the unreadable Persona runtime retention setting.', healError);
+export function afterPersonaRuntimeRetentionSweep(
+  state: PersonaRuntimeRetentionState,
+  sweep: PersonaRuntimeRetentionSweepSummary,
+): { state: PersonaRuntimeRetentionState; transition: PersonaRuntimeRetentionTransition } {
+  const recorded = { ...state, lastSweep: sweep };
+  if (sweep.anomalies.length > 0 || sweep.mode !== state.mode) {
+    return { state: recorded, transition: null };
   }
-}
-
-async function readSetting(): Promise<SettingCacheEntry> {
-  const cached = settingCache.get(settingCacheKey());
-  if (cached && Date.now() - cached.at < cached.ttlMs) return cached;
-  try {
-    const parsed = parseStoredSetting(
-      await loadItem<unknown>(StorageKey.PERSONA_RUNTIME_RETENTION_SETTINGS, null),
-    );
-    if (parsed) {
-      return remember({ value: parsed, readable: true, ttlMs: SETTING_CACHE_TTL_MS });
-    }
-    await healUnreadableSetting(new TypeError('Malformed Persona runtime retention setting.'));
-  } catch (error) {
-    log.warn('Could not read the Persona runtime retention setting; retention stays off.', error);
-    await healUnreadableSetting(error);
+  const candidateBaseline = Math.max(state.candidateBaseline ?? 0, sweep.candidates);
+  if (state.mode === 'active') {
+    return { state: { ...recorded, candidateBaseline }, transition: null };
   }
-  return remember({
-    value: { mode: null },
-    readable: false,
-    ttlMs: UNREADABLE_SETTING_RETRY_MS,
-  });
-}
-
-function readEnvironment(
-  options: PersonaRuntimeRetentionControlOptions,
-): PersonaRuntimeRetentionEnvironment {
-  if (options.config) {
-    const config = validatePersonaRuntimeRetentionConfig(options.config);
-    return config
-      ? { config, mode: config.mode, valid: true }
-      : { config: { ...PERSONA_RUNTIME_RETENTION_DISABLED_CONFIG }, mode: null, valid: false };
-  }
-  const environment = readPersonaRuntimeRetentionEnvironment();
-  if (!environment.valid) {
-    const problem = JSON.stringify(Object.entries(process.env)
-      .filter(([name]) => name.startsWith('FLUJO_PERSONA_RUNTIME_RETENTION_')));
-    if (!reportedEnvironmentProblems.has(problem)) {
-      reportedEnvironmentProblems.add(problem);
-      log.warn(
-        'A FLUJO_PERSONA_RUNTIME_RETENTION_* environment variable is malformed; '
-        + 'Persona runtime retention stays off until it is corrected.',
-      );
-    }
-  }
-  return environment;
-}
-
-export async function getPersonaRuntimeRetentionControl(
-  options: PersonaRuntimeRetentionControlOptions = {},
-): Promise<PersonaRuntimeRetentionControl> {
-  const codeSwitch = FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION;
-  const environment = readEnvironment(options);
-  const settingCannotRaise = !codeSwitch || !environment.valid || environment.mode === 'disabled';
-  const setting = settingCannotRaise
-    ? { value: { mode: null }, readable: true }
-    : await readSetting();
-  return resolvePersonaRuntimeRetentionControl({
-    codeSwitch,
-    environment,
-    setting: setting.value.mode,
-    settingReadable: setting.readable,
-  });
-}
-
-export async function getPersonaRuntimeRetentionSetting(): Promise<PersonaRuntimeRetentionSetting> {
-  return (await readSetting()).value;
-}
-
-/** Store the workspace choice; it applies to the next write in this process at once. */
-export async function setPersonaRuntimeRetentionSetting(
-  mode: PersonaRuntimeRetentionMode | null,
-): Promise<PersonaRuntimeRetentionSetting> {
-  if (mode !== null && !isPersonaRuntimeRetentionMode(mode)) {
-    throw new TypeError('Persona runtime retention mode must be disabled, shadow, active or null.');
-  }
-  const value: PersonaRuntimeRetentionSetting = { mode, updatedAt: Date.now() };
-  await saveItem(StorageKey.PERSONA_RUNTIME_RETENTION_SETTINGS, value);
-  remember({ value, readable: true, ttlMs: SETTING_CACHE_TTL_MS });
-  log.info(`Persona runtime retention setting changed to ${mode ?? 'default'}.`);
-  return value;
-}
-
-export function decidePersonaRuntimeRetention(
-  control: PersonaRuntimeRetentionControl,
-  workspaceId: string,
-  personaId: string,
-): PersonaRuntimeRetentionDecision {
-  if (control.config.mode === 'disabled' || control.config.rolloutBasisPoints === 0) {
-    return { mode: 'disabled', control, eligibility: null };
-  }
-  const eligibility = getPersonaRetentionEligibility({
-    workspaceId,
-    personaId,
-    cohortVersion: control.config.cohortVersion,
-    rolloutBasisPoints: control.config.rolloutBasisPoints,
-    criticalPersonaIds: control.config.criticalPersonaIds,
-  });
+  const clockMovedBack = state.streakStartedAt !== undefined && sweep.at < state.streakStartedAt;
+  const cleanSweeps = clockMovedBack ? 1 : state.cleanSweeps + 1;
+  const streakStartedAt = clockMovedBack ? sweep.at : state.streakStartedAt ?? sweep.at;
+  const graduated = cleanSweeps >= PERSONA_RUNTIME_RETENTION_GRADUATION.cleanSweeps
+    && sweep.at - streakStartedAt >= PERSONA_RUNTIME_RETENTION_GRADUATION.spanMs;
   return {
-    mode: eligibility.eligible ? control.config.mode : 'disabled',
-    control,
-    eligibility,
+    state: {
+      ...recorded,
+      cleanSweeps,
+      streakStartedAt,
+      candidateBaseline,
+      ...(graduated ? { mode: 'active' as const, graduatedAt: sweep.at } : {}),
+    },
+    transition: graduated ? 'graduated' : null,
   };
 }
 
-export async function getPersonaRuntimeRetentionDecision(
-  personaId: string,
-  options: PersonaRuntimeRetentionControlOptions = {},
-): Promise<PersonaRuntimeRetentionDecision> {
-  return decidePersonaRuntimeRetention(
-    await getPersonaRuntimeRetentionControl(options),
-    getCurrentWorkspace(),
-    personaId,
-  );
+/**
+ * A stored state whose content is wrong (rather than briefly locked by the
+ * system) is rewritten as a fresh measuring state, so it is valid again.
+ */
+export async function readPersonaRuntimeRetentionState(): Promise<PersonaRuntimeRetentionStateRead> {
+  let stored: unknown;
+  try {
+    stored = await loadItem<unknown>(StorageKey.PERSONA_RUNTIME_RETENTION_STATE, null);
+  } catch (error) {
+    if (typeof (error as NodeJS.ErrnoException | undefined)?.code === 'string') {
+      return { state: initialPersonaRuntimeRetentionState(), readable: false };
+    }
+    return { state: await resetUnreadableState(), readable: true };
+  }
+  if (stored === null) return { state: initialPersonaRuntimeRetentionState(), readable: true };
+  const parsed = StateSchema.safeParse(stored);
+  if (parsed.success) return { state: parsed.data, readable: true };
+  return { state: await resetUnreadableState(), readable: true };
+}
+
+async function resetUnreadableState(): Promise<PersonaRuntimeRetentionState> {
+  const state = initialPersonaRuntimeRetentionState();
+  try {
+    await saveItem(StorageKey.PERSONA_RUNTIME_RETENTION_STATE, state);
+    log.warn('Persona history cleanup state was unreadable; it starts measuring again.');
+  } catch (error) {
+    log.warn('Persona history cleanup state was unreadable and could not be reset yet.', error);
+  }
+  return state;
+}
+
+/** Read, change and store the state with no other process changing it meanwhile. */
+async function updateState(
+  change: (state: PersonaRuntimeRetentionState) => {
+    state: PersonaRuntimeRetentionState;
+    transition: PersonaRuntimeRetentionTransition;
+  },
+): Promise<{ state: PersonaRuntimeRetentionState; transition: PersonaRuntimeRetentionTransition } | null> {
+  return withWorkspaceRuntimeLock(STATE_LOCK, async () => {
+    const current = await readPersonaRuntimeRetentionState();
+    if (!current.readable) return null;
+    const next = change(current.state);
+    await saveItem(StorageKey.PERSONA_RUNTIME_RETENTION_STATE, next.state);
+    return next;
+  });
 }
 
 /**
- * Issue a write grant only when retention is `active` for this Persona and the
- * caller holds this Persona's runtime lock. Returns null otherwise.
+ * Go back to measuring at once and start a fresh streak. Logs one plain line
+ * when this turns cleanup off, or when it throws away a streak.
+ */
+export async function recordPersonaRuntimeRetentionAnomaly(
+  kind: PersonaRuntimeRetentionAnomaly,
+  at: number,
+): Promise<void> {
+  let lostStreak = 0;
+  const next = await updateState((state) => {
+    lostStreak = state.cleanSweeps;
+    return afterPersonaRuntimeRetentionAnomaly(state, kind, at);
+  });
+  if (next?.transition === 'rolled-back') {
+    log.warn(
+      `Persona history cleanup is back to measuring only because ${ANOMALY_REASONS[kind]}. `
+      + 'It switches on again by itself after a clean week of measuring.',
+    );
+  } else if (next && lostStreak > 0) {
+    log.info(`Persona history cleanup keeps measuring for another week because ${ANOMALY_REASONS[kind]}.`);
+  }
+}
+
+export async function recordPersonaRuntimeRetentionSweep(
+  sweep: PersonaRuntimeRetentionSweepSummary,
+): Promise<PersonaRuntimeRetentionState | null> {
+  const next = await updateState((state) => afterPersonaRuntimeRetentionSweep(state, sweep));
+  if (next?.transition === 'graduated') {
+    const days = Math.floor((sweep.at - (next.state.streakStartedAt ?? sweep.at)) / DAY_MS);
+    log.info(
+      `Persona history cleanup is now on: ${next.state.cleanSweeps} measuring runs over ${days} days `
+      + 'found nothing in use, nothing invalid and no unusual volume.',
+    );
+  }
+  return next?.state ?? null;
+}
+
+export async function getPersonaRuntimeRetentionMode(): Promise<PersonaRuntimeRetentionMode> {
+  const { state, readable } = await readPersonaRuntimeRetentionState();
+  return readable ? state.mode : 'shadow';
+}
+
+/**
+ * Issue a write grant only while cleanup is `active` and the caller holds this
+ * Persona's runtime lock. Returns null otherwise.
  */
 export async function acquirePersonaRuntimeRetentionWriteGrant(
   personaId: string,
   lock: PersonaRuntimeLock,
-  options: PersonaRuntimeRetentionControlOptions & { cohortVersion?: string } = {},
 ): Promise<PersonaRuntimeRetentionWriteGrant | null> {
-  await withIssuedPersonaRuntimeLockOperation(lock, personaId, async () => undefined);
-  const decision = await getPersonaRuntimeRetentionDecision(personaId, options);
-  const cohortVersion = decision.control.config.cohortVersion;
-  if (
-    decision.mode !== 'active'
-    || (options.cohortVersion !== undefined && options.cohortVersion !== cohortVersion)
-  ) {
-    return null;
-  }
   const workspaceId = getCurrentWorkspace();
-  const grant: PersonaRuntimeRetentionWriteGrant = Object.freeze({
-    personaId,
-    cohortVersion,
-    authorize: async () => {
-      if (getCurrentWorkspace() !== workspaceId) return false;
-      await withIssuedPersonaRuntimeLockOperation(lock, personaId, async () => undefined);
-      const live = await getPersonaRuntimeRetentionDecision(personaId, options);
-      return live.mode === 'active' && live.control.config.cohortVersion === cohortVersion;
-    },
-  });
+  const allowed = async () => {
+    if (getCurrentWorkspace() !== workspaceId) return false;
+    await withIssuedPersonaRuntimeLockOperation(lock, personaId, async () => undefined);
+    return await getPersonaRuntimeRetentionMode() === 'active';
+  };
+  if (!await allowed()) return null;
+  const grant: PersonaRuntimeRetentionWriteGrant = Object.freeze({ personaId, authorize: allowed });
   issuedGrants.add(grant);
   return grant;
 }
@@ -364,11 +287,11 @@ export function assertPersonaRuntimeRetentionWriteGrant(
 ): void {
   if (!issuedGrants.has(grant)) {
     throw new Error(
-      'Persona runtime retention writes need a grant from '
-      + 'acquirePersonaRuntimeRetentionWriteGrant; it checks the live switches and the cohort.',
+      'Persona history cleanup writes need a grant from acquirePersonaRuntimeRetentionWriteGrant; '
+      + 'it checks the stored cleanup state and the Persona lock.',
     );
   }
   if (personaId !== undefined && grant.personaId !== personaId) {
-    throw new Error('Persona runtime retention grant belongs to another Persona.');
+    throw new Error('Persona history cleanup grant belongs to another Persona.');
   }
 }

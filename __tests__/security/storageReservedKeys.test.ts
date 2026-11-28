@@ -35,7 +35,14 @@ describe('generic storage reserved state-machine keys', () => {
     clearItemMock.mockReset();
   });
 
-  it.each(['planned_executions', 'pending_approvals', 'human_tasks', 'package_installs', 'history'])(
+  it.each([
+    'planned_executions',
+    'pending_approvals',
+    'human_tasks',
+    'package_installs',
+    'history',
+    'persona_runtime_retention_state',
+  ])(
     'refuses raw GET/POST/DELETE access to %s',
     async (key) => {
       expect((await GET(request('GET', key))).status).toBe(400);

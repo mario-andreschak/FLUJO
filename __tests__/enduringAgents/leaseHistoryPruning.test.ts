@@ -102,12 +102,10 @@ async function loadHistory(id: string): Promise<unknown | null> {
 
 describe('guarded Persona lease-history pruning', () => {
   afterEach(() => {
-    FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION = false;
     FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING = false;
   });
 
-  it('stays off when soft runtime retention is enabled independently', async () => {
-    FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION = true;
+  it('stays off unless its own switch is on', async () => {
     FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING = false;
 
     await expect(prunePersonaLeaseHistory('not_a_safe_storage_id', {
@@ -121,8 +119,7 @@ describe('guarded Persona lease-history pruning', () => {
     });
   });
 
-  it('runs independently while soft runtime retention remains disabled', async () => {
-    FEATURES.ENABLE_PERSONA_RUNTIME_RETENTION = false;
+  it('runs on its own switch, independent of Persona history cleanup', async () => {
     FEATURES.ENABLE_PERSONA_LEASE_HISTORY_PRUNING = true;
     const workspaceId = freshWorkspace('eligible');
 

@@ -1,16 +1,15 @@
 import {
   PERSONA_RUNTIME_RETENTION_MAX_WRITES_PER_SWEEP,
   PERSONA_RUNTIME_RETENTION_POLICY,
-  compactPersonaFlowDispatches,
   getActivityRetentionPolicy,
   getFlowDispatchRetentionPolicy,
-  getLeaseHistoryRetentionPolicy,
   getMailboxItemRetentionPolicy,
 } from '@/backend/services/enduringAgents/compactRuntime';
 import {
   PERSONA_ACTIVITY_SCHEMA_VERSION,
   PERSONA_INSTRUCTION_CONTEXT_SCHEMA_VERSION,
   PersonaActivitySchema,
+  type PersonaMailboxItem,
 } from '@/shared/types/enduringAgent';
 import {
   PERSONA_FLOW_DISPATCH_SCHEMA_VERSION,
@@ -18,12 +17,14 @@ import {
   type PersonaFlowDispatchRecord,
 } from '@/backend/services/enduringAgents/personaDispatcher';
 import { ENDURING_AGENT_COLLECTIONS } from '@/backend/services/enduringAgents/collections';
+import { listPersonaFlowDispatchRecordsForRetention } from '@/backend/services/enduringAgents/personaFlowDispatchRetention';
 import {
   acquirePersonaRuntimeRetentionWriteGrant,
   type PersonaRuntimeRetentionWriteGrant,
 } from '@/backend/services/enduringAgents/personaRuntimeRetentionControl';
 import {
-  applyRetention,
+  executeRetentionPlan,
+  planRetention,
   type RetentionPolicy,
 } from '@/backend/services/enduringAgents/retention';
 import { withPersonaRuntimeLock } from '@/backend/services/enduringAgents/runtimeLock';
@@ -34,17 +35,16 @@ import {
 } from '@/utils/storage/backend';
 import { runWithWorkspace } from '@/utils/workspace';
 
+import { storeRetentionState } from './fixtures/retentionState';
+
 interface RetentionProbe {
   id: string;
   timestamp: number;
+  payload?: string;
   compactedAt?: number;
 }
 
-function probePolicy(
-  retentionMs: number,
-  detailedLimit: number,
-  save: (record: RetentionProbe) => Promise<unknown>,
-): RetentionPolicy<RetentionProbe> {
+function probePolicy(retentionMs: number, detailedLimit: number): RetentionPolicy<RetentionProbe> {
   return {
     recordKind: 'RetentionProbe',
     isEligible: (record) => record.compactedAt === undefined,
@@ -52,10 +52,13 @@ function probePolicy(
     isCompacted: (record) => record.compactedAt !== undefined,
     retentionMs,
     detailedLimit,
-    compact: (record, compactedAt) => ({ ...record, compactedAt }),
-    save,
+    compact: (record, compactedAt) => ({ ...record, payload: undefined, compactedAt }),
+    isValidCompaction: (record, compacted) => record.id === compacted.id,
+    save: async () => undefined,
   };
 }
+
+const probe = (id: string, timestamp: number): RetentionProbe => ({ id, timestamp, payload: 'x'.repeat(64) });
 
 function completedDispatch(): PersonaFlowDispatchRecord {
   return {
@@ -129,13 +132,6 @@ function erroredActivityWithCoreSnapshot() {
   });
 }
 
-const ACTIVE_RETENTION = {
-  mode: 'active',
-  rolloutBasisPoints: 10_000,
-  cohortVersion: 'compact-runtime-test',
-  criticalPersonaIds: [],
-} as const;
-
 describe('Persona runtime compaction', () => {
   it('applies the approved per-kind retention windows and detailed rank caps', () => {
     const dayMs = 24 * 60 * 60 * 1000;
@@ -144,7 +140,6 @@ describe('Persona runtime compaction', () => {
       mailboxItem: { retentionMs: 30 * dayMs, detailedLimit: 500 },
       activity: { retentionMs: 30 * dayMs, detailedLimit: 200 },
       flowDispatch: { retentionMs: 30 * dayMs, detailedLimit: 200 },
-      leaseHistory: { retentionMs: 90 * dayMs, detailedLimit: 1_000 },
       behaviorCallPin: { retentionMs: 30 * dayMs, detailedLimit: 200 },
     });
     expect(getMailboxItemRetentionPolicy()).toMatchObject(
@@ -156,65 +151,69 @@ describe('Persona runtime compaction', () => {
     expect(getFlowDispatchRetentionPolicy()).toMatchObject(
       PERSONA_RUNTIME_RETENTION_POLICY.flowDispatch,
     );
-    expect(getLeaseHistoryRetentionPolicy()).toMatchObject(
-      PERSONA_RUNTIME_RETENTION_POLICY.leaseHistory,
-    );
   });
 
-  it.each([
-    ['30-day runtime records', PERSONA_RUNTIME_RETENTION_POLICY.mailboxItem.retentionMs],
-    ['90-day lease history', PERSONA_RUNTIME_RETENTION_POLICY.leaseHistory.retentionMs],
-  ])('uses a strict age cutoff for %s', async (_label, retentionMs) => {
+  it('uses a strict age cutoff', () => {
     const now = 10_000_000_000;
+    const { retentionMs } = PERSONA_RUNTIME_RETENTION_POLICY.mailboxItem;
     const cutoff = now - retentionMs;
-    const save = jest.fn(async () => undefined);
-    const records: RetentionProbe[] = [
-      { id: 'exact_cutoff', timestamp: cutoff },
-      { id: 'one_ms_older', timestamp: cutoff - 1 },
-    ];
 
-    const result = await applyRetention(
-      records,
-      probePolicy(retentionMs, records.length, save),
+    const plan = planRetention(
+      [probe('exact_cutoff', cutoff), probe('one_ms_older', cutoff - 1)],
+      probePolicy(retentionMs, 2),
       now,
     );
 
-    expect(result).toEqual({ compacted: 1, remaining: 1 });
-    expect(save).toHaveBeenCalledTimes(1);
-    expect(save).toHaveBeenCalledWith({
-      id: 'one_ms_older',
-      timestamp: cutoff - 1,
-      compactedAt: now,
-    });
+    expect(plan.candidates.map((candidate) => candidate.projected)).toEqual([
+      { id: 'one_ms_older', timestamp: cutoff - 1, payload: undefined, compactedAt: now },
+    ]);
   });
 
   it.each(Object.entries(PERSONA_RUNTIME_RETENTION_POLICY))(
     'keeps exactly the configured newest-N detail for %s',
-    async (_kind, configuration) => {
+    (_kind, configuration) => {
       const timestamp = 10_000;
-      const save = jest.fn(async () => undefined);
       const records = Array.from(
         { length: configuration.detailedLimit + 1 },
-        (_, index): RetentionProbe => ({
-          id: `record_${String(index).padStart(4, '0')}`,
-          timestamp,
-        }),
+        (_, index) => probe(`record_${String(index).padStart(4, '0')}`, timestamp),
       );
 
-      const result = await applyRetention(
+      const plan = planRetention(
         records,
-        probePolicy(configuration.retentionMs, configuration.detailedLimit, save),
+        probePolicy(configuration.retentionMs, configuration.detailedLimit),
         timestamp,
       );
 
-      expect(result).toEqual({ compacted: 1, remaining: configuration.detailedLimit });
-      expect(save).toHaveBeenCalledWith({
-        id: 'record_0000',
-        timestamp,
-        compactedAt: timestamp,
-      });
+      expect(plan.candidateCount).toBe(1);
+      expect(plan.candidates[0].record.id).toBe('record_0000');
     },
   );
+
+  it('waits until a coalesced input is delivered and a dispatch is settled', () => {
+    const later = 1 + PERSONA_RUNTIME_RETENTION_POLICY.mailboxItem.retentionMs + 1;
+    const pending = {
+      id: 'mailbox_pending',
+      status: 'coalesced',
+      deliveryStatus: 'pending',
+      updatedAt: 1,
+    } as PersonaMailboxItem;
+    expect(planRetention([pending], getMailboxItemRetentionPolicy(), later).eligible).toBe(0);
+    expect(planRetention([{ ...pending, deliveryStatus: 'delivered' }], getMailboxItemRetentionPolicy(), later)
+      .eligible).toBe(1);
+
+    const unsettled = { ...completedDispatch(), terminalProjectionsSettledAt: undefined };
+    expect(planRetention([unsettled], getFlowDispatchRetentionPolicy(), later).eligible).toBe(0);
+    expect(planRetention([completedDispatch()], getFlowDispatchRetentionPolicy(), later).eligible).toBe(1);
+  });
+
+  it('treats a compaction that changes identity as invalid', () => {
+    const original = completedDispatch();
+    const policy = getFlowDispatchRetentionPolicy();
+    expect(policy.isValidCompaction(original, policy.compact(original, 300))).toBe(true);
+    expect(policy.isValidCompaction(original, { ...policy.compact(original, 300), activityId: 'activity_2' }))
+      .toBe(false);
+    expect(policy.isValidCompaction(original, { ...policy.compact(original, 300), state: 'queued' })).toBe(false);
+  });
 
   it('produces a schema-valid compacted Flow dispatch while preserving audit identity', () => {
     const original = completedDispatch();
@@ -278,12 +277,17 @@ describe('Persona runtime compaction', () => {
         original.id,
         { ...original, workspaceId },
       );
+      await storeRetentionState({ mode: 'active' });
       const result = await withPersonaRuntimeLock(original.personaId, async (lock) => {
-        const grant = await acquirePersonaRuntimeRetentionWriteGrant(original.personaId, lock, {
-          config: ACTIVE_RETENTION,
-        });
+        const grant = await acquirePersonaRuntimeRetentionWriteGrant(original.personaId, lock);
         if (!grant) throw new Error('Active retention must issue a write grant.');
-        return compactPersonaFlowDispatches(grant, now);
+        const policy = getFlowDispatchRetentionPolicy();
+        const plan = planRetention(
+          await listPersonaFlowDispatchRecordsForRetention(original.personaId),
+          policy,
+          now,
+        );
+        return executeRetentionPlan(plan, policy, { grant });
       });
       const stored = await loadCollectionItem<unknown | null>(
         ENDURING_AGENT_COLLECTIONS.flowDispatches,
@@ -310,7 +314,7 @@ describe('Persona runtime compaction', () => {
     expect(parsed.flowInput).toBeUndefined();
   });
 
-  it('writes only with a grant issued for active retention', async () => {
+  it('writes only with a grant issued while cleanup is on', async () => {
     const workspaceId = `compact-runtime-grant-${process.pid}`;
     const original = completedDispatch();
     const now = original.completedAt! + getFlowDispatchRetentionPolicy().retentionMs + 1;
@@ -321,16 +325,20 @@ describe('Persona runtime compaction', () => {
         original.id,
         { ...original, workspaceId },
       );
+      await storeRetentionState({ mode: 'shadow' });
       return withPersonaRuntimeLock(original.personaId, async (lock) => {
-        const shadowGrant = await acquirePersonaRuntimeRetentionWriteGrant(original.personaId, lock, {
-          config: { ...ACTIVE_RETENTION, mode: 'shadow' },
-        });
+        const shadowGrant = await acquirePersonaRuntimeRetentionWriteGrant(original.personaId, lock);
         const forged: PersonaRuntimeRetentionWriteGrant = {
           personaId: original.personaId,
-          cohortVersion: ACTIVE_RETENTION.cohortVersion,
           authorize: async () => true,
         };
-        const forgedError = await compactPersonaFlowDispatches(forged, now).then(
+        const policy = getFlowDispatchRetentionPolicy();
+        const plan = planRetention(
+          await listPersonaFlowDispatchRecordsForRetention(original.personaId),
+          policy,
+          now,
+        );
+        const forgedError = await executeRetentionPlan(plan, policy, { grant: forged }).then(
           () => null,
           (error: unknown) => error,
         );
@@ -358,7 +366,7 @@ describe('Persona runtime compaction', () => {
     })).toThrow();
   });
 
-  it('caps writes for every completion-triggered soft-retention sweep', () => {
+  it('caps writes for every cleanup sweep', () => {
     const policies = [
       getMailboxItemRetentionPolicy(),
       getActivityRetentionPolicy(),
