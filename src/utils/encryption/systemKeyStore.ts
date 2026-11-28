@@ -146,8 +146,16 @@ function macosStore(): SystemKeyStore {
   };
 }
 
-function linuxStore(secretTool: string): SystemKeyStore {
+/** The Secret Service through `secret-tool` at `secretTool` (libsecret). */
+export function secretServiceStore(secretTool: string): SystemKeyStore {
   const attributes = (id: string) => ['application', 'flujo', 'flujo-system-key', id];
+  // `search` lists a matching item even while its keyring is locked, without
+  // asking to unlock it. It prints the item's attributes on standard error.
+  const listed = async (id: string): Promise<boolean> => {
+    const result = await run('linux', secretTool, ['search', ...attributes(id)], '');
+    if (result.code !== 0) throw new SystemKeyStoreUnavailableError('linux', 'the keyring is not reachable');
+    return `${result.stdout}\n${result.stderr}`.split('\n').some(line => line.trim() === `attribute.flujo-system-key = ${id}`);
+  };
   return {
     kind: 'linux',
     async save(id, secret) {
@@ -159,10 +167,12 @@ function linuxStore(secretTool: string): SystemKeyStore {
     async load(id) {
       checkId(id);
       const result = await run('linux', secretTool, ['lookup', ...attributes(id)], '');
-      // secret-tool answers "nothing found" with exit 1 and no message.
-      if (result.code === 1 && !result.stderr.trim()) return null;
-      if (result.code !== 0) throw new SystemKeyStoreUnavailableError('linux', 'the keyring is locked or not reachable');
-      return checkSecret('linux', result.stdout.trim());
+      if (result.code === 0) return checkSecret('linux', result.stdout.trim());
+      // secret-tool answers both "nothing found" and "found, but the keyring
+      // is locked" with exit 1 and no message. A locked key is not a lost key.
+      if (result.code !== 1 || result.stderr.trim()) throw new SystemKeyStoreUnavailableError('linux', 'the keyring is not reachable');
+      if (await listed(id)) throw new SystemKeyStoreUnavailableError('linux', 'the keyring is locked');
+      return null;
     },
   };
 }
@@ -202,7 +212,7 @@ async function detect(): Promise<SystemKeyStore | null> {
   if (process.platform === 'darwin') return await executable('/usr/bin/security') ? macosStore() : null;
   if (process.platform === 'linux' && process.env.DBUS_SESSION_BUS_ADDRESS) {
     for (const candidate of ['/usr/bin/secret-tool', '/usr/local/bin/secret-tool']) {
-      if (await executable(candidate)) return linuxStore(candidate);
+      if (await executable(candidate)) return secretServiceStore(candidate);
     }
   }
   return null;
