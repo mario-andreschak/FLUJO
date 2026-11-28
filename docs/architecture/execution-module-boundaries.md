@@ -6,17 +6,20 @@ Issue [#571](https://github.com/mario-andreschak/FLUJO/issues/571), part of
 This is a map of existing responsibilities and a contract for incremental
 changes. It does not establish installed-release acceptance or award a grade.
 
-Every file and test named on this page was checked against the code again on
-November 27, 2026, after #571 split `runFlow.ts`, `ModelHandler.ts` and the MCP
-service `index.ts` into modules with one job each (see
-[the module map](#the-three-big-files-and-the-modules-split-out-of-them)).
-Re-run the [path check](#before-you-start) before relying on a file name here.
+#571 split `runFlow.ts`, `ModelHandler.ts` and the MCP service `index.ts` into
+modules with one job each on November 27, 2026 (see
+[the module map](#the-three-big-files-and-the-modules-split-out-of-them)). On
+November 28 a maintainer who did not write the split used this page for six
+maintenance tasks ([report](./maintenance-exercise-661.md)) and the gaps it
+found are fixed here. `npm run check:hotspots` fails when a file named on this
+page no longer exists.
 
 ## Where to change a behavior
 
-Paths starting with `src/` are relative to the repository root. Shorter paths
-are relative to `src/backend/execution/flow/`, except in the two MCP rows, where
-they are relative to `src/backend/services/mcp/`. A module owns the indicated
+Paths starting with `src/` or `__tests__/` are relative to the repository root.
+A shorter name is relative to the folder its row names, or else to
+`src/backend/execution/flow/` (in the MCP rows, `src/backend/services/mcp/`).
+A module owns the indicated
 responsibility; its callers must use that boundary rather than duplicate its
 state or enforcement. The topic owner is the integration owner for epic #563,
 not a claim that an additional human maintainer has accepted responsibility.
@@ -24,19 +27,23 @@ not a claim that an additional human maintainer has accepted responsibility.
 | Responsibility | Existing entry point and state owner | Contract to preserve | Integration owner |
 | --- | --- | --- | --- |
 | Run lifecycle | `src/backend/execution/flow/runFlow.ts` with `runStateLoading.ts`, `runStateSetup.ts`, `runTurnAdmission.ts` and `runPreflight.ts` (start of a run); `runAdmission.ts` reserves run capacity; the live state map lives in `conversationStateRegistry.ts` and `FlowExecutor.conversationStates` reads it | `runFlow` claims run admission, acquires the workspace/conversation execution lock, validates loaded/input state, registers cancellation, and drives graph steps. Preserve explicit invocation source, terminal/paused distinction, and run-owned cleanup. | Maturity for behavior; Code health for sequenced extraction |
+| Who started a run, and whether anyone is watching | `src/shared/types/execution/invocation.ts` (the eight sources; only `chat` and `api` are attended), applied to each run by `installRunInputs` in `runStateSetup.ts`; `unattendedDriveForward.ts` acts on it | A conversation keeps the `source` of its first run; `unattended` is worked out again for every run from that run's own source, so a person answering a scheduled run is attended. The `unattended` field once stored in flow files decides nothing. FLUJO's own HTTP chat API (`src/app/v1/chat/completions/chatCompletionService.ts`) passes `chat`, or `internal` when FLUJO runs as a worker; schedules, triggers, MCP tools, subflows and meetings pass their own source. No route passes `api` today; it stays valid for other callers of `runFlow` and for recorded Harness runs. | Maturity |
+| Pre-run checks | `runPreflight.ts` for checks that depend on this run: allowed models, the Quick Chat switch, entry conditions, and running the flow validation. Rules about a flow's shape (missing Start step, step without a model, dangling tools) live in `src/utils/shared/flowValidation.ts`, which the editor shows too; `validateFlowForRun.ts` adds the current models and MCP servers | Only a new turn or a new conversation is checked; an internal resume (approval decision, debugger step) carries on a run that already passed. A new shape rule goes into that validation, not into a new block in `runPreflight.ts`: many tests run flows with no steps through a stubbed validator. | Maturity |
 | Persona instruction/snapshot decisions | `personaRunContract.ts`, called by `runFlow.ts`; [contract](./persona-run-contract.md) | Keep the attribution triple, root/hash binding and same-Activity comparison at their existing caller sites. Schema parsing, context cloning, top-level admission, live authority and all operation ordering remain in `runFlow`. | Code health for extraction; Maturity/Security own behavioral enforcement |
 | Conversation serialization | `conversationExecutionLock.ts` | One process-global, workspace-keyed queue; async-local reentry must not deadlock. A failed predecessor does not poison later runs. | Maturity |
 | Execution authority | `executionAuthority.ts`; `src/backend/execution/extensions/` | Assert the current fence before effects; durable mutations use `commitFlowDurableMutation` and the authority's atomic commit capability. Authority failures escape best-effort catches. Loading a snapshot never reconstructs a runtime capability. | Security/Production consume original authority; Code health preserves interfaces |
 | Cancellation | `cancellationCoordinator.ts`, `cancellation.ts`, `toolCancelRegistry.ts` | Admission-barrier check and run registration are atomic in one event-loop step. Cancellation aborts active work and respects ancestry/tombstones; release each registration. | Maturity; Production owns worker recovery |
 | Approval and debugger pause | `toolApprovalRegistry.ts`, `resumeAfterApproval.ts`, `runFlow.ts` (the pause), `runToolApproval.ts`, `runDebugPause.ts` | A pause keeps the live state owned. Resume applies the decision to the pending call before continuing; do not dispatch an unapproved tool while extracting code. | Maturity; Security owns permission changes |
 | Subflows | `nodes/SubflowNode.ts`, `subflowCommunication.ts`, `subflowRecovery.ts`, `handlers/subflowToolInvocation.ts`, `handlers/subflowDetachedInvocation.ts` | Parent/child and lane identities include logical-run lineage. Queued messages are consumed at safe boundaries. Ephemeral children do not become durable sidebar conversations. Unknown external tool effects are not automatically replayed. | Maturity; Production owns restart policy |
-| Chat goals (agent chats, #1225) | `src/backend/services/chatGoals/`: `chatGoalStore.ts` (one goal per chat, changed one writer at a time), `chatGoalPolicy.ts` (pure: what a finished turn means for the goal) and `chatGoalRuntime.ts` (starts the next goal turn); the route `src/app/v1/chat/conversations/[conversationId]/goal/route.ts` | The runtime learns that a chat run ended from the flow-run event bus (`runFlowEvents.ts` publishes, the runtime subscribes per workspace), never from an import into `runFlow.ts`. A goal turn starts only under the conversation execution lock, after run admission, through `runFlow` with `resumeAsNewTurn` and the chat's own `requireApproval`, so approvals and Stop work as for a typed message. Every turn is looked at once (`reviewedMessageId`); the minute sweep in `init.ts` picks up goals after a restart or a wait. `goalTurn` on a message is display-only and stripped from the wire in `buildNodeContext.ts`. | Maturity |
+| Chat goals (agent chats, #1225) | `src/backend/services/chatGoals/`: `chatGoalStore.ts` (one goal per chat, changed one writer at a time), `chatGoalPolicy.ts` (pure: what a finished turn means for the goal) and `chatGoalRuntime.ts` (starts the next goal turn); the route `src/app/v1/chat/conversations/[conversationId]/goal/route.ts` | The runtime learns that a chat run ended from the flow-run event bus (`runFlowEvents.ts` publishes, the runtime subscribes per workspace), never from an import into `runFlow.ts`. A goal turn starts only under the conversation execution lock, after run admission, through `runFlow` with `resumeAsNewTurn` and the chat's own `requireApproval`, so approvals and Stop work as for a typed message. Every turn is looked at once (`reviewedMessageId`); the minute sweep in `src/backend/init.ts` picks up goals after a restart or a wait. `goalTurn` on a message is display-only and stripped from the wire in `buildNodeContext.ts`. | Maturity |
 | Conversation persistence | `persistConversationState.ts`, `conversationPublication.ts`, `conversationLog.ts`, `loadConversationState.ts`, `recoveryCheckpoint.ts` | Canonical log, snapshot and checkpoint are distinct. Snapshot and log writes for one conversation go through `conversationPublication.ts` in order; a write whose outcome is uncertain leaves a fence that the next complete write clears, and the fence never blocks later writes. Reject unsafe IDs, deleted and ephemeral snapshots; strip trace/runtime capabilities; retain authority checks. Recovery reconciliation cannot grant permission to repeat uncertain effects. | Maturity; Security owns privacy/crypto |
 | Conversation cache | `conversationStateCache.ts` around the map in `conversationStateRegistry.ts` | Keep one live-state registry. Only persistently terminal, unowned entries may be evicted; persistence failure must retain the state. | Maturity (#569) |
 | Provider dispatch | `handlers/ModelHandler.ts` (the attempt and its retries), `handlers/providerWire.ts` (what is sent), `handlers/contextOverflowRetry.ts`; `src/backend/services/model/adapters/` | The handler assembles input and selects the adapter; the adapter owns the actual SDK boundary. An intended turn is not an observed SDK dispatch. Preserve approval/authority/abort checks and each actual attempt marker. | Maturity; external streams own SDK/history consumers |
 | Dispatch archive | `modelTurnArchive.ts` invoked by SDK callbacks in `handlers/ModelHandler.ts`; `handlers/nativeOriginalPublication.ts` for native Original sessions | When archiving is enabled, persist the SDK request before emitting `model:dispatch`; update its outcome before `model:dispatch-result`. Preserve exact dispatch ID/ordinal and canonical versus wire context. Ordinary archive I/O failures may warn and continue; authority failures must propagate. | Maturity (#569) |
+| Tool results | `handlers/toolCallProcessing.ts` (dispatch, order, `tool:result` event, the tool message); in `src/backend/services/runResources/`: `capture.ts` (binary and large results become run resources), `toolResultMedia.ts` (images and audio go to the model as input), `boundToolResult.ts` and `toolResultBound.ts` (the size limit, #1226); `toolRepeatGuard.ts` (success or failure of a call) | Results go back in the order the model asked for them, whatever order they finish in. A failed capture keeps the original result and never breaks the run; authority errors still propagate. `handlers/contextWindowFit.ts` only shrinks results again when a provider rejects a request as too long. | Maturity |
 | Execution events | `engine/ExecutionEventBus.ts` and `src/shared/types/execution/events.ts` | Event sequence allocation/log append and UI delivery are separate responsibilities. UI retention changes cannot remove canonical history or synthesize provider dispatches. | Maturity; history/Brain consumers own their adapters |
-| MCP connection ownership | `src/backend/services/mcp/index.ts` (connect, disconnect, callbacks), `serviceRegistries.ts` (the maps), `connectionScheduling.ts` (startup and retries) and `lifecycleCoordinator.ts` | Client/transport maps are process-global and workspace-scoped. The coordinator owns connect/teardown promises, generation and demand bookkeeping; it does not duplicate the clients. Old transport callbacks must not remove a replacement client. | Security owns isolation; Production owns #547 receipts |
+| MCP connection ownership | `src/backend/services/mcp/index.ts` (connect, disconnect, the transport's `onclose` and `onerror` callbacks), `serviceRegistries.ts` (the maps), `connectionScheduling.ts` (startup and retries) and `lifecycleCoordinator.ts` | Client/transport maps are process-global and workspace-scoped. The coordinator owns connect/teardown promises, generation and demand bookkeeping; it does not duplicate the clients. Old transport callbacks must not remove a replacement client: `onclose` and `onerror` act only while their transport is still the one in `activeTransports` for their workspace (`bindToCurrentWorkspace` keeps the workspace). FLUJO's own closes remove the transport first, so they never schedule a retry. Two counters go up with each new client and are not the transport check: `clientGenerations` in `serviceRegistries.ts` makes tool names planned against a replaced client stale, and the coordinator's `generation` makes leases (`mcpLeasePool.ts`) and shutdown receipts stale. | Security owns isolation; Production owns #547 receipts |
+| MCP server notifications | Registered on each new client in `connectServer` (`index.ts`), before `client.connect`; the handlers live in `resourceNotifications.ts` (resource and tool lists), `inboundEvents.ts` (Claude channel) and `serverEventStream.ts` (event streams); newer-protocol clients get theirs in `betaClient.ts` | A handler that acts on the live connection first checks that the message comes from the current client, as the Claude channel handler does. A new notification handler goes into one of these modules; see [adding to a big file](#adding-to-a-big-file) for the line in `index.ts`. | Maturity |
 | MCP demand/teardown | `mcpLeasePool.ts`, `connection.ts`, `ownerScope.ts` | Fold concurrent connect/teardown; keep leases/pins live until release. Await graceful close and verified descendant teardown. Server name alone is not an identity across workspaces. Derive Bash owner scope from the run. | Production for shutdown/recovery; Security for execution capabilities |
 
 The process-global maps exist because Next.js can load multiple module graphs in
@@ -96,7 +103,7 @@ client and transport registries.
 | `runStatistics.ts` | `run.started`, `run.paused`, `run.finished` and the flow revision | `run.started` and `run.finished` at most once per logical run; a pause records `run.paused` each time. |
 | `runTurnAdmission.ts` | Admitting the request's messages; pinning a new conversation's flow | Returns the error result when no flow resolves; display-only subflow steps never enter the transcript. |
 | `runTurnRouting.ts` | The node a turn enters at | A new message goes to the step it names, an errored turn's Retry replays from its entry node. |
-| `runPreflight.ts` | Flow validation, allowed models, Quick Chat switch, entry conditions | Returns whether a check failed; runFlow then takes its ordinary error path. |
+| `runPreflight.ts` | Running the flow validation, allowed models, Quick Chat switch, entry conditions | Returns whether a check failed; runFlow then takes its ordinary error path. Only a new turn or a new conversation is validated. Shape rules belong in `src/utils/shared/flowValidation.ts`. |
 | `runSteeringDrain.ts` | Folding steering messages into a running flow | Only at a transcript-safe boundary; a failed write re-queues the messages. |
 | `runDebugPause.ts` | Debugger boundaries, attach requests, breakpoints, pause events | Receives the current state and emitter at each call. |
 | `runToolApproval.ts` | Which calls need a person; the live decision a sub-flow asks for | Never pauses the run itself. |
@@ -115,7 +122,7 @@ client and transport registries.
 | `providerWire.ts` | Building what one completion sends | Changes only the wire, never the canonical conversation; returns an error Result when the request cannot fit. |
 | `wireCompaction.ts` | Summarizing compaction of old history on the wire | Receives `generateCompletion` and the cancellation check as parameters. |
 | `contextOverflowRetry.ts` | One smaller retry wire after a context-length rejection | Undefined when nothing can shrink; the caller then keeps the provider error. |
-| `contextWindowFit.ts` | Input budget, token estimate, oversized result capture, `read_resource` arming | Reads and writes only run resources. |
+| `contextWindowFit.ts` | Input budget, token estimate, saving oversized results again before a smaller retry, `read_resource` arming | Reads and writes only run resources. The first size limit on a tool result is in `src/backend/services/runResources/boundToolResult.ts`. |
 | `providerErrorShape.ts` | Provider error bodies and thrown errors as one readable error | Authority errors are rethrown, never shaped. |
 | `providerAttemptStatistics.ts` | `model.attempt` statistics per provider attempt | Never affects the provider call. |
 | `nativeOriginalPublication.ts` | Publishing the native Original session of an archived dispatch | Any mismatch holds the invocation; reports the session as soon as it exists. |
@@ -125,7 +132,7 @@ client and transport registries.
 | `modelTurnResult.ts` | Turning a successful reply into conversation messages | Starts from the complete threaded input; wire-only changes never reach it. |
 | `streamedAssistantMessages.ts` | Folding and retracting streamed assistant prose | Retracts only prose of a failed attempt, never tool activity. |
 | `modelHandlerSettings.ts` | The settings ModelHandler reads | A failed read uses the documented default. |
-| `toolCallProcessing.ts` | One model turn's tool calls: approval, MCP and FLUJO tools, subflows | Results in call order; the approval gate before any dispatch. |
+| `toolCallProcessing.ts` | One model turn's tool calls: approval, MCP and FLUJO tools, subflows, and what each result becomes | Results in call order; the approval gate before any dispatch. The "Tool results" row above lists the modules it uses. |
 | `modelMedia.ts` | Saving model media | Shared by both paths. |
 
 ### MCP service index.ts (`src/backend/services/mcp/`)
@@ -133,26 +140,39 @@ client and transport registries.
 | Module | Owns | Contract |
 | --- | --- | --- |
 | `serviceRegistries.ts` | The process-global client, transport, generation and schema-hash maps; `scopedRegistry` | Imported first by the service; the default workspace keeps the original maps. |
-| `connectionScheduling.ts` | Startup sweep and backoff retries after an unexpected close | A retry pings a live client before tearing anything down; needs-user-action failures stop retrying. |
+| `connectionScheduling.ts` | Startup sweep and backoff retries after an unexpected close | A retry pings a live client before tearing anything down; needs-user-action failures stop retrying. A disabled or deleted server is checked again when the retry fires. Any successful connection resets the backoff. After five failed retries it stops; the next use of the server connects it again through a lease (`mcpLeasePool.ts`), and the startup sweep does at the next start. |
 | `connectionTest.ts` | The "Test Run" probe on a throwaway client | Never registers the client; one classic-handshake retry. |
 | `serverStatus.ts` | The status the MCP page shows | A live client is authoritative over stale OAuth hints. |
 | `serverConfigSave.ts` | What a config save writes: encrypted secrets, the managed root folder | Masked values keep the stored secret; bindings stay references. |
 | `serverConfigUpdate.ts` | Saving, renaming and deleting a config; aligning the live connection | A rename migrates flow references and tears down everything under the old name before connecting the new one. |
 | `serviceSkills.ts` | MCP Skills through the service | Loading a skill needs an approval for the exact manifest digest. |
-| `serviceEvents.ts` | MCP server events: list, subscribe, stream, poll, Claude channel | Each call takes a lease and checks the server is enabled. |
+| `serviceEvents.ts` | MCP server events: list, subscribe, stream, poll, Claude channel | Each call takes a lease, and a lease refuses a disabled server; subscribe, stream, poll and channel say "disabled" before trying. Handlers for what servers send are in the "MCP server notifications" row above. |
 | `headerAuthScopes.ts` | Static Authorization headers; removing stale inferred OAuth scopes | Removes only the exact legacy marker. |
 | `transportInspection.ts` | The innermost transport; stdout lines that are not MCP messages | Pure. |
+
+### Adding to a big file
+
+The ceiling in `scripts/execution-hotspots.json` only goes down, so even a
+three-line addition to a big file fails `npm run check:hotspots`. Put the new
+behaviour in the module that owns it (the tables above) and keep the call in
+the big file to one line. When the big file has to grow anyway, move a nearby
+block of the same kind out into its module in the same change, so the file
+stays at or under its ceiling. Example: a handler for a new kind of MCP server
+notification goes into `resourceNotifications.ts` (or a new module), but it is
+registered inside `connectServer` next to the others, and newer-protocol
+clients also need it in `betaClient.ts`.
 
 ### Checks that hold the split
 
 - `npm run check:hotspots` (`scripts/check-hotspot-sizes.mjs`): each big file
   has a line ceiling in `scripts/execution-hotspots.json` that may only go
-  down, and every module listed there must be named in this guide.
+  down, every module listed there must be named in this guide, and every file
+  this guide names must exist.
 - `npm run check:boundaries` (`scripts/check-import-boundaries.cjs`) and
   `__tests__/architecture/executionHotspots.test.ts`: nothing a big file
   imports, and no listed split module, may import the big file back. Four older
   lazy imports stay listed as debt with a reason: `subflowRecovery.ts` loads
-  `runFlow` on demand to resume a parent, `workspace.ts` disconnects every MCP
+  `runFlow` on demand to resume a parent, `src/utils/workspace.ts` disconnects every MCP
   server before deleting a workspace, and `tools.ts` and `betaClient.ts` check
   that the live client is still current for MCP Tasks. Tests stub those seams,
   so they change only together with their tests.
@@ -273,242 +293,71 @@ they cover every required installed scenario:
 | Cancellation/interrupted recovery | `flow/cancellationCoordinator.test.ts`, `flow/recoveryCheckpoint.test.ts` |
 | Actual dispatch/archive | `flow/modelTurnArchive.test.ts`, `model/completionCancellation.test.ts`, `model/codexAdapter.test.ts` |
 | MCP multiple-instance/connect/teardown | `mcp/crossInstancePoisonedClient.test.ts`, `mcp/mcpConnectionLifecycle.test.ts` |
+| MCP close and error callbacks, workspaces, retries | `mcp/mcpRestartLoop.test.ts` |
+| Pre-run checks on a new turn versus a resume | `flow/runPreflight.test.ts` |
+| Tool result order | `flow/processToolCallsConcurrency.test.ts` |
 
-## A second maintainer's exercise
+## The maintenance exercise (#661)
 
-**Status on November 25, 2026: not done.** It needs two people; an agent or a
-CI run cannot do it. It is tracked in
-[#661](https://github.com/mario-andreschak/FLUJO/issues/661). A passed exercise
-ticks the #571 item "a second human contributor can locate and change one
-execution behavior and one MCP lifecycle behavior using the architecture guide"
-and counts as one entry in the people record of #576.
+[#661](https://github.com/mario-andreschak/FLUJO/issues/661) asked a second
+maintainer, not the author of the split, to find and change one execution
+behavior and one MCP behavior using only this page. The owner decided that
+nobody does this by hand, so on November 28, 2026 a maintainer who did not
+write the split (an AI agent) did it with this page and the code, on throwaway
+branches. It ran the two tasks of #661 with the seeds below plus four more
+everyday tasks. The [report](./maintenance-exercise-661.md) records each task:
+the files opened, what this page got right and wrong, the time, and which
+mistakes the tests caught. Everything it found is fixed on this page, in the
+tests or in `npm run check:hotspots`.
 
-**Do it after #571 lands.** #571 splits `runFlow.ts`, `ModelHandler.ts` and the
-MCP service `index.ts` into smaller files. Before that, the exercise tests a map
-that is about to change. Either way, start with the path check below.
+### Repeat it
 
-### Who does what
+Start from a clean checkout of the commit you want to check.
 
-- **Operator** (Mario, as nominated in #661): finds, explains and fixes two
-  small planted faults in production code. Does not read the
-  [seeds](#seeds-for-the-observer) or the git history of the seed commits.
-- **Observer:** a person, not an AI agent. Plants the faults, watches (in the
-  room or on a video call), writes down every hint and judges the result. Write
-  down who they are and how they know the operator or the project.
-- Nobody else writes or suggests the fix. Reading this page and searching the
-  code is allowed. Asking an AI assistant for the fix counts as a hint.
+1. Run the focused tests and the import check. All must pass:
 
-### Time box: 2 hours
-
-| Step | Time box |
-| --- | --- |
-| Path check, setup and baseline | 30 minutes (the install alone takes 4 to 8 minutes) |
-| Task A: execution | 40 minutes |
-| Task B: MCP | 40 minutes |
-| Write-up | 10 minutes |
-
-When a task reaches its time box, stop, write down how far you got and move on.
-An unfinished task is recorded as unfinished.
-
-### Before you start
-
-In a fresh clone (full history, see the
-[contributor guide](../contributing/README.md#1-get-your-own-copy)), switch to
-the exact commit you will use and check that the code is still where this page
-says (PowerShell or any shell):
-
-```sh
-git ls-files --error-unmatch src/shared/types/execution/invocation.ts src/backend/execution/flow/runStateSetup.ts src/backend/services/mcp/index.ts src/backend/services/mcp/lifecycleCoordinator.ts __tests__/flow/invocationSource.test.ts __tests__/flow/unattendedDriveForward.test.ts __tests__/mcp/mcpRestartLoop.test.ts scripts/check-import-boundaries.cjs
-git grep -n "isUnattendedFlowInvocation(input.source)" -- src
-git grep -n "transport.onclose = bindToCurrentWorkspace" -- src/backend/services/mcp
-```
-
-The first command must list all eight files without an error. The other two
-must each print one line. If a line points to a different file than below, use
-that file in the tasks. If a command finds nothing, the code has moved: fix this
-page in a small pull request first, then start.
-
-### Step 1: set up and record the baseline
-
-1. Install as in the contributor guide, steps
-   [2](../contributing/README.md#2-install) and
-   [3](../contributing/README.md#3-check-that-it-works): `npm ci --include=dev`,
-   `npm run build:mcp`, `npm run test:dependencies`.
-2. Write down: the commit (`git rev-parse HEAD`), `node --version`,
-   `npm --version`, the operating system, the start time and any setup trouble.
-3. In the same PowerShell window, create a results folder outside the clone and
-   the check you will run after every change:
-
-   ```powershell
-   $out = (New-Item -ItemType Directory -Force ..\exercise-661).FullName
-   function Invoke-ExerciseCheck([string]$Name) {
-     git rev-parse HEAD | Tee-Object "$out\$Name.log"
-     node scripts/run-local-jest.cjs --selectProjects node --runInBand --runTestsByPath __tests__/flow/invocationSource.test.ts __tests__/flow/unattendedDriveForward.test.ts __tests__/mcp/mcpRestartLoop.test.ts --json "--outputFile=$out\$Name.json" 2>&1 | Tee-Object -Append "$out\$Name.log"
-     "tests exit code: $LASTEXITCODE" | Tee-Object -Append "$out\$Name.log"
-     node scripts/check-import-boundaries.cjs 2>&1 | Tee-Object -Append "$out\$Name.log"
-     "import check exit code: $LASTEXITCODE" | Tee-Object -Append "$out\$Name.log"
-     Get-Content "$out\$Name.json" | ConvertFrom-Json | Select-Object numPassedTests, numFailedTests, numPendingTests, numTodoTests | Tee-Object -Append "$out\$Name.log"
-   }
+   ```sh
+   node scripts/run-local-jest.cjs --selectProjects node --runInBand --runTestsByPath __tests__/flow/invocationSource.test.ts __tests__/flow/unattendedDriveForward.test.ts __tests__/flow/runPreflight.test.ts __tests__/mcp/mcpRestartLoop.test.ts
+   node scripts/check-import-boundaries.cjs
    ```
 
-   On Linux or macOS, run the same two `node` commands and save their output
-   with `| tee`.
-4. Run `Invoke-ExerciseCheck baseline`. Both exit codes must be 0, and
-   `numFailedTests`, `numPendingTests` and `numTodoTests` must be 0. If not,
-   the base is broken: stop, record it and open an issue.
+2. Make one seed below on a throwaway branch, run the same tests and see at
+   least one fail. Then fix it from the bug report alone, without restoring
+   the file from git, and run them again.
+3. Delete the throwaway branch.
 
-The commit printed at the top of each log identifies the exact files, so no
-separate file hashes are needed.
+### Bug reports and seeds
 
-### Step 2: task A, execution
+Task A, execution. Bug report: "A run started by a program carries on by itself
+after the model answers in plain text, as if nobody were watching. Chat runs
+behave correctly." Start from the row "Who started a run, and whether anyone
+is watching".
 
-Observer, out of the operator's sight:
+| Seed | Caught by |
+| --- | --- |
+| In `src/shared/types/execution/invocation.ts`, make `isUnattendedFlowInvocation` return `source !== 'chat'` | `__tests__/flow/invocationSource.test.ts` and two `api` cases in `__tests__/flow/unattendedDriveForward.test.ts` |
+| In `runStateSetup.ts`, set `sharedState.unattended = input.source !== 'chat'` | the two `api` cases in `__tests__/flow/unattendedDriveForward.test.ts` |
+| In `runStateSetup.ts`, work out `unattended` from `sharedState.source` (the conversation's first source) instead of `input.source` | "a schedule conversation continued by a chat run …" and its mirror case in `__tests__/flow/unattendedDriveForward.test.ts` |
 
-1. `git switch -c task-a`, then make one small change to production code (not
-   under `__tests__`) that makes a run started through the API count as
-   unattended. Use a [seed](#seeds-for-the-observer) or write your own of the
-   same size. A remote observer can send it as a patch file that the operator
-   applies with `git apply` without opening it.
-2. `git commit -am "task A"`, then `git diff HEAD~1 > "$out\seed-a.diff"` and
-   `Invoke-ExerciseCheck seed-a`. At least one test must fail. If all pass, the
-   seed is too weak; pick another.
+Task B, MCP. Bug report: "After FLUJO replaces an MCP server's connection (for
+example after a settings change), the old server process exits a little later.
+FLUJO then drops the working connection and starts yet another one." Start
+from the row "MCP connection ownership".
 
-Operator, with the clock running:
+| Seed | Caught by |
+| --- | --- |
+| In `transport.onclose` in `src/backend/services/mcp/index.ts`, check `!this.activeTransports.has(config.name)` instead of comparing with `transport` | "ignores a late close event from a replaced (zombie) transport" in `__tests__/mcp/mcpRestartLoop.test.ts` |
+| In the same handler, call `this.deregisterClient(config.name)` before that check | the zombie test, "still schedules a reconnect for an unexpected close of the live transport" and the approval test |
+| Make the same change in `transport.onerror` | "ignores a late error event from a replaced (zombie) transport" |
+| Assign `transport.onclose` without `bindToCurrentWorkspace` | "a close in one workspace reconnects that workspace …" |
 
-3. The bug report: "A flow started through the API carries on by itself after
-   the model answers in plain text, as if nobody were watching. Chat runs behave
-   correctly." Start from `src/shared/types/execution/invocation.ts` and the
-   place in `runStateSetup.ts` (called by `runFlow.ts`) that uses it.
-4. Explain out loud what you found ([what the observer listens for](#what-the-observer-listens-for)).
-5. Fix production code only: do not change, skip or delete tests, and do not
-   bring the old file back with `git checkout` or `git restore`. Then
-   `git commit -am "fix A"`, `git diff HEAD~1 > "$out\repair-a.diff"` and
-   `Invoke-ExerciseCheck repair-a`. Both exit codes must be 0.
-
-### Step 3: task B, MCP
-
-Observer: `git switch -c task-b <base commit>` (start from the clean base, not
-from task A), plant a fault that makes a late close event from an old connection
-drop the working connection, then `git commit -am "task B"`,
-`git diff HEAD~1 > "$out\seed-b.diff"` and `Invoke-ExerciseCheck seed-b`. At
-least one test must fail.
-
-Operator: the bug report is "After FLUJO replaces an MCP server's connection
-(for example after a settings change), the old server process exits a little
-later. FLUJO then drops the working connection and starts yet another one."
-Start from `transport.onclose` in `src/backend/services/mcp/index.ts` and from
-`lifecycleCoordinator.ts`. Explain out loud, fix production code only, then
-`git commit -am "fix B"`, `git diff HEAD~1 > "$out\repair-b.diff"` and
-`Invoke-ExerciseCheck repair-b`. Both exit codes must be 0.
-
-These tests replace the real MCP connection and the clock with test doubles.
-They do not watch a real server process shut down.
-
-### What the observer listens for
-
-Task A:
-
-- `isUnattendedFlowInvocation` treats only `chat` and `api` as attended; the
-  other six sources (`schedule`, `trigger`, `subflow`, `mcp`, `internal`,
-  `meeting`) run unattended.
-- The run (`installRunInputs` in `runStateSetup.ts`) keeps the conversation's
-  first `source`, but works out `unattended` fresh for every run from that
-  run's own source.
-- The old `unattended` flag in a flow's file decides nothing, because a flow
-  cannot know who started this run. The tests "does NOT drive forward for
-  attended api runs" and "ignores legacy unattended:false for a scheduled run"
-  check this.
-- What unattended changes: when the model ends a turn without handing off, the
-  run is pushed on to the single next step instead of stopping.
-- Why the fix leaves the other seven sources as they were.
-
-Task B:
-
-- Each server has one current connection in `activeTransports`, shared by every
-  copy of the module and kept per workspace. A close event acts only when it
-  comes from that current connection.
-- FLUJO's own closes (disconnect, reconnect, settings change) remove the
-  connection first (`deregisterClient`), so their close events are ignored and
-  do not reconnect.
-- An unexpected close of the current connection removes the client and
-  schedules a retry, if the server is still enabled.
-- `beginConnect` and `beginTeardown` in `lifecycleCoordinator.ts` merge
-  parallel calls into one and wait for each other. The generation number goes
-  up with each new connection, so old callbacks can tell they are out of date.
-  Workspace plus server name identify a server; the name alone does not.
-- Why the fix keeps both the retry after an unexpected close and the "no
-  retry" after an intentional disconnect.
-
-### How the result is judged
-
-- **Passed:** in both tasks the operator found the fault, explained the points
-  above in their own words and fixed production code. The repair check shows
-  both exit codes 0 and no failed, skipped or todo tests. No hint named the
-  line or the fix. Small nudges ("look at the close handler again") are allowed
-  and recorded.
-- **Partly passed:** only one task passed, a hint named the line or the fix, or
-  a task was finished after its time box.
-- **Not passed:** a test was changed, skipped or deleted; the fix only brought
-  back the original file; somebody other than the operator wrote the fix; or
-  neither task was finished.
-
-Only "Passed" ticks the #571 item. The other results are still posted, as they
-are.
-
-### What to post on #661
-
-The observer posts one comment:
-
-```text
-Exercise #661, date:
-Operator:            Observer:            How the observer knows the operator or project:
-Base commit:         OS / Node / npm:     Start / end:          Setup trouble:
-Task A: seed commit:      failing tests (seed-a.log):
-        fix commit:       exit codes (repair-a.log):      minutes:      hints:
-        operator's explanation, short:
-Task B: seed commit:      failing tests (seed-b.log):
-        fix commit:       exit codes (repair-b.log):      minutes:      hints:
-        operator's explanation, short:
-Observer's review of the two fixes:
-Result: Passed / Partly passed / Not passed, because:
-```
-
-Attach the four `.diff` files and the five `.log` files from the results folder.
-The diffs are the change to review; no pull request is needed. Then add one
-line for the operator to the [people record](../contributing/maintainership.md#evidence-record)
-in #576 and link the comment from #571. Delete the clone and the results folder
-once the comment is posted.
-
-### Seeds for the observer
-
-Operator: skip this part.
-
-Task A, pick one:
-
-1. In `src/shared/types/execution/invocation.ts`, make
-   `isUnattendedFlowInvocation` return `source !== 'chat'`. Aimed at the `api`
-   cases in `invocationSource.test.ts` and `unattendedDriveForward.test.ts`.
-2. In `runStateSetup.ts`, change
-   `sharedState.unattended = isUnattendedFlowInvocation(input.source);` to
-   `sharedState.unattended = input.source !== 'chat';`. Aimed at the `api`
-   cases in `unattendedDriveForward.test.ts` only: the shared helper still looks
-   right, so the operator has to follow it to its caller.
-
-Task B, pick one:
-
-1. In `transport.onclose` in `src/backend/services/mcp/index.ts`, change the
-   check `this.activeTransports.get(config.name) !== transport` to
-   `!this.activeTransports.has(config.name)`. Aimed at "ignores a late close
-   event from a replaced (zombie) transport"; an intentional disconnect still
-   behaves.
-2. In the same handler, move `this.deregisterClient(config.name);` above that
-   check. Aimed at the zombie test and at "still schedules a reconnect for an
-   unexpected close of the live transport".
-
-These seeds were worked out by reading the tests on November 25, 2026, not by
-running them; the seed check in steps 2 and 3 confirms them on the day. The
-file names above match the code after #571 (November 27, 2026); if the path
-check finds a line elsewhere, change the same decision wherever it now lives.
+What a correct explanation covers: only `chat` and `api` are attended; a
+conversation keeps its first source but every run works out `unattended` from
+its own source; unattended changes only what happens when a step ends on plain
+text. For MCP: a close or error acts only when it comes from the transport
+currently registered for that server in that workspace; FLUJO's own closes
+remove the transport first and so never reconnect; an unexpected close of the
+current transport reconnects if the server is still enabled.
 
 ## Size inventory and evidence limits
 
@@ -538,7 +387,7 @@ the regression suite already discovers the boundary test without runner edits.
 
 ## Shared package API contracts
 
-`src/shared/types/package/build.ts`, `install.ts`, and `registry.ts` own the
+`src/shared/types/package/build.ts`, `src/shared/types/package/install.ts`, and `src/shared/types/package/registry.ts` own the
 package selection/build results, install inspection/progress/results, and
 public registry browse results. They export types only. Their dependencies are
 the existing shared manifest and install-origin types; importing a DTO does

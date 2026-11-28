@@ -107,8 +107,11 @@ not kept current.
 
   `eslint-suppressions.json` lists 802 exceptions in 261 files (#1423). GitHub
   reports the repository at about 300 MB (the audit said about 120 MB); the
-  checked-out files are 185 MB, of which 80 MB is one website video. The human
-  maintenance exercise (#661) has not happened.
+  checked-out files are 185 MB, of which 80 MB is one website video. The
+  maintenance exercise (#661) was done on 2026-11-28 by an AI agent that did not
+  write the split, because the owner decided nobody does it by hand
+  ([report](../architecture/maintenance-exercise-661.md)). It fixed the gaps it
+  found; it does not count as a second human maintainer.
 
 ### Security (C+)
 
@@ -215,7 +218,8 @@ not kept current.
 - [ ] Name a security responder and a backup (#565, #576).
 - [ ] Find two more human maintainers and outside contributors (#576).
 - [ ] Run the product-fit pilot with real users (#577).
-- [ ] Run the human maintenance exercise (#661).
+- [x] Maintenance exercise (#661): done on 2026-11-28 by an AI agent, as the
+      owner decided; see the [report](../architecture/maintenance-exercise-661.md).
 - [x] Regrade one exact release (#578): done automatically after every release by
       `release-evidence.yml`; the [release reassessment](independent-reassessment.md)
       has the latest grades. An outside person may still add a report there.
