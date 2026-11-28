@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const { createServer } = require('node:http');
-const { readFileSync } = require('node:fs');
+const { existsSync, readFileSync } = require('node:fs');
 const Module = require('node:module');
 const path = require('node:path');
 const { describe, it, before, after, beforeEach, afterEach } = require('node:test');
@@ -20,7 +20,15 @@ function loadSource(relative) {
   loaded.filename = filename;
   loaded.paths = Module._nodeModulePaths(path.dirname(filename));
   const nativeRequire = loaded.require.bind(loaded);
-  loaded.require = name => aliases[name] ? loadSource(aliases[name]) : nativeRequire(name);
+  const localSource = name => {
+    if (!name.startsWith('.')) return undefined;
+    const candidate = path.join(path.dirname(filename), `${name}.ts`);
+    return existsSync(candidate) ? path.relative(root, candidate) : undefined;
+  };
+  loaded.require = name => {
+    const source = aliases[name] ?? localSource(name);
+    return source ? loadSource(source) : nativeRequire(name);
+  };
   const compiled = ts.transpileModule(readFileSync(filename, 'utf8'), {
     fileName: filename, reportDiagnostics: true,
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true },
