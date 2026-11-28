@@ -120,7 +120,7 @@ describe('no feature switches (#1449)', () => {
 
   it('has no code switches', () => {
     expect({ switches: Object.keys(FEATURES).sort(), fix: HOW_TO_FIX })
-      .toEqual({ switches: ['ENABLE_EXECUTION_TRACKER', 'LOG_LEVEL'], fix: HOW_TO_FIX });
+      .toEqual({ switches: ['LOG_LEVEL'], fix: HOW_TO_FIX });
   });
 
   it('has only on/off settings a person must decide', () => {

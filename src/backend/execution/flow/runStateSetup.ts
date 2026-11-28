@@ -6,7 +6,6 @@ import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { bindExecutionModelStepOrdinals } from '@/backend/execution/flow/modelStepOrdinals';
 import { syncHumanTaskEntry, updateHumanTaskEntry } from '@/backend/services/humanTasks/humanTaskIndex';
 import { SharedState, isUnattendedFlowInvocation } from '@/backend/execution/flow/types';
-import { FEATURES } from '@/config/features';
 import { DEFAULT_CONVERSATION_TITLE } from '@/utils/shared/conversationTitle';
 import { initializeRecovery } from '@/backend/execution/flow/recoveryCheckpoint';
 import type { FlowRunInput } from './runFlowContract';
@@ -90,10 +89,6 @@ export function openRunState(opening: RunStateOpening): { sharedState: SharedSta
         nodeExecutionTracker: [],
       };
 
-      if (FEATURES.ENABLE_EXECUTION_TRACKER && sharedState.executionTrace) {
-        sharedState.executionTrace = [];
-      }
-
       FlowExecutor.conversationStates.set(effectiveConvId, sharedState);
       log.verbose(`State updated in memory with reset currentNodeId: ${sharedState.currentNodeId}`);
     }
@@ -103,7 +98,7 @@ export function openRunState(opening: RunStateOpening): { sharedState: SharedSta
       trackingInfo: {
         executionId: crypto.randomUUID(),
         startTime: Date.now(),
-        nodeExecutionTracker: FEATURES.ENABLE_EXECUTION_TRACKER ? [] : [],
+        nodeExecutionTracker: [],
       },
       messages: [],
       flowId: '',
@@ -116,7 +111,6 @@ export function openRunState(opening: RunStateOpening): { sharedState: SharedSta
       createdAt: Date.now(),
       updatedAt: Date.now(),
       debugMode: flujodebug,
-      executionTrace: (flujodebug && FEATURES.ENABLE_EXECUTION_TRACKER) ? [] : undefined,
       // Tier 2c: the run-scoped named-variable scratchpad starts empty and is
       // seeded from FlowRunInput.variables just below.
       variables: {},
