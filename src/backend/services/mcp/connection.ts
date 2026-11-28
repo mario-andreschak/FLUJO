@@ -6,6 +6,7 @@ import { McpIsolationError } from '../security/isolatedMcp';
 import { resolveTrustedHostLaunch, trustedHostBrokerEnvironment, attachTrustedHost } from './trustedHost';
 import { trustedHostMcpApprovalAsync, TrustedHostMcpError } from '../security/trustedHostMcp';
 import { attachLocalHostLaunch } from './localHost';
+import { hostTerminalEnvironment } from './hostTerminalEnvironment';
 import {
   prepareMcpIsolation, isolatedSdkEnvironment, attachMcpIsolation, getManagedMcpIsolation, assertHostMcpLaunchAllowed,
   settleMcpIsolationCleanup, type ManagedMcpIsolation,
@@ -373,56 +374,6 @@ function transformEnv(env?: Record<string, unknown>): Record<string, string> {
     }
   }
   return mcpStringDataRecord(transformed);
-}
-
-/**
- * Environment keys that locate the signed-in host account and its tool config.
- * If the host does not define one of these, a stale value persisted on the MCP
- * record must not resurrect it and redirect a CLI into a private/fake home.
- */
-const HOST_TERMINAL_ENV_KEYS = new Set([
-  'path', 'pathext',
-  'home', 'userprofile', 'homedrive', 'homepath',
-  'appdata', 'localappdata', 'programdata',
-  'xdg_config_home', 'xdg_cache_home', 'xdg_data_home',
-  'xdg_state_home', 'xdg_runtime_dir',
-  'tmp', 'temp', 'tmpdir',
-  'shell', 'comspec', 'systemroot', 'windir', 'systemdrive',
-  'programfiles', 'programfiles(x86)',
-  'gh_config_dir',
-]);
-
-function setEnvCaseInsensitively(
-  target: Record<string, string>,
-  key: string,
-  value: string | undefined,
-): void {
-  for (const existing of Object.keys(target)) {
-    if (existing.toLowerCase() === key.toLowerCase()) delete target[existing];
-  }
-  if (value !== undefined) target[key] = value;
-}
-
-/**
- * Give the bundled Bash server the actual environment of the FLUJO process.
- * Persisted per-server values remain available for explicit additions, while
- * the live host wins for existing keys. Host identity/config keys also mirror
- * absence, preventing an old GH_CONFIG_DIR/HOME workaround from surviving.
- */
-function hostTerminalEnvironment(configured: Record<string, string>): Record<string, string> {
-  const result = { ...configured };
-  const hostEntries = Object.entries(process.env).filter(
-    (entry): entry is [string, string] => typeof entry[1] === 'string',
-  );
-
-  for (const [key, value] of hostEntries) {
-    setEnvCaseInsensitively(result, key, value);
-  }
-  for (const key of HOST_TERMINAL_ENV_KEYS) {
-    const host = hostEntries.find(([name]) => name.toLowerCase() === key);
-    if (!host) setEnvCaseInsensitively(result, key, undefined);
-  }
-  return result;
 }
 
 /**

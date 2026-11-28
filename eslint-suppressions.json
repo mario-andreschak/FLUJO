@@ -163,11 +163,6 @@
       "count": 1
     }
   },
-  "src/backend/services/mcp/connection.ts": {
-    "flujo/no-workaround-comment": {
-      "count": 1
-    }
-  },
   "src/backend/services/mcp/directInstall.ts": {
     "flujo/no-double-cast": {
       "count": 1
