@@ -1,6 +1,5 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import JSZip from 'jszip';
 import sharp from 'sharp';
 import { prepareChatAttachment, type PreparedAttachment } from '@/backend/services/chatAttachments/prepare';
 import { walkXml } from '@/backend/services/chatAttachments/textBudget';
@@ -13,6 +12,13 @@ const LIMITS: ChatAttachmentLimits = { maxFileBytes: 16 * MiB, maxInlineBytes: 8
 async function prepare(name: string, limits: Partial<ChatAttachmentLimits> = {}, mimeType?: string): Promise<PreparedAttachment> {
   const bytes = await readFile(path.join(FIXTURES, name));
   return prepareChatAttachment({ bytes, name, mimeType, limits: { ...LIMITS, ...limits } });
+}
+
+/** The unpacked size of a zip's first member, read from its central directory. */
+function firstMemberSize(zip: Buffer): number {
+  const endOfDirectory = zip.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  const directory = zip.readUInt32LE(endOfDirectory + 16);
+  return zip.readUInt32LE(directory + 24);
 }
 
 function textOf(prepared: PreparedAttachment): string {
@@ -153,7 +159,8 @@ describe('chat attachment preparation (#1224)', () => {
   });
 
   it('shrinks an image that is too large to send', async () => {
-    const big = await sharp({ create: { width: 2000, height: 1500, channels: 3, background: '#808080', noise: { type: 'gaussian', mean: 128, sigma: 60 } } }).png().toBuffer();
+    // About 1.4 MB as PNG: far over the limit, without spending seconds on a huge source picture.
+    const big = await sharp({ create: { width: 800, height: 600, channels: 3, background: '#808080', noise: { type: 'gaussian', mean: 128, sigma: 60 } } }).png().toBuffer();
     const prepared = await prepareChatAttachment({ bytes: big, name: 'noise.png', limits: { ...LIMITS, maxInlineBytes: 200_000 } });
     if (prepared.kind !== 'image') throw new Error(JSON.stringify(prepared));
     expect(prepared.note.code).toBe('image-reduced');
@@ -177,10 +184,10 @@ describe('chat attachment preparation (#1224)', () => {
   });
 
   it('never unpacks more than the part limit from a tiny compressed archive member', async () => {
-    const zip = new JSZip();
-    zip.file('word/document.xml', `<w:document><w:body><w:p><w:r><w:t>${'a'.repeat(40 * MiB)}</w:t></w:r></w:p></w:body></w:document>`);
-    const bomb = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+    // generate.mjs builds this file once; compressing 40 MiB in every run made the test slow under load.
+    const bomb = await readFile(path.join(FIXTURES, 'bomb.docx'));
     expect(bomb.length).toBeLessThan(MiB);
+    expect(firstMemberSize(bomb)).toBeGreaterThan(40 * MiB);
     const prepared = await prepareChatAttachment({ bytes: bomb, name: 'bomb.docx', limits: { ...LIMITS, maxTextCharacters: 1000 } });
     expect(prepared.note.shortened).toEqual({ unit: 'character', kept: 1000 });
   });
