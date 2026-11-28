@@ -87,6 +87,18 @@ this way on desktop and phone screens and keeps the evidence. On a `launch`
 mode needs about 8–10 GB for this many pages, otherwise Next restarts itself
 mid-run and the loading stage fails with `ERR_CONNECTION_REFUSED`.
 
+## Tool approval journey
+
+`npm run journey:tool-approval` checks "Require tool approvals" (#1284) the way a
+person uses it, with a local stand-in model and a local stand-in for Anthropic's
+service: off and on, mixed decisions on one card, each chat's own box, unticking
+while a call waits, reload and double click, Stop, a failed save, a sub-flow's
+wait in the parent chat and in the approval inbox, keyboard use, a Claude
+subscription model and a paused automation. It always starts its own FLUJO from
+the production build and removes it afterwards. Evidence lands in
+`tool-approval-journey/`. The steps are listed in [Talk](talk.md)
+(`talk-tool-approval`).
+
 ## Human step journey
 
 `npm run journey:human-step` checks a step that waits for a person (#1095) the

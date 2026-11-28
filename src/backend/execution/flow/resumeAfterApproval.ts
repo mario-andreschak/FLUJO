@@ -13,6 +13,7 @@ import { commitToolCheckpoint } from './recoveryCheckpoint';
 import { addLoadedDeferredTools } from './toolLoading/planStepTools';
 import type { StorageKey } from '@/shared/types/storage';
 import { resolveStepToolResults } from './stepToolResults';
+import { appendRawForState } from './conversationLog';
 
 const log = createLogger('backend/execution/flow/resumeAfterApproval');
 
@@ -117,10 +118,41 @@ export function refusedHumanStepAnswer(
 export const INTERRUPTED_APPROVED_TOOL_RESULT =
   'This approved tool call was interrupted before FLUJO saved its result. It may already have taken effect, so FLUJO did not run it again. Check the result before asking for it again.';
 
+function interruptedApprovedResult(toolCallId: string): FlujoChatMessage {
+  return { role: 'tool', tool_call_id: toolCallId, content: INTERRUPTED_APPROVED_TOOL_RESULT, id: uuidv4(), timestamp: Date.now() };
+}
+
+/**
+ * Save the approval before the tool starts: the call leaves the waiting batch
+ * (the run goes on once nothing else waits) and a `tool:before` checkpoint names
+ * it. After a crash no version of FLUJO offers the call again; the resumed run
+ * answers it with INTERRUPTED_APPROVED_TOOL_RESULT. Read-only tools have no
+ * checkpoint (they may run again) and nothing is saved for them here. A failed
+ * save puts the call back on the card, and the tool does not start.
+ */
+async function claimApprovedCall(
+  storageKey: StorageKey,
+  sharedState: SharedState,
+  toolCall: OpenAI.ChatCompletionMessageFunctionToolCall,
+): Promise<void> {
+  const before = { pendingToolCalls: sharedState.pendingToolCalls, status: sharedState.status };
+  const waiting = (sharedState.pendingToolCalls ?? []).filter((call) => call.id !== toolCall.id);
+  sharedState.pendingToolCalls = waiting.length > 0 ? waiting : undefined;
+  if (waiting.length === 0) sharedState.status = 'running';
+  try {
+    await commitToolCheckpoint(storageKey, sharedState, [toolCall], 'before');
+  } catch (error) {
+    sharedState.pendingToolCalls = before.pendingToolCalls;
+    sharedState.status = before.status;
+    throw error;
+  }
+}
+
 /**
  * An earlier approval of this call started the tool and never recorded how it
  * ended (the app stopped, or the attempt failed half way). Running it again
  * could repeat an external effect, so the call is settled without running.
+ * States saved before claimApprovedCall kept the call waiting; this settles those.
  */
 function approvedEffectIsUncertain(sharedState: SharedState, toolCallId: string): boolean {
   const checkpoint = sharedState.recovery?.currentCheckpoint;
@@ -162,21 +194,17 @@ export async function applyApprovalDecision(
   } else if (action === 'approve' && approvedEffectIsUncertain(sharedState, toolCallId)) {
     log.warn(`Approved tool call ${toolCallId} was interrupted earlier; settling it without running it again`);
     if (storageKey) await commitToolCheckpoint(storageKey, sharedState, [toolCallToProcess], 'unknown');
-    const interrupted: FlujoChatMessage = {
-      role: 'tool',
-      tool_call_id: toolCallId,
-      content: INTERRUPTED_APPROVED_TOOL_RESULT,
-      id: uuidv4(),
-      timestamp: Date.now(),
-    };
+    const interrupted = interruptedApprovedResult(toolCallId);
     sharedState.messages.push(interrupted);
     appendedMessages.push(interrupted);
     sharedState.pendingToolCalls = (sharedState.pendingToolCalls ?? []).filter(tc => tc.id !== toolCallId);
   } else if (action === 'approve') {
     log.info(`Approving tool call ${toolCallId} (${toolCallToProcess.function.name})`);
     // The decision is saved before the tool starts, so a crash during the call
-    // can never lead to running it a second time (see approvedEffectIsUncertain).
-    if (storageKey) await commitToolCheckpoint(storageKey, sharedState, [toolCallToProcess], 'before');
+    // can never lead to running it a second time. It is saved in a form every
+    // FLUJO version reads the same way, also one rolled back to: the call no
+    // longer waits, and an unanswered call is settled as interrupted on resume.
+    if (storageKey) await claimApprovedCall(storageKey, sharedState, toolCallToProcess);
     // Process *only* the approved tool call.
     let toolProcessingResult: Awaited<ReturnType<typeof ModelHandler.processToolCalls>>;
     try {
@@ -202,7 +230,21 @@ export async function applyApprovalDecision(
         ...await resolveStepToolResults(sharedState),
       });
     } catch (error) {
-      if (storageKey) await commitToolCheckpoint(storageKey, sharedState, [toolCallToProcess], 'unknown');
+      // The attempt failed half way, so the tool may have taken effect. The call
+      // is settled as interrupted and never offered again; with nothing else
+      // waiting, the run ends with that message on the usual error line.
+      const interrupted = interruptedApprovedResult(toolCallId);
+      sharedState.messages.push(interrupted);
+      sharedState.pendingToolCalls = (sharedState.pendingToolCalls ?? []).filter(tc => tc.id !== toolCallId);
+      if (sharedState.pendingToolCalls.length === 0) {
+        sharedState.pendingToolCalls = undefined;
+        sharedState.status = 'error';
+        sharedState.lastResponse = { success: false, error: INTERRUPTED_APPROVED_TOOL_RESULT };
+      }
+      if (storageKey) {
+        await appendRawForState(sharedState, [{ type: 'message', message: interrupted }]);
+        await commitToolCheckpoint(storageKey, sharedState, [toolCallToProcess], 'unknown');
+      }
       throw error;
     }
 

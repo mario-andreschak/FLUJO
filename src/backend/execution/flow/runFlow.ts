@@ -42,7 +42,7 @@ import { EmitFn } from '@/shared/types/execution/events';
 import OpenAI from 'openai';
 import { TOOL_CALL_ACTION, FINAL_RESPONSE_ACTION, HUMAN_APPROVAL_ACTION, ERROR_ACTION, STAY_ON_NODE_ACTION } from '@/backend/execution/flow/types';
 import { FlujoChatMessage } from '@/shared/types/chat';
-import { requireApprovalOf } from './toolApprovalGate';
+import { approvalForBatch } from './approvalSetting';
 import { addLoadedDeferredTools } from './toolLoading/planStepTools';
 import { requireFunctionToolCalls } from '@/shared/types/openai';
 import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
@@ -170,7 +170,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   const startTime = Date.now();
 
   const flujo = input.flujo ?? true;
-  const requireApproval = requireApprovalOf(input.requireApproval);
+  const requireApproval = input.requireApproval === undefined ? undefined : input.requireApproval === true; // missing: the saved setting
   const flujodebug = input.debug ?? false;
   const continueDebug = input.continueDebug ?? false;
   const userTurn = input.userTurn ?? false;
@@ -511,7 +511,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
         // #1448: deferred tool descriptions and code mode.
         toolCatalog: sharedState.stepToolCatalog,
         markToolsLoaded: (names) => addLoadedDeferredTools(sharedState, names),
-        requireToolApproval: requireApproval,
+        requireToolApproval: approvalForBatch(sharedState),
         onApprovalRequired: sharedState.onApprovalRequired,
         approvalConversationId: sharedState.approvalConversationId,
       });
@@ -555,7 +555,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
   const holdForApproval = async (
     heldCalls: OpenAI.ChatCompletionMessageFunctionToolCall[],
     batch: OpenAI.ChatCompletionMessageFunctionToolCall[],
-    authoredByFlow = !requireApproval,
+    authoredByFlow = !approvalForBatch(sharedState),
   ): Promise<void> => {
     // A saved run can wait for a person. A transient one has nothing to come
     // back to, so what a flow requires fails there rather than being skipped.
@@ -981,7 +981,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
           // the action instead so resuming still passes through the approval
           // approval gate rather than accidentally bypassing it.
           if (!transparentControlHandoff) {
-            if (pendingCalls?.length && !requireApproval && !pendingCalls.some((call) => stepRequiresApproval(sharedState, call))) {
+            if (pendingCalls?.length && !approvalForBatch(sharedState) && !pendingCalls.some((call) => stepRequiresApproval(sharedState, call))) {
               sharedState.debugPendingToolCalls = pendingCalls;
             } else {
               sharedState.debugPendingAction = {
@@ -1207,10 +1207,10 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
                 }
               }
               // --- Flujo=true: Handle optional approval ---
-              const heldCalls = requireApproval ? ordinaryToolCalls : ordinaryToolCalls.filter((call) => stepRequiresApproval(sharedState, call));
+              const approvalOn = approvalForBatch(sharedState), heldCalls = approvalOn ? ordinaryToolCalls : ordinaryToolCalls.filter((call) => stepRequiresApproval(sharedState, call));
               const rejectedLive = heldCalls.length > 0 ? await decideHeldCallsLive(sharedState, runtimeAbortSignal, emitNewMessages, heldCalls) : undefined;
-              if ((requireApproval || heldCalls.length > 0) && !rejectedLive) {
-                await holdForApproval(heldCalls, ordinaryToolCalls);
+              if ((approvalOn || heldCalls.length > 0) && !rejectedLive) {
+                await holdForApproval(heldCalls, ordinaryToolCalls, !approvalOn);
                 break;
               } else {
                 const runnableCalls = rejectedLive

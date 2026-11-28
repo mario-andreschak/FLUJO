@@ -172,6 +172,11 @@ tester.run('single-tool-approval-gate', rules['single-tool-approval-gate'], {
       code: "import { applyApprovalDecision } from '@/backend/execution/flow/resumeAfterApproval';",
       filename: '/repo/src/app/api/approvals/[id]/route.ts',
     },
+    {
+      // The approval inbox answers a live wait by its receipt (#1284).
+      code: "import { findLiveApproval, resolvePendingApproval } from '@/backend/execution/flow/toolApprovalRegistry';",
+      filename: '/repo/src/app/api/approvals/[id]/route.ts',
+    },
     { code: "sharedState.status = 'awaiting_tool_approval';", filename: '/repo/src/backend/execution/flow/runFlow.ts' },
   ],
   invalid: [
@@ -182,6 +187,11 @@ tester.run('single-tool-approval-gate', rules['single-tool-approval-gate'], {
       code: "import { registerPendingApproval } from '@/backend/execution/flow/toolApprovalRegistry';",
       filename: '/repo/src/backend/services/model/adapters/newAdapter.ts',
       errors: [{ messageId: 'decisionPoint', data: { name: 'registerPendingApproval' } }],
+    },
+    {
+      code: "import { resolvePendingApproval } from '@/backend/execution/flow/toolApprovalRegistry';",
+      filename: '/repo/src/app/api/approvals/route.ts',
+      errors: [{ messageId: 'decisionPoint', data: { name: 'resolvePendingApproval' } }],
     },
     {
       code: "import { applyApprovalDecision } from '../flow/resumeAfterApproval';",

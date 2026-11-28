@@ -108,9 +108,14 @@ describe('applyApprovalDecision (#115)', () => {
 
 describe('an approved call runs at most once (#1284)', () => {
   const pendingIds = (state: SharedState) => (state.pendingToolCalls ?? []).map((call) => call.id);
+  const withAssistantTurn = (state: SharedState, ids: string[]) => {
+    state.messages.push({ role: 'assistant', content: null, id: 'a1', timestamp: 1,
+      tool_calls: ids.map((id) => ({ id, type: 'function', function: { name: 'send_email', arguments: '{}' } })) } as never);
+    return state;
+  };
 
-  it('saves the decision before the tool starts', async () => {
-    const state = makeState([{ id: 'call_1', name: 'send_email' }]);
+  it('saves the decision before the tool starts, with the call no longer waiting', async () => {
+    const state = makeState([{ id: 'call_1', name: 'send_email' }, { id: 'call_2', name: 'post_message' }]);
     processToolCallsMock.mockImplementation(async () => {
       // What a restart at this moment would read back.
       const saved = persistConversationStateMock.mock.calls.at(-1)?.[1] as SharedState | undefined;
@@ -118,7 +123,8 @@ describe('an approved call runs at most once (#1284)', () => {
         phase: 'tool:before',
         tools: [expect.objectContaining({ toolCallId: 'call_1' })],
       });
-      expect(pendingIds(saved!)).toEqual(['call_1']);
+      expect(pendingIds(saved!)).toEqual(['call_2']);
+      expect(saved?.status).toBe('awaiting_tool_approval');
       return { success: true, value: { toolCallMessages: [{ role: 'tool', tool_call_id: 'call_1', content: 'ok' }] } };
     });
 
@@ -127,46 +133,91 @@ describe('an approved call runs at most once (#1284)', () => {
     expect(processToolCallsMock).toHaveBeenCalledTimes(1);
     expect(persistConversationStateMock.mock.invocationCallOrder[0]).toBeLessThan(processToolCallsMock.mock.invocationCallOrder[0]);
     expect(state.recovery?.currentCheckpoint?.phase).toBe('tool:after');
+    expect(pendingIds(state)).toEqual(['call_2']);
   });
 
-  it('does not run a call again when the app stopped while it ran', async () => {
-    // The saved state after a crash: the call was claimed, its result never saved.
+  it('saves the last call of a batch as a going run, so a crash ends as an interrupted run', async () => {
     const state = makeState([{ id: 'call_1', name: 'send_email' }]);
+    processToolCallsMock.mockImplementation(async () => {
+      const saved = persistConversationStateMock.mock.calls.at(-1)?.[1] as SharedState;
+      expect(saved.status).toBe('running');
+      expect(saved.pendingToolCalls).toBeUndefined();
+      return { success: true, value: { toolCallMessages: [{ role: 'tool', tool_call_id: 'call_1', content: 'ok' }] } };
+    });
+
+    expect((await applyApprovalDecision(state, 'call_1', 'approve')).outcome).toBe('ready');
+  });
+
+  it('never offers a call again when the app stopped while it ran, also to a version that ignores checkpoints', async () => {
+    const state = withAssistantTurn(makeState([{ id: 'call_1', name: 'send_email' }, { id: 'call_2', name: 'post_message' }]), ['call_1', 'call_2']);
     await applyApprovalDecision(state, 'call_1', 'approve');
     const afterCrash = structuredClone(persistConversationStateMock.mock.calls[0][1]) as SharedState;
+    // A FLUJO rolled back to a version from before #1284 reads the same file but not the checkpoint.
+    const rolledBack = structuredClone(afterCrash);
+    delete rolledBack.recovery;
     processToolCallsMock.mockClear();
 
-    const res = await applyApprovalDecision(afterCrash, 'call_1', 'approve');
-
+    for (const saved of [afterCrash, rolledBack]) {
+      expect(pendingIds(saved)).toEqual(['call_2']);
+      expect((await applyApprovalDecision(saved, 'call_1', 'approve')).outcome).toBe('tool_not_found');
+    }
     expect(processToolCallsMock).not.toHaveBeenCalled();
-    expect(res.outcome).toBe('ready');
-    expect(afterCrash.messages.at(-1)).toMatchObject({ role: 'tool', tool_call_id: 'call_1', content: INTERRUPTED_APPROVED_TOOL_RESULT });
-    expect(afterCrash.recovery).toMatchObject({ manualActionRequired: true });
   });
 
-  it('does not run a call again after an attempt that failed half way', async () => {
+  it('settles an attempt that failed half way as interrupted and ends the run on its error line', async () => {
     const state = makeState([{ id: 'call_1', name: 'send_email' }]);
     processToolCallsMock.mockRejectedValueOnce(new Error('connection reset'));
     await expect(applyApprovalDecision(state, 'call_1', 'approve')).rejects.toThrow('connection reset');
-    const retried = structuredClone(persistConversationStateMock.mock.calls.at(-1)![1]) as SharedState;
+    const saved = structuredClone(persistConversationStateMock.mock.calls.at(-1)![1]) as SharedState;
     processToolCallsMock.mockClear();
 
-    await applyApprovalDecision(retried, 'call_1', 'approve');
-
+    for (const current of [state, saved]) {
+      expect(current.messages.at(-1)).toMatchObject({ role: 'tool', tool_call_id: 'call_1', content: INTERRUPTED_APPROVED_TOOL_RESULT });
+      expect(current.status).toBe('error');
+      expect(current.lastResponse).toMatchObject({ success: false, error: INTERRUPTED_APPROVED_TOOL_RESULT });
+      expect(current.recovery).toMatchObject({ manualActionRequired: true });
+    }
+    expect((await applyApprovalDecision(saved, 'call_1', 'approve')).outcome).toBe('tool_not_found');
     expect(processToolCallsMock).not.toHaveBeenCalled();
-    expect(retried.messages.at(-1)?.content).toBe(INTERRUPTED_APPROVED_TOOL_RESULT);
   });
 
-  it('can still reject a call whose earlier approval was cut off', async () => {
+  it('puts the call back on the card when the decision cannot be saved, and runs nothing', async () => {
     const state = makeState([{ id: 'call_1', name: 'send_email' }]);
-    await applyApprovalDecision(state, 'call_1', 'approve');
-    const afterCrash = structuredClone(persistConversationStateMock.mock.calls[0][1]) as SharedState;
-    processToolCallsMock.mockClear();
+    persistConversationStateMock.mockRejectedValueOnce(new Error('disk full'));
 
-    await applyApprovalDecision(afterCrash, 'call_1', 'reject');
+    await expect(applyApprovalDecision(state, 'call_1', 'approve')).rejects.toThrow('disk full');
 
     expect(processToolCallsMock).not.toHaveBeenCalled();
-    expect(afterCrash.messages.at(-1)?.content).toBe('tool denied');
+    expect(pendingIds(state)).toEqual(['call_1']);
+    expect(state.status).toBe('awaiting_tool_approval');
+  });
+
+  describe('states saved before the claim kept the call waiting (upgrade)', () => {
+    const legacyCrash = () => {
+      const state = makeState([{ id: 'call_1', name: 'send_email' }]);
+      state.recovery = { currentCheckpoint: { phase: 'tool:before', tools: [{ toolCallId: 'call_1', name: 'send_email', readOnly: false, idempotent: false }] } } as never;
+      return state;
+    };
+
+    it('settles such a call without running it again', async () => {
+      const state = legacyCrash();
+
+      const res = await applyApprovalDecision(state, 'call_1', 'approve');
+
+      expect(processToolCallsMock).not.toHaveBeenCalled();
+      expect(res.outcome).toBe('ready');
+      expect(state.messages.at(-1)).toMatchObject({ role: 'tool', tool_call_id: 'call_1', content: INTERRUPTED_APPROVED_TOOL_RESULT });
+      expect(state.recovery).toMatchObject({ manualActionRequired: true });
+    });
+
+    it('can still reject such a call', async () => {
+      const state = legacyCrash();
+
+      await applyApprovalDecision(state, 'call_1', 'reject');
+
+      expect(processToolCallsMock).not.toHaveBeenCalled();
+      expect(state.messages.at(-1)?.content).toBe('tool denied');
+    });
   });
 
   it('keeps the run fences for the approved call', async () => {
