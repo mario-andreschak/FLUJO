@@ -3,6 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { constants as bufferConstants } from 'node:buffer';
 import type JSZip from 'jszip';
+import { replaceFileWithRetry } from '@/utils/transientFileRetry';
 
 const MAX_ARCHIVE_FILE_BYTES = 10 * 1024 * 1024;
 const SKIPPED_DIRECTORIES = new Set(['node_modules', '.git']);
@@ -320,11 +321,10 @@ export async function atomicWriteWithoutLinks(
       await handle.close();
     }
 
-    // Windows readers/virus scanners can briefly prevent replacement. Retry
-    // the same owned temporary file, revalidating all authority and pathname
-    // witnesses before EVERY publication attempt. Never delete the target to
-    // make a rename succeed or retry validation failures as sharing conflicts.
-    for (let attempt = 0; ; attempt++) {
+    // Windows readers/virus scanners can briefly prevent replacement. The same
+    // owned temporary file is renamed again, revalidating all authority and
+    // pathname witnesses before EVERY attempt.
+    await replaceFileWithRetry(temporary, destination, { label: 'restore-replace', beforeAttempt: async () => {
       await ensureLinkFreeDirectory(boundaryPath, parent, false);
       const temporaryNow = await fs.lstat(temporary, { bigint: true });
       if (!owned || temporaryNow.isSymbolicLink() || !temporaryNow.isFile() || !sameFileIdentity(owned, temporaryNow)) {
@@ -335,12 +335,7 @@ export async function atomicWriteWithoutLinks(
         throw new Error(`Restore target became unsafe: ${destination}`);
       }
       await assertOwned?.();
-      try { await fs.rename(temporary, destination); break; }
-      catch (error) {
-        if (attempt >= 14 || !['EPERM', 'EBUSY', 'EACCES'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
-        await new Promise(resolve => setTimeout(resolve, Math.min(100, 5 * 2 ** attempt)));
-      }
-    }
+    } });
     created = false;
     await assertOwned?.();
   } finally {

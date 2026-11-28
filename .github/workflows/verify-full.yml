@@ -110,7 +110,11 @@ jobs:
       - name: Verify exact official Node runtime
         if: steps.application-change.outputs.changed == 'true'
         run: node scripts/verify-ci-node.mjs 22.23.4 --record
-      - name: Qualify installed app and packed MCP packages on Node 22.23.4
+      # Installs the packed app into a fresh profile, starts it, connects the
+      # bundled MCP servers and lists resources repeatedly. On windows-latest
+      # it also lists while real file locks (as antivirus takes them) hold the
+      # owner, approval and server-config files, and fails on any refusal (#1050).
+      - name: Qualify installed app, packed MCP packages and resource listing on Node 22.23.4
         if: steps.application-change.outputs.changed == 'true'
         shell: bash
         run: |
@@ -124,7 +128,7 @@ jobs:
       - name: Verify exact official Node runtime
         if: steps.application-change.outputs.changed == 'true'
         run: node scripts/verify-ci-node.mjs 24.22.1 --record
-      - name: Qualify installed app and packed MCP packages on Node 24.22.1
+      - name: Qualify installed app, packed MCP packages and resource listing on Node 24.22.1
         if: steps.application-change.outputs.changed == 'true'
         shell: bash
         run: |

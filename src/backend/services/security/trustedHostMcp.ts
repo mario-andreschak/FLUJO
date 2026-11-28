@@ -303,7 +303,7 @@ async function readPrivateApprovalWithRetry(label: PrivateApprovalTraceLabel, in
   let attempts = 0;
   try {
     const values = await retryTransientFileOperation(() => { attempts += 1; return readPrivateApprovalSetOnce(input, signal); }, {
-      signal, isTransient: failure => mayClearUp(failure, signal),
+      label: 'private-approval', signal, isTransient: failure => mayClearUp(failure, signal),
       onRetry: (failure, failed, delayMs) => {
         if (failure instanceof PrivateApprovalAttemptFailure) {
           tracePrivateApproval(label, 'retry', { ...privateApprovalRefusal(failure, roles, signal, failed, started), delayMs });
@@ -589,7 +589,7 @@ async function hashStableFileAsync(filename: string, maximum: number, signal?: A
     const hash = createHash('sha256');
     const opened = await readStableFileAsync(filename, maximum, chunk => hash.update(chunk), signal, expected);
     return { digest: hash.digest('hex'), size: Number(opened.size) };
-  }, { signal });
+  }, { label: 'package-file', signal });
 }
 
 async function fingerprintSourceAsync(sourceRoot: string, signal?: AbortSignal, dependencyLinks: readonly { link: string; target: string }[] = []): Promise<string> {

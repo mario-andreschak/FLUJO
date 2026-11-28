@@ -219,6 +219,7 @@ export async function releasePersonaFlow(
     }));
     return { changed: true, paused };
   }), {
+    label: 'persona-flow-release',
     delaysMs: BUSY_RETRY_DELAYS_MS,
     isTransient: (error) => error instanceof PersonaDomainBusyError,
   });

@@ -46,7 +46,7 @@ const writeChains = new Map<string, Promise<unknown>>();
 
 /** Read the list. A read that fails throws, so a writer never replaces the list with an empty one. */
 async function loadAll(): Promise<IndexFile> {
-  const file = await retryTransientFileOperation(() => loadItem<IndexFile>(KEY, {}));
+  const file = await retryTransientFileOperation(() => loadItem<IndexFile>(KEY, {}), { label: 'human-task-index-read' });
   return file && typeof file === 'object' ? file : {};
 }
 
@@ -67,7 +67,7 @@ async function mutate(change: (file: IndexFile) => boolean): Promise<void> {
       const file = await loadAll();
       if (!change(file)) return;
       await lock.assertOwned();
-      await retryTransientFileOperation(() => saveItem(KEY, file));
+      await retryTransientFileOperation(() => saveItem(KEY, file), { label: 'human-task-index-save' });
     });
   });
   const run = (writeChains.get(workspace) ?? Promise.resolve())

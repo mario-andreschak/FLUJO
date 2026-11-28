@@ -170,6 +170,12 @@ it('retries a transient failure and gives up on data errors', async () => {
   }))).resolves.toBe('ok');
   expect(attempts).toBe(3);
   attempts = 0;
+  await expect(publishConversation('disk-pressure', {}, () => retryConversationPublication(async () => {
+    if (++attempts < 2) throw Object.assign(new Error('disk briefly full'), { code: 'ENOSPC' });
+    return 'ok';
+  }))).resolves.toBe('ok');
+  expect(attempts).toBe(2);
+  attempts = 0;
   await expect(publishConversation('permanent', {}, () => retryConversationPublication(async () => {
     attempts++;
     throw new ConversationPublicationError('CONVERSATION_PUBLICATION_DATA', 'not JSON');

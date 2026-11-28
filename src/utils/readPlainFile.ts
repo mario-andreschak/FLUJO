@@ -1,5 +1,6 @@
 import { constants, promises as fs, type BigIntStats } from 'node:fs';
 import { constants as bufferConstants } from 'node:buffer';
+import { retryTransientFileOperation } from './transientFileRetry';
 
 type IdentityField = 'dev' | 'ino' | 'size' | 'mtimeNs' | 'ctimeNs' | 'mode' | 'uid' | 'gid' | 'nlink';
 type AdmissionDetail = 'not-plain-file' | 'hard-linked' | 'permissions'
@@ -43,7 +44,9 @@ export async function readPlainFile(file: string, options: {
   consume?: (chunk: Buffer) => Promise<void>;
 } = {}): Promise<Buffer> {
   options.signal?.throwIfAborted();
-  const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  // Antivirus or the indexer can hold the file for a moment; nothing is read before the open succeeds.
+  const handle = await retryTransientFileOperation(() => fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)),
+    { label: 'plain-file-open', signal: options.signal });
   try {
     const opening = await Promise.allSettled([
       handle.stat({ bigint: true }), fs.lstat(file, { bigint: true }),

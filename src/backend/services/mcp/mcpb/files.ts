@@ -49,11 +49,11 @@ export function siblingDir(prefix: (typeof LEFTOVER_PREFIXES)[number], serverNam
 }
 
 export async function removeTree(target: string): Promise<void> {
-  await retryTransientFileOperation(() => fs.rm(target, { recursive: true, force: true, maxRetries: 2, retryDelay: 100 }));
+  await retryTransientFileOperation(() => fs.rm(target, { recursive: true, force: true, maxRetries: 2, retryDelay: 100 }), { label: 'mcp-bundle-remove' });
 }
 
 export async function moveDir(from: string, to: string): Promise<void> {
-  await retryTransientFileOperation(() => fs.rename(from, to));
+  await retryTransientFileOperation(() => fs.rename(from, to), { label: 'mcp-bundle-move' });
 }
 
 export async function pathExists(target: string): Promise<boolean> {

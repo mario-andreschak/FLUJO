@@ -8,6 +8,7 @@ import {
 } from '@/shared/types/accounts';
 import { getDataDir } from '@/utils/paths';
 import { createLogger } from '@/utils/logger';
+import { replaceFileWithRetry, retryTransientFileOperation } from '@/utils/transientFileRetry';
 
 const log = createLogger('backend/services/accounts/store');
 
@@ -111,20 +112,6 @@ async function statOrNull(file: string): Promise<string | null> {
   }
 }
 
-/** Windows briefly locks a file that a virus scanner or indexer just opened. */
-const RETRYABLE_CODES = new Set(['EPERM', 'EACCES', 'EBUSY', 'EAGAIN']);
-
-async function withRetry<T>(task: () => Promise<T>): Promise<T> {
-  for (let attempt = 1; ; attempt++) {
-    try { return await task(); }
-    catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (attempt >= 8 || !code || !RETRYABLE_CODES.has(code)) throw error;
-      await new Promise(resolve => setTimeout(resolve, Math.min(400, 10 * 2 ** attempt)));
-    }
-  }
-}
-
 /** Write a private file atomically: a temporary file next to it, flushed, then renamed over the target. */
 export async function writePrivateFileAtomic(file: string, text: string): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -137,7 +124,7 @@ export async function writePrivateFileAtomic(file: string, text: string): Promis
     await handle.close();
   }
   try {
-    await withRetry(() => fs.rename(temporary, file));
+    await replaceFileWithRetry(temporary, file, { label: 'accounts-replace' });
   } catch (error) {
     await fs.unlink(temporary).catch(() => undefined);
     throw error;
@@ -145,7 +132,7 @@ export async function writePrivateFileAtomic(file: string, text: string): Promis
 }
 
 async function readJson(file: string): Promise<unknown> {
-  return JSON.parse(await withRetry(() => fs.readFile(file, 'utf8')));
+  return JSON.parse(await retryTransientFileOperation(() => fs.readFile(file, 'utf8'), { label: 'accounts-read' }));
 }
 
 async function parseAccounts(file: string): Promise<AccountsFile | null> {
@@ -305,9 +292,9 @@ export function appendAudit(event: Omit<AuditEvent, 'at'> & { at?: number }): Pr
       await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
       const size = await fs.stat(file).then(stat => stat.size, () => 0);
       if (size + line.length > AUDIT_ROTATE_BYTES) {
-        await withRetry(() => fs.rename(file, path.join(path.dirname(file), 'audit.1.jsonl')));
+        await replaceFileWithRetry(file, path.join(path.dirname(file), 'audit.1.jsonl'), { label: 'accounts-audit-rotate' });
       }
-      await withRetry(() => fs.appendFile(file, line, { encoding: 'utf8', mode: 0o600 }));
+      await retryTransientFileOperation(() => fs.appendFile(file, line, { encoding: 'utf8', mode: 0o600 }), { label: 'accounts-audit-append' });
     } catch (error) {
       log.warn('Could not write the accounts audit log', error);
     }

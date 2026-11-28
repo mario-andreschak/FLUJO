@@ -4,6 +4,7 @@ import { createHash, hkdf, randomBytes, randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import { getDataDir } from '@/utils/paths';
 import { createLogger } from '@/utils/logger';
+import { replaceFileWithRetry } from '@/utils/transientFileRetry';
 import { open, seal } from './format';
 import {
   detectSystemKeyStore, storeLabel, SystemKeyUnreadableError,
@@ -131,19 +132,6 @@ async function readRecord(dataDir: string): Promise<RecordRead> {
   }
 }
 
-const RETRYABLE = new Set(['EPERM', 'EACCES', 'EBUSY']);
-
-/** Windows briefly locks a file that a virus scanner or indexer just opened. */
-async function withFileRetry<T>(task: () => Promise<T>): Promise<T> {
-  for (let attempt = 1; ; attempt++) {
-    try { return await task(); }
-    catch (error) {
-      if (attempt >= 5 || !RETRYABLE.has((error as NodeJS.ErrnoException).code ?? '')) throw error;
-      await new Promise(resolve => setTimeout(resolve, 50 * attempt));
-    }
-  }
-}
-
 /**
  * Writes the record completely beside its final name first. `create` publishes
  * it only if no record exists yet (an atomic hard link elects one writer) and
@@ -160,7 +148,7 @@ async function writeRecord(dataDir: string, record: SystemKeyRecord, create: boo
       await handle.sync();
     } finally { await handle.close(); }
     if (!create) {
-      await withFileRetry(() => fs.rename(staged, final));
+      await replaceFileWithRetry(staged, final, { label: 'system-key-replace' });
       return record;
     }
     try { await fs.link(staged, final); }

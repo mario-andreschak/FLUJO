@@ -6,6 +6,7 @@ import path from 'path';
 import { promisify } from 'util';
 
 import { assertSafeCollectionId, runInWriteChain } from '@/utils/storage/backend';
+import { retryTransientFileOperation } from '@/utils/transientFileRetry';
 import { stableEnduringAgentId } from './ids';
 import { traceSpan } from '@/backend/execution/flow/turnTrace';
 import {
@@ -29,6 +30,8 @@ const clockForLock = (): PersonaRuntimeClock => systemLockTime.getStore() ? syst
 const LOCK_ROOT_SEGMENTS = ['.runtime-locks', 'enduring-agents'] as const;
 const LOCK_ACQUIRE_TIMEOUT_MS = 15_000;
 const LOCK_RETRY_MS = 25;
+/** Nineteen short waits for a lock file another owner is retiring: about 0.5 s. */
+const LOCK_FILE_RETRY_DELAYS_MS: readonly number[] = Object.freeze(Array.from({ length: 19 }, () => LOCK_RETRY_MS));
 const PROCESS_BIRTH_CACHE_TTL_MS = 1_000;
 // Keep the Windows OS lookup well inside the 15-second acquisition budget.
 // A timeout is uncertainty and must never be treated as stale-owner evidence.
@@ -250,28 +253,27 @@ async function ensureRuntimeLockRoot(): Promise<string> {
 }
 
 async function readLockRecord(lockPath: string): Promise<Record<string, unknown> | null> {
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      const parsed = JSON.parse(await fs.readFile(lockPath, 'utf8')) as unknown;
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        throw new PersonaRuntimeLockCorruptError(lockPath);
-      }
-      return parsed as Record<string, unknown>;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === 'ENOENT') return null;
-      // Windows can deny a read while another owner retires the pathname.
-      // Retry the observation; never interpret inaccessible bytes as no owner.
-      if (['EACCES', 'EBUSY', 'EPERM'].includes(code ?? '') && attempt < 19) {
-        await delay(LOCK_RETRY_MS);
-        continue;
-      }
-      // Published locks have fully flushed bytes. Malformed content remains
-      // corruption, never evidence that ownership may be stolen.
-      if (error instanceof SyntaxError) throw new PersonaRuntimeLockCorruptError(lockPath);
-      throw error;
-    }
+  let text: string;
+  try {
+    // Windows can deny a read while another owner retires the pathname. Read
+    // again; never interpret inaccessible bytes as no owner.
+    text = await retryTransientFileOperation(() => fs.readFile(lockPath, 'utf8'), {
+      label: 'persona-lock-read', delaysMs: LOCK_FILE_RETRY_DELAYS_MS, sleep: delay,
+    });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
   }
+  let parsed: unknown;
+  try { parsed = JSON.parse(text); }
+  catch (error) {
+    // Published locks have fully flushed bytes. Malformed content remains
+    // corruption, never evidence that ownership may be stolen.
+    if (error instanceof SyntaxError) throw new PersonaRuntimeLockCorruptError(lockPath);
+    throw error;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new PersonaRuntimeLockCorruptError(lockPath);
+  return parsed as Record<string, unknown>;
 }
 
 function parseOwnerRecord(
@@ -788,16 +790,12 @@ export async function isRuntimeProcessIdentityAlive(identity: RuntimeProcessIden
 }
 
 async function unlinkWithRetry(filePath: string): Promise<void> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    try {
-      await fs.unlink(filePath);
-      return;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === 'ENOENT') return;
-      if (!['EACCES', 'EBUSY', 'EPERM'].includes(code ?? '') || attempt === 19) throw error;
-      await delay(LOCK_RETRY_MS);
-    }
+  try {
+    await retryTransientFileOperation(() => fs.unlink(filePath), {
+      label: 'persona-lock-unlink', delaysMs: LOCK_FILE_RETRY_DELAYS_MS, sleep: delay,
+    });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
 }
 
@@ -842,18 +840,10 @@ async function installCandidateLockWithRetry(
   owner: LockOwnerRecord,
 ): Promise<boolean> {
   const startedAt = clockForLock().monotonicNow();
-  while (true) {
-    try {
-      return await installCandidateLock(lockRoot, lockPath, owner);
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (
-        !['EACCES', 'EBUSY', 'EPERM'].includes(code ?? '')
-        || clockForLock().monotonicNow() - startedAt >= LOCK_ACQUIRE_TIMEOUT_MS
-      ) throw error;
-      await delay(LOCK_RETRY_MS);
-    }
-  }
+  return retryTransientFileOperation(() => installCandidateLock(lockRoot, lockPath, owner), {
+    label: 'persona-lock-install', sleep: delay,
+    delaysMs: () => clockForLock().monotonicNow() - startedAt >= LOCK_ACQUIRE_TIMEOUT_MS ? undefined : LOCK_RETRY_MS,
+  });
 }
 
 function backgroundDelay(ms: number): Promise<void> {

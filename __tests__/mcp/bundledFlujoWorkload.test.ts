@@ -344,14 +344,25 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
     }
     if (mode === 'transient-private-reads') {
       // Issue #1050: every private read of the ledger in the resource-list guard
-      // (initial set, both approval pairs, final set) meets one short-lived
-      // lock and must recover instead of refusing the request.
+      // (initial set, both approval pairs, final set) and every read of the
+      // server config meets one short-lived lock and must recover instead of
+      // refusing the request. A storage write also replaces the config between
+      // the guard's first two looks at it.
       const ledgerFile = path.resolve(process.env.FLUJO_MCP_TRUSTED_HOST_FILE!);
+      const isConfig = (file: string) => file.endsWith(`${path.sep}db${path.sep}mcp_servers.json`);
       const actualOpen = fs.promises.open.bind(fs.promises);
-      let ledgerOpens = 0, injected = 0;
+      let ledgerOpens = 0, injected = 0, configOpens = 0, configInjected = 0, configReplaced = false;
       const busy = jest.spyOn(fs.promises, 'open').mockImplementation(async (...args: Parameters<typeof fs.promises.open>) => {
-        if (path.resolve(String(args[0])) === ledgerFile && ledgerOpens++ % 2 === 0) {
+        const file = path.resolve(String(args[0]));
+        if (file === ledgerFile && ledgerOpens++ % 2 === 0) {
           injected += 1; throw Object.assign(new Error('Injected short-lived lock.'), { code: 'EBUSY', errno: -4082 });
+        }
+        if (isConfig(file) && !configReplaced) {
+          configReplaced = true;
+          fs.copyFileSync(file, `${file}.replacement`);
+          fs.renameSync(`${file}.replacement`, file);
+        } else if (isConfig(file) && configOpens++ % 2 === 0) {
+          configInjected += 1; throw Object.assign(new Error('Injected short-lived lock.'), { code: 'EBUSY', errno: -4082 });
         }
         return actualOpen(...args);
       });
@@ -362,6 +373,8 @@ test.each(['lifecycle', 'transient-private-reads', 'crossgraph-positive','invent
         expect((await timed('resolve-transient', () => resolveBundledFlujoWorkloadRequest(resourceRequest))).kind).toBe('authorized');
       } finally { busy.mockRestore(); }
       expect(injected).toBeGreaterThanOrEqual(4);
+      expect(configReplaced).toBe(true);
+      expect(configInjected).toBeGreaterThanOrEqual(3);
     }
     if (mode === 'deferred-owner-drift') {
     await withBundledFlujoWorkloadAuthorization(admitted.authorization, admittedRequest, async () => {
