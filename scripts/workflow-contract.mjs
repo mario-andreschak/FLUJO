@@ -8,9 +8,16 @@ const isApplicationSelection = (file, id, condition) => file === 'verify.yml' &&
 
 const VERIFICATION_MATRIX_RUNNER = "${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}";
 
+/** Jobs that must run on one exact non-Linux image, with the reason. */
+const NON_LINUX_VERIFICATION_JOBS = Object.freeze({
+  'installed-windows-acceptance': ['windows-latest', 'Installs this revision with the real flujo-setup.exe, which only runs on Windows (#570).'],
+});
+
 function assertVerificationRunners(workflow) {
   for (const [id, job] of Object.entries(workflow?.jobs ?? {})) {
-    if (['production-build', 'release-safety'].includes(id)) {
+    if (Object.hasOwn(NON_LINUX_VERIFICATION_JOBS, id)) {
+      if (job['runs-on'] !== NON_LINUX_VERIFICATION_JOBS[id][0]) throw new Error(`${id} must run on ${NON_LINUX_VERIFICATION_JOBS[id][0]}: ${NON_LINUX_VERIFICATION_JOBS[id][1]}`);
+    } else if (['production-build', 'release-safety'].includes(id)) {
       const matrix = job.strategy?.matrix;
       if (job['runs-on'] !== VERIFICATION_MATRIX_RUNNER
           || !matrix || Object.keys(matrix).length !== 1 || !Array.isArray(matrix.os)) {
@@ -213,31 +220,74 @@ export function assertReleaseVerificationGates(workflows) {
 }
 
 const PACKAGED_ACCEPTANCE = 'node scripts/packaged-acceptance.mjs ';
+const OPERATOR_RUNBOOK = 'node scripts/operator-runbook.mjs ';
+export const PACKAGED_ACCEPTANCE_TESTS = 'node --test scripts/packaged-acceptance.test.mjs scripts/packaged-acceptance/low-disk.test.mjs scripts/packaged-acceptance/stand-ins.test.mjs scripts/operator-runbook.test.mjs';
+const uploads = step => step.uses?.startsWith('actions/upload-artifact@');
 
-/** Every shipped form runs the same backup, restart, upgrade and restore checks before it is published (#570). */
+/**
+ * `command` runs exactly once in `file`/`id`, mandatory, after the step
+ * `isBefore` finds and before the step `isAfter` finds; returns its index.
+ */
+function assertOrderedCommand(workflows, file, id, command, form, isBefore, isAfter, message) {
+  const job = workflows[file]?.jobs?.[id];
+  const steps = job?.steps ?? [];
+  const indexes = steps.flatMap((step, index) => step.run?.includes(command) ? [index] : []);
+  const step = steps[indexes[0]];
+  const allowedCondition = file === 'verify.yml' && id === 'production-build' ? [undefined, APPLICATION_CHANGED] : [undefined];
+  const before = steps.findIndex(isBefore);
+  const after = steps.findIndex((item, index) => index > indexes[0] && isAfter(item));
+  // Release jobs may be switched by their own dispatch inputs; a skipped one publishes nothing.
+  const conditionalJob = file === 'verify.yml' && job?.if !== undefined;
+  if (!job || conditionalJob || job['continue-on-error'] || indexes.length !== 1 || !step.run.includes(form)
+      || step['continue-on-error'] || !allowedCondition.includes(step.if) || before < 0 || before > indexes[0] || after < 0) {
+    throw new Error(message);
+  }
+  return indexes[0];
+}
+
+/**
+ * Every shipped form runs the same backup, restart, upgrade, disk-full,
+ * schedule and restore checks before it is published, and the operator
+ * runbook is followed word for word (#570). The broad run covers the npm
+ * package on both systems, the installed Windows build and the Docker image.
+ */
 export function assertPackagedAcceptance(workflows, { mainIntegration = false } = {}) {
   const forms = [
-    ['publish-npm.yml', 'prepare', '--form npm --tarballs ', step => step.run === 'node scripts/npm-release.mjs prepare', step => step.uses?.startsWith('actions/upload-artifact@')],
+    ['publish-npm.yml', 'prepare', '--form npm --tarballs ', step => step.run === 'node scripts/npm-release.mjs prepare', uploads],
     ['publish-image.yml', 'candidate', '--form docker ', step => step.id === 'smoke', step => step.run === 'node scripts/image-release.mjs candidate'],
-    ['installer.yml', 'installer-acceptance', '--form checkout ', step => step.run?.startsWith('./scripts/verify-windows-install.ps1'), step => step.uses?.startsWith('actions/upload-artifact@')],
-    ...(mainIntegration ? [] : [['verify.yml', 'production-build', '--form npm --pack ', step => step.run?.includes('npm run smoke:mcp-artifacts'), step => step.name === 'Retain exact runtime measurements']]),
+    ['installer.yml', 'installer-acceptance', '--form checkout ', step => step.run?.startsWith('./scripts/verify-windows-install.ps1'), uploads],
+    ...(mainIntegration ? [] : [
+      ['verify.yml', 'production-build', '--form npm --pack ', step => step.run?.includes('npm run smoke:mcp-artifacts'), step => step.name === 'Retain exact runtime measurements'],
+      ['verify.yml', 'installed-windows-acceptance', '--form checkout ', step => step.run?.startsWith('./scripts/verify-windows-install.ps1'), step => uploads(step) && step.if === 'always()'],
+      ['verify.yml', 'image-acceptance', '--form docker ', step => step.uses?.startsWith('docker/build-push-action@') && step.with?.load === true && step.with?.push === false,
+        step => uploads(step) && step.if === 'always()'],
+    ]),
   ];
   for (const [file, id, form, isBefore, isAfter] of forms) {
-    const steps = workflows[file]?.jobs?.[id]?.steps ?? [];
-    const indexes = steps.flatMap((step, index) => step.run?.includes(PACKAGED_ACCEPTANCE) ? [index] : []);
-    const check = steps[indexes[0]];
-    const allowedCondition = file === 'verify.yml' ? [undefined, APPLICATION_CHANGED] : [undefined];
-    if (indexes.length !== 1 || !check.run.includes(form) || !/ --from (?:npm|image):\S+/.test(check.run)
-        || check['continue-on-error'] || !allowedCondition.includes(check.if)
-        || steps.findIndex(isBefore) < 0 || steps.findIndex(isBefore) > indexes[0]
-        || steps.findIndex(isAfter) < indexes[0]) {
-      throw new Error(`${file}/${id} must run the backup, restart, upgrade and restore checks on its shipped form after it is built and before it is kept or published.`);
+    const index = assertOrderedCommand(workflows, file, id, PACKAGED_ACCEPTANCE, form, isBefore, isAfter,
+      `${file}/${id} must run the backup, restart, upgrade, disk-full, schedule and restore checks on its shipped form after it is built and before it is kept or published.`);
+    if (!/ --from (?:npm|image):\S+/.test(workflows[file].jobs[id].steps[index].run)) {
+      throw new Error(`${file}/${id} must check its shipped form as an upgrade from the latest published release (--from).`);
     }
   }
+  const installer = workflows['verify.yml']?.jobs?.['installed-windows-acceptance']?.steps ?? [];
+  const compiled = installer.findIndex(step => step.run?.includes('installer\\flujo-setup.iss'));
+  if (!mainIntegration && (compiled < 0 || compiled > installer.findIndex(step => step.run?.startsWith('./scripts/verify-windows-install.ps1')))) {
+    throw new Error('The installed Windows build check must compile flujo-setup.exe from this revision before installing it.');
+  }
+  const runbooks = [
+    ['publish-npm.yml', 'prepare', '--tarballs ', step => step.run?.includes(`${PACKAGED_ACCEPTANCE}--form npm`), uploads],
+    ...(mainIntegration ? [] : [['verify.yml', 'production-build', '--pack', step => step.run?.includes(`${PACKAGED_ACCEPTANCE}--form npm`),
+      step => step.name === 'Retain the packaged acceptance report']]),
+  ];
+  for (const [file, id, form, isBefore, isAfter] of runbooks) {
+    assertOrderedCommand(workflows, file, id, OPERATOR_RUNBOOK, form, isBefore, isAfter,
+      `${file}/${id} must follow the operator runbook with the packages it checked, before they are kept or published.`);
+  }
   const safety = workflows['verify.yml']?.jobs?.['release-safety']?.steps ?? [];
-  const unit = safety.find(step => step.run === 'node --test scripts/packaged-acceptance.test.mjs');
+  const unit = safety.find(step => step.run === PACKAGED_ACCEPTANCE_TESTS);
   if (!unit || unit.if !== undefined || unit['continue-on-error']) {
-    throw new Error('Release safety must run the packaged acceptance harness tests on both operating systems.');
+    throw new Error(`Release safety must run the packaged acceptance and operator runbook tests on both operating systems: ${PACKAGED_ACCEPTANCE_TESTS}`);
   }
 }
 

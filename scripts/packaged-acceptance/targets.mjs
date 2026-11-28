@@ -10,6 +10,20 @@ import path from 'node:path';
 
 export const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
+/** Check `condition` until it holds or the deadline passes; says which happened. */
+export async function waitUntil(condition, { deadlineMs, intervalMs = 500, pause = delay }) {
+  const until = Date.now() + deadlineMs;
+  for (;;) {
+    if (await condition()) return true;
+    if (Date.now() >= until) return false;
+    await pause(intervalMs);
+  }
+}
+
+export async function waitFor(condition, { message, ...options }) {
+  if (!(await waitUntil(condition, options))) throw new Error(message);
+}
+
 export async function withTimeout(promise, milliseconds, message) {
   let timer;
   try {
@@ -61,13 +75,18 @@ async function readTail(file) {
   } catch { return ''; } finally { await handle?.close(); }
 }
 
-/** Run a command to completion without a shell; keep bounded output for diagnosis. */
-export function runCommand(file, args, { cwd, env, timeoutMs = 10 * 60_000, spawnProcess = spawn } = {}) {
+/**
+ * Run a command to completion without a shell; keep bounded output for
+ * diagnosis. `signal` ends it early with the signal's reason.
+ */
+export function runCommand(file, args, { cwd, env, timeoutMs = 10 * 60_000, spawnProcess = spawn, signal } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawnProcess(file, args, { cwd, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     const stdout = []; let stdoutBytes = 0; let stderr = '';
     let failure;
     const timer = setTimeout(() => { failure = new Error(`${path.basename(file)} ${args[0] ?? ''} did not finish within ${Math.round(timeoutMs / 1000)} s.`); child.kill('SIGKILL'); }, timeoutMs);
+    const stop = () => { failure ??= signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason)); child.kill('SIGKILL'); };
+    if (signal?.aborted) stop(); else signal?.addEventListener('abort', stop, { once: true });
     child.stdout.on('data', bytes => {
       stdoutBytes += bytes.length;
       if (stdoutBytes > 64 * 1024 * 1024) { failure ??= new Error('Command output exceeded 64 MiB.'); child.kill('SIGKILL'); return; }
@@ -75,10 +94,14 @@ export function runCommand(file, args, { cwd, env, timeoutMs = 10 * 60_000, spaw
     });
     child.stderr.on('data', bytes => { stderr = (stderr + bytes).slice(-16 * 1024); });
     child.once('error', error => { clearTimeout(timer); reject(error); });
-    child.once('close', (code, signal) => {
+    child.once('close', (code, exitSignal) => {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', stop);
       if (failure) return reject(failure);
-      if (code !== 0) return reject(new Error(`${path.basename(file)} ${args.slice(0, 2).join(' ')} exited with ${signal ?? code}.\n${stderr}`));
+      if (code !== 0) {
+        const output = stderr.trim() || Buffer.concat(stdout).toString('utf8').slice(-4 * 1024);
+        return reject(new Error(`${path.basename(file)} ${args.slice(0, 2).join(' ')} exited with ${exitSignal ?? code}.\n${output}`));
+      }
       resolve(Buffer.concat(stdout).toString('utf8'));
     });
   });
@@ -156,7 +179,7 @@ export async function installNpmPackages({ consumer, specs, npmCli, env = proces
 }
 
 /** A private, repeatable environment for host processes; nothing from the runner's profile leaks in. */
-export function hostEnvironment({ sandbox, dataDir, sandboxPort, node, inherited = process.env }) {
+export function hostEnvironment({ sandbox, dataDir, sandboxPort, node, snapshotToken, inherited = process.env }) {
   const keep = /^(path|pathext|systemroot|windir|comspec|systemdrive|programfiles|programfiles\(x86\)|programw6432|programdata)$/i;
   const env = Object.fromEntries(Object.entries(inherited).filter(([key, value]) => keep.test(key) && typeof value === 'string'));
   const pathKey = Object.keys(env).find(key => key.toLowerCase() === 'path') ?? 'PATH';
@@ -171,6 +194,7 @@ export function hostEnvironment({ sandbox, dataDir, sandboxPort, node, inherited
     FLUJO_LOCAL_INSTANCE_DIR: path.join(sandbox, 'local-instances'),
     FLUJO_FS_ROOTS: path.join(sandbox, 'roots'), FLUJO_BASH_ROOTS: path.join(sandbox, 'roots'),
     FLUJO_MCP_APP_SANDBOX_HOST: '127.0.0.1', FLUJO_MCP_APP_SANDBOX_PORT: String(sandboxPort),
+    ...(snapshotToken ? { FLUJO_SNAPSHOT_CONTROL_TOKEN: snapshotToken } : {}),
   };
 }
 
@@ -208,7 +232,7 @@ export function assertContainerIdentity(observed) {
 }
 
 export function createRequester(baseUrl, { fetchImpl = fetch } = {}) {
-  return async function request(route, { timeoutMs = 60_000, ...options } = {}) {
+  async function request(route, { timeoutMs = 60_000, ...options } = {}) {
     const response = await fetchImpl(new URL(route, baseUrl), { ...options, redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
     const chunks = []; let length = 0;
     for await (const chunk of response.body ?? []) {
@@ -217,7 +241,16 @@ export function createRequester(baseUrl, { fetchImpl = fetch } = {}) {
       chunks.push(chunk);
     }
     return { status: response.status, bytes: Buffer.concat(chunks) };
+  }
+  /** Start a request without reading its answer; `abort` ends it from this side. */
+  request.open = (route, { timeoutMs = 60_000, ...options } = {}) => {
+    const controller = new AbortController();
+    const response = fetchImpl(new URL(route, baseUrl), { ...options, redirect: 'error',
+      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(timeoutMs)]) });
+    response.catch(() => {});
+    return { response, abort: () => controller.abort() };
   };
+  return request;
 }
 
 function taskkill(pid) {
@@ -243,6 +276,7 @@ function signalGroup(pid, signal) {
  */
 export function createHostTarget({ label, launch, cwd, env, port, logDirectory, identity, stopGraceMs = 30_000,
   platform = process.platform, spawnProcess = spawn }) {
+  const snapshotToken = env?.FLUJO_SNAPSHOT_CONTROL_TOKEN;
   let current = null;
   let generation = 0;
   const request = createRequester(`http://127.0.0.1:${port}`);
@@ -286,7 +320,7 @@ export function createHostTarget({ label, launch, cwd, env, port, logDirectory, 
     return record;
   }
   return {
-    label, port, request,
+    label, port, request, snapshotToken,
     assertIdentity: identity,
     async start() {
       if (current && !current.exit) throw new Error(`${label} is already running.`);
@@ -317,14 +351,47 @@ export function createHostTarget({ label, launch, cwd, env, port, logDirectory, 
 
 const IMAGE_REFERENCE = /^(?:sha256:[a-f0-9]{64}|(?!sha256:)[a-z0-9][a-z0-9._/-]*(?::[A-Za-z0-9._-]+)?(?:@sha256:[a-f0-9]{64})?)$/;
 export const isImageReference = value => typeof value === 'string' && value.length <= 256 && IMAGE_REFERENCE.test(value);
-const OWNER_LABEL = 'io.flujo.packaged-acceptance';
+export const OWNER_LABEL = 'io.flujo.packaged-acceptance';
+/** The name containers use to reach the stand-ins on the Docker host. */
+export const DOCKER_HOST_NAME = 'flujo-acceptance-host';
 
 export function dockerCommand(args, { timeoutMs = 120_000 } = {}) {
   return runCommand('docker', args, { timeoutMs });
 }
 
-/** A FLUJO container on a named volume. Restarts reuse the container, like a restart policy does. */
-export function createDockerTarget({ label, image, name, volume, port, docker = dockerCommand, pause = delay }) {
+/**
+ * Where the stand-ins listen so containers reach them: the bridge gateway on a
+ * Linux Docker host, loopback on Docker Desktop (which forwards host-gateway
+ * traffic to the host's loopback).
+ */
+export async function dockerStandInHost(docker = dockerCommand) {
+  const system = (await docker(['info', '--format', '{{.OperatingSystem}}'])).trim();
+  if (/docker desktop/i.test(system)) return '127.0.0.1';
+  const gateway = (await docker(['network', 'inspect', 'bridge', '--format', '{{range .IPAM.Config}}{{.Gateway}} {{end}}']))
+    .trim().split(/\s+/).find(address => /^\d{1,3}(?:\.\d{1,3}){3}$/.test(address));
+  if (!gateway) throw new Error('The Docker bridge network has no IPv4 gateway for the stand-ins to listen on.');
+  return gateway;
+}
+
+/** Pull an image reference (an image ID is used as it is) and return its ID. */
+export async function prepareDockerImage(image, { docker = dockerCommand, pause = delay } = {}) {
+  if (!image.startsWith('sha256:')) {
+    for (let attempt = 1; ; attempt++) {
+      try { await docker(['pull', image], { timeoutMs: 15 * 60_000 }); break; } catch (error) {
+        // A registry hiccup should not fail the check; three tries settle it.
+        if (attempt >= 3) throw error;
+        await pause(attempt * 5_000);
+      }
+    }
+  }
+  return (await docker(['image', 'inspect', '--format', '{{.Id}}', image])).trim();
+}
+
+/**
+ * A FLUJO container. Restarts reuse the container, like a restart policy does.
+ * `mount` is the `--mount` value of its data volume (see low-disk.mjs).
+ */
+export function createDockerTarget({ label, image, name, mount, port, docker = dockerCommand, pause = delay }) {
   let created = false;
   let imageId;
   const request = createRequester(`http://127.0.0.1:${port}`);
@@ -353,22 +420,11 @@ export function createDockerTarget({ label, image, name, volume, port, docker = 
     label, port, request,
     assertIdentity: assertContainerIdentity,
     get imageId() { return imageId; },
-    async prepare() {
-      if (!image.startsWith('sha256:')) {
-        for (let attempt = 1; ; attempt++) {
-          try { await docker(['pull', image], { timeoutMs: 15 * 60_000 }); break; } catch (error) {
-            // A registry hiccup should not fail the check; three tries settle it.
-            if (attempt >= 3) throw error;
-            await pause(attempt * 5_000);
-          }
-        }
-      }
-      imageId = (await docker(['image', 'inspect', '--format', '{{.Id}}', image])).trim();
-    },
+    async prepare() { imageId = await prepareDockerImage(image, { docker, pause }); },
     async start() {
       if (!created) {
         await docker(['run', '--detach', '--name', name, '--label', `${OWNER_LABEL}=${label}`,
-          '--publish', `127.0.0.1:${port}:4200`, '--volume', `${volume}:/app/data`, imageId ?? image]);
+          '--publish', `127.0.0.1:${port}:4200`, '--mount', mount, '--add-host', `${DOCKER_HOST_NAME}:host-gateway`, imageId ?? image]);
         created = true;
       } else {
         await docker(['start', name]);
