@@ -122,7 +122,7 @@ checks that the bar shows the plan numbers the bundled Codex received.
 | Codex / ChatGPT plan | Codex app-server `account/rateLimits/read`: `primary` and `secondary` windows with `usedPercent`, `windowDurationMins`, `resetsAt`; newer CLIs add `rateLimitsByLimitId` buckets. The app-server also sends `account/rateLimits/updated` during turns (one bucket, recorded from CLI 0.166.0 in `__tests__/model/fixtures/codexAppServerProtocol.json`). | Yes (read on check, and updated during runs) |
 | Antigravity CLI (Google login) | No public usage reading. | Says so plainly |
 | Gemini API key, Anthropic API key, OpenAI API key | Pay per use, no "allowance left". Only per-minute rate-limit headers, and spend reports through admin-only APIs. | API billing |
-| OpenRouter | Prepaid credit, not a subscription: `GET /api/v1/key` returns the key's `limit`, `limit_remaining` and `limit_reset`; `GET /api/v1/credits` returns account `total_credits` and `total_usage`. | Not yet (API billing) |
+| OpenRouter | Prepaid credit, not a subscription: `GET /api/v1/key` returns the key's `limit`, `limit_remaining` and `limit_reset`; `GET /api/v1/credits` returns account `total_credits` and `total_usage`. | No (API billing): prepaid money, not a plan allowance; most keys have no limit to count down from. OpenRouter shows the balance on its own page. |
 
 ## Local API
 
