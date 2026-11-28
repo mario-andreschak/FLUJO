@@ -6,7 +6,7 @@ Choose the provider profile that implements your endpoint; it determines the ada
 
 Generation controls such as temperature and output limits must be supported by the selected adapter/model. Start from the provider defaults and change one setting at a time. A larger context or output limit can increase latency and cost.
 
-For **Antigravity CLI**, the CLI manages its generation settings; FLUJO does not forward temperature or output-token controls. A local Google account login can use an empty API key, or you can supply a Gemini API key. The technical name must be an available Antigravity model slug. The separate Gemini native API profile requires a key. See [Antigravity CLI setup](connecting.md#antigravity-cli) for authentication and host requirements.
+For **Antigravity CLI**, the CLI manages its generation settings; FLUJO does not forward temperature or output-token controls. **Effort** offers exactly the levels the CLI lists for the chosen model (for example Low and High for Gemini 3.1 Pro), and FLUJO passes the choice to the CLI. Leave it empty for the model's own default. A model name that already ends in a level, such as `gemini-3.1-pro-high`, keeps that level and has no Effort setting. A local Google account login can use an empty API key, or you can supply a Gemini API key. The technical name must be an available Antigravity model slug. The separate Gemini native API profile requires a key. See [Antigravity CLI setup](connecting.md#antigravity-cli) for authentication and host requirements.
 
 **Anthropic (Native)** and **OpenRouter Messages** use the Anthropic SDK 1.x,
 which sends Claude API version `2026-10-21`. That version no longer accepts a

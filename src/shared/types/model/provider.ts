@@ -1,3 +1,5 @@
+import { ANTIGRAVITY_EFFORT_LEVELS, antigravityModelTakesEffort } from './antigravityEffort';
+
 /**
  * Supported model providers (the vendor / endpoint identity).
  */
@@ -234,9 +236,13 @@ export function getModelConfigurationCapabilities(
   }
 
   if (resolvedAdapter === 'antigravity-cli') {
-    // FLUJO does not map generation controls onto the native CLI contract.
-    // Keep stale SDK settings out of requests until a mapping is verified.
-    return { maxOutputTokens: false };
+    // The CLI owns every other generation control. Its --effort picks one of
+    // the levels `agy models` lists for the model; the model editor narrows
+    // this vocabulary to that list and the CLI refuses any other level.
+    return {
+      ...(antigravityModelTakesEffort(name) ? { effortLevels: [...ANTIGRAVITY_EFFORT_LEVELS] } : {}),
+      maxOutputTokens: false,
+    };
   }
 
   if (resolvedAdapter === 'codex-cli') {

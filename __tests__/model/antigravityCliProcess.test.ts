@@ -214,3 +214,53 @@ test('rejects an oversized catalog and terminates before retaining more output',
   await expect(readAntigravityCliCommand(runtime, 'models')).rejects.toThrow('Antigravity model catalog exceeded its limit.');
   expect(child.kill).toHaveBeenCalled();
 });
+
+test('a chosen effort reaches the CLI next to the model, and an unknown level never does', async () => {
+  child.stdin.on('finish', () => {
+    child.stdout.write('{"event":"result","result":{"conversation_id":"id","status":"SUCCESS","response":"done"}}\n');
+    setImmediate(() => child.emit('close', 0));
+  });
+  await runAntigravityCli({ runtime, model: 'gemini-3.1-pro', effort: 'low', prompt: 'x', signal: new AbortController().signal, onEvent: () => {} });
+  const args = mockSpawn.mock.calls[0][1] as string[];
+  expect(args.slice(args.indexOf('--model'), args.indexOf('--model') + 4)).toEqual(['--model', 'gemini-3.1-pro', '--effort', 'low']);
+  mockSpawn.mockClear();
+  await expect(runAntigravityCli({ runtime, model: 'gemini-3.1-pro', effort: '--dangerously-skip-permissions' as 'low', prompt: 'x', signal: new AbortController().signal, onEvent: () => {} }))
+    .rejects.toThrow('Unsupported Antigravity effort level.');
+  expect(mockSpawn).not.toHaveBeenCalled();
+});
+
+// Refusals printed by the official CLI 1.4.8 before it starts a conversation.
+test.each([
+  ['invalid model selection (--model "gemini-3.1-pro" --effort "medium"): gemini-3.1-pro has no "medium" effort (available: low, high)',
+    'This Antigravity model has no "medium" effort level. It offers low, high. Choose one of them in the model settings.'],
+  ['invalid model selection (--model "gemini-3.1-pro-high" --effort "low"): --model gemini-3.1-pro-high conflicts with --effort=low',
+    'This Antigravity model name already includes an effort level. Choose the name without the level to pick an effort, or clear the effort setting.'],
+  ['invalid model selection (--model "no-such-model" --effort "high"): --effort is not supported for model "no-such-model"',
+    'This Antigravity model has no effort levels. Clear the effort setting in the model settings.'],
+  ['invalid model selection (--model "no-such-model" --effort ""): model no-such-model is not recognized as a known model or custom model in settings',
+    'The Antigravity CLI does not know this model. Reload the model list and choose a listed model.'],
+  ['invalid model selection (--model "x" --effort "high"): something new account@example.com',
+    'The Antigravity CLI refused this model selection. Reload the model list and check the model and effort settings.'],
+])('the CLI refusal %j is explained in FLUJO words, also when reopening a conversation', async (diagnostic, expected) => {
+  for (const resumeConversationId of [undefined, 'saved-1']) {
+    child = new FakeChild();
+    mockSpawn.mockReset().mockImplementation(() => {
+      setImmediate(() => {
+        child.emit('spawn');
+        child.stdout.write(JSON.stringify({ event: 'result', result: { conversation_id: '', status: 'ERROR', response: '', error: diagnostic, num_turns: 0 } }) + '\n');
+        setImmediate(() => child.emit('close', 1));
+      });
+      return child;
+    });
+    let sent = '';
+    child.stdin.on('data', chunk => { sent += String(chunk); });
+    const onEvent = jest.fn();
+    const failure = await runAntigravityCli({ runtime, model: 'gemini-3.1-pro', prompt: 'x', signal: new AbortController().signal, onEvent,
+      ...(resumeConversationId ? { resumeConversationId } : {}) }).catch((error: Error) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toBe(expected);
+    expect((failure as Error).name).not.toBe('AntigravityResumeMiss');
+    expect(onEvent).not.toHaveBeenCalled();
+    if (resumeConversationId) expect(sent).toBe('');
+  }
+});

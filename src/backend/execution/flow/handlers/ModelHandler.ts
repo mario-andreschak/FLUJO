@@ -487,12 +487,7 @@ export class ModelHandler {
     return ModelHandler.isExperimentalFlagEnabled('claudeSessionResume');
   }
 
-  /** Antigravity CLI conversation reuse (issue #1094); off unless the setting is on. */
-  static async isAntigravitySessionResumeEnabled(): Promise<boolean> {
-    return ModelHandler.isExperimentalFlagEnabled('antigravitySessionResume');
-  }
-
-  private static async isExperimentalFlagEnabled(name: 'claudeSessionResume' | 'antigravitySessionResume'): Promise<boolean> {
+  private static async isExperimentalFlagEnabled(name: 'claudeSessionResume'): Promise<boolean> {
     try {
       const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
       return Boolean(settings?.experimental?.[name]);
@@ -1395,15 +1390,15 @@ export class ModelHandler {
 
     // Native session reuse is safe only for FULL-HISTORY nodes (a scoped
     // `wireMessages` view can't be reconciled against a persisted message-count
-    // watermark). Codex enables it by default; Claude subscription keeps its
-    // existing experimental setting. Ineligible adapters always re-flatten.
+    // watermark). Codex and Antigravity enable it by default; Claude
+    // subscription keeps its existing experimental setting. Ineligible adapters
+    // always re-flatten.
     const sessionResume =
       !input.nativeBrokerAuthority &&
       (modelAdapter !== 'claude-cli' || !input.executionExtensionContext) &&
       !wireMessages &&
-      (modelAdapter === 'codex-cli' ||
-        (modelAdapter === 'claude-cli' && await ModelHandler.isClaudeSessionResumeEnabled()) ||
-        (modelAdapter === 'antigravity-cli' && await ModelHandler.isAntigravitySessionResumeEnabled()));
+      (modelAdapter === 'codex-cli' || modelAdapter === 'antigravity-cli' ||
+        (modelAdapter === 'claude-cli' && await ModelHandler.isClaudeSessionResumeEnabled()));
 
     // Resolve the effective agentic-turn cap. Precedence: per-node override →
     // bound-model setting → system default (50). This replaces the former

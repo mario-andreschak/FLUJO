@@ -398,3 +398,36 @@ sleep() { :; }
     else assert.equal(output, '', 'A failed pull or malformed image must not supply probe environment.');
   }
 });
+
+const antigravityJob = files => files['verify.yml'].jobs['antigravity-cli'];
+const antigravityStep = (files, prefix) => antigravityJob(files).steps.find(step => step.run?.startsWith(prefix));
+for (const [label, change, expected] of [
+  ['a missing official Antigravity CLI job', files => { delete files['verify.yml'].jobs['antigravity-cli']; }, /official Antigravity CLI suite on macOS and Windows/],
+  ['an Antigravity job without macOS', files => { antigravityJob(files).strategy.matrix.os = ['windows-latest']; }, /official Antigravity CLI suite/],
+  ['an Antigravity job with extra matrix rows', files => { antigravityJob(files).strategy.matrix.include = [{ os: 'ubuntu-latest' }]; }, /official Antigravity CLI suite/],
+  ['an optional Antigravity suite', files => { antigravityStep(files, 'node scripts/run-local-jest.cjs')['continue-on-error'] = true; }, /official Antigravity CLI suite/],
+  ['a skipped Antigravity job', files => { antigravityJob(files).if = 'false'; }, /official Antigravity CLI suite/],
+  ['an Antigravity suite filtered to fewer cases', files => { antigravityStep(files, 'node scripts/run-local-jest.cjs').run += ' -t effort'; }, /official Antigravity CLI suite/],
+  ['an Antigravity suite run before the CLI is installed', files => {
+    const steps = antigravityJob(files).steps;
+    const [installer] = steps.splice(steps.findIndex(step => step.run?.includes('antigravity-runtime.cjs')), 1);
+    steps.push(installer);
+  }, /official Antigravity CLI suite/],
+  ['an Antigravity job without the verified Node runtime', files => {
+    antigravityJob(files).steps = antigravityJob(files).steps.filter(step => !step.run?.startsWith('node scripts/verify-ci-node.mjs'));
+  }, /verify official binary identity/],
+  ['a verification gate that ignores the Antigravity job', files => { files['verify.yml'].jobs.verification.needs.pop(); }, /evaluate every prerequisite/],
+]) {
+  test(`broad qualification refuses ${label}`, () => {
+    const files = readWorkflows();
+    change(files);
+    assert.throws(() => assertFullWorkflowContract(files), expected);
+  });
+}
+
+test('the main pull-request bridge does not need the broad-only Antigravity job', () => {
+  const files = Object.fromEntries(readdirSync(directory).filter(file => /\.ya?ml$/.test(file))
+    .map(file => [file, YAML.parse(readFileSync(new URL(file, directory), 'utf8'))]));
+  assert.equal(files['verify.yml'].jobs['antigravity-cli'], undefined);
+  assert.deepEqual(files['verify-full.yml'].jobs.verification.needs.at(-1), 'antigravity-cli');
+});

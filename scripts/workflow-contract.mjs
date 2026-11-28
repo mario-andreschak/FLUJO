@@ -8,8 +8,35 @@ const isApplicationSelection = (file, id, condition) => file === 'verify.yml' &&
 
 const VERIFICATION_MATRIX_RUNNER = "${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}";
 
+/** Jobs only the manual broad qualification runs; its verification gate needs them too. */
+const BROAD_ONLY_JOB_IDS = Object.freeze(['antigravity-cli']);
+const ANTIGRAVITY_INSTALL = "node -e \"require('./bin/antigravity-runtime.cjs').resolveBinary().then(binary => console.log(binary))\"";
+const ANTIGRAVITY_SUITE = 'node scripts/run-local-jest.cjs --ci --selectProjects node --runInBand --runTestsByPath __tests__/model/antigravityCliIntegration.test.ts';
+
+/**
+ * The official Antigravity CLI runs against the local stand-in model on macOS
+ * and Windows (the main test job covers Linux), installed by FLUJO's own
+ * installer, with nothing optional.
+ */
+export function assertAntigravityPlatformJob(workflow) {
+  const job = workflow?.jobs?.['antigravity-cli'];
+  const matrix = job?.strategy?.matrix;
+  const steps = job?.steps ?? [];
+  const install = steps.findIndex(step => step.run === 'npm ci --include=dev');
+  const cli = steps.findIndex(step => step.run === ANTIGRAVITY_INSTALL);
+  const suite = steps.findIndex(step => step.run === ANTIGRAVITY_SUITE);
+  if (!job || job.name !== 'Antigravity CLI (${{ matrix.os }})' || job['runs-on'] !== '${{ matrix.os }}'
+      || job.if !== undefined || job['continue-on-error'] || job.strategy['fail-fast'] !== false
+      || Object.keys(matrix ?? {}).join() !== 'os' || JSON.stringify(matrix.os) !== JSON.stringify(['macos-latest', 'windows-latest'])
+      || install < 0 || cli <= install || suite <= cli
+      || steps.some(step => step.if !== undefined || step['continue-on-error'])) {
+    throw new Error('The broad qualification must run the official Antigravity CLI suite on macOS and Windows after installing the CLI the way FLUJO does, with nothing optional.');
+  }
+}
+
 function assertVerificationRunners(workflow) {
   for (const [id, job] of Object.entries(workflow?.jobs ?? {})) {
+    if (BROAD_ONLY_JOB_IDS.includes(id)) continue;
     if (['production-build', 'release-safety'].includes(id)) {
       const matrix = job.strategy?.matrix;
       if (job['runs-on'] !== VERIFICATION_MATRIX_RUNNER
@@ -445,9 +472,10 @@ export function assertFullWorkflowContract(workflows, { mainIntegration = false 
       || !preparation.includes('[[ "$image" =~ ^sha256:[a-f0-9]{64}$ ]]')) {
     throw new Error('Isolation pulls must retry bounded identical-digest mirrors and fail closed before publishing the inspected image identity.');
   }
+  if (!mainIntegration) assertAntigravityPlatformJob(workflow);
   const gate = workflow.jobs.verification;
   if (gate?.name !== 'verification' || gate.if !== 'always()'
-      || JSON.stringify(gate.needs) !== JSON.stringify(REQUIRED_JOB_IDS)
+      || JSON.stringify(gate.needs) !== JSON.stringify(mainIntegration ? REQUIRED_JOB_IDS : [...REQUIRED_JOB_IDS, ...BROAD_ONLY_JOB_IDS])
       || gate['continue-on-error'] || !gate.steps.some((step) => step.run?.includes('assertFullDependencyResults') && step.if === undefined && !step['continue-on-error'])) {
     throw new Error('The required verification check must evaluate every prerequisite even after failures.');
   }

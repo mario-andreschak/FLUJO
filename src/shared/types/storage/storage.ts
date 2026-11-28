@@ -282,14 +282,6 @@ export interface ExperimentalSettings {
    */
   claudeSessionResume?: boolean;
   /**
-   * When true, the Antigravity CLI adapter keeps one native CLI conversation
-   * per conversation node and reopens it on later turns, sending only the new
-   * messages (issue #1094). Any change to the instructions, tools, model or
-   * key, or an edited history, replays the full conversation. Off by default;
-   * a missing value is disabled.
-   */
-  antigravitySessionResume?: boolean;
-  /**
    * When true, the Claude Subscription adapter keeps one started Claude Code
    * process parked for the next request with the same model, instructions,
    * tools and account (issue #1408), so that request skips Claude Code's

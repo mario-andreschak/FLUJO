@@ -1,13 +1,25 @@
 import { getModelConfigurationCapabilities, validateModelConfiguration } from '@/shared/types/model/provider';
 
 describe('provider-aware model configuration capabilities (#329)', () => {
-  it('hides generation settings without a verified Antigravity CLI mapping', () => {
-    for (const name of ['default', 'custom-model']) {
+  it('offers the Antigravity CLI effort vocabulary only where the CLI accepts --effort', () => {
+    // `default` and names that already carry a level are refused by the CLI with --effort.
+    for (const name of ['default', '', 'gemini-3.1-pro-high', 'gemini-3.8-flash-low']) {
       expect(getModelConfigurationCapabilities('antigravity-cli', 'antigravity-cli', name))
         .toEqual({ maxOutputTokens: false });
     }
     expect(getModelConfigurationCapabilities('antigravity-cli', undefined, 'default'))
       .toEqual({ maxOutputTokens: false });
+    // The editor narrows this to the levels `agy models` lists; the CLI refuses others.
+    for (const name of ['gemini-3.1-pro', 'custom-model']) {
+      expect(getModelConfigurationCapabilities('antigravity-cli', 'antigravity-cli', name))
+        .toEqual({ effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'], maxOutputTokens: false });
+    }
+    const antigravity = { provider: 'antigravity-cli' as const, adapter: 'antigravity-cli' as const };
+    expect(validateModelConfiguration({ ...antigravity, name: 'gemini-3.1-pro', reasoningEffort: 'high' })).toBeUndefined();
+    expect(validateModelConfiguration({ ...antigravity, name: 'gemini-3.1-pro-high', reasoningEffort: 'low' })).toMatch(/not supported/);
+    expect(validateModelConfiguration({ ...antigravity, name: 'default', reasoningEffort: 'high' })).toMatch(/not supported/);
+    expect(validateModelConfiguration({ ...antigravity, name: 'gemini-3.1-pro', reasoningEffort: 'ultra' })).toMatch(/not supported/);
+    expect(validateModelConfiguration({ ...antigravity, name: 'gemini-3.1-pro', temperature: '0.2' })).toMatch(/not supported/);
   });
   it('exposes effort and priority for Codex while hiding sampling/output caps', () => {
     expect(getModelConfigurationCapabilities('codex', 'codex-cli', 'gpt-6-astra')).toEqual({

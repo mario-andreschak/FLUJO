@@ -417,9 +417,16 @@ export const ModelModal = ({ open, model, onSave, onClose, onReload }: ModelModa
   );
   // A Creativity value this connection already saved (a draft has no name yet).
   const savedCreativity = model.name ? String(model.temperature ?? '').trim() : '';
-  const discoveredEfforts = openRouterModels.find(candidate => candidate.id === formState.name)?.reasoningEfforts;
+  const listedModel = openRouterModels.find(candidate => candidate.id === formState.name);
+  const discoveredEfforts = listedModel?.reasoningEfforts;
   if (currentProfile.id === 'codex' && discoveredEfforts?.length) {
     configurationCapabilities.effortLevels = discoveredEfforts as NonNullable<typeof configurationCapabilities.effortLevels>;
+  }
+  // `agy models` lists every level a model offers; the CLI refuses any other.
+  if (currentProfile.adapter === 'antigravity-cli' && listedModel && configurationCapabilities.effortLevels) {
+    const offered = configurationCapabilities.effortLevels.filter(level => discoveredEfforts?.includes(level));
+    if (offered.length) configurationCapabilities.effortLevels = offered;
+    else delete configurationCapabilities.effortLevels;
   }
   const visibleProviderModels = useMemo(
     () => settings?.experimental?.showModelsWithoutToolCapabilities
