@@ -104,6 +104,13 @@ jest.mock('@/frontend/services/chat', () => {
       debugStep: jest.fn(),
       setBreakpoints: jest.fn(),
       synthesizeQuickChat: (...args: unknown[]) => mockSynthesizeQuickChat(...args),
+      // The goal bar (#1225) reads the chat's goal; these conversations have none.
+      getChatGoal: jest.fn(async () => null),
+      // A chat whose run ended in an error asks whether sub-flows can be recovered.
+      getSubflowRecoveryOptions: jest.fn(async () => ({ hasRecoverableFamily: false })),
+      setChatGoal: jest.fn(),
+      updateChatGoal: jest.fn(),
+      clearChatGoal: jest.fn(),
     },
   };
 });
@@ -159,8 +166,10 @@ jest.mock('@/frontend/components/Chat/McpAppFrame', () => ({
 jest.mock('@/frontend/components/Chat/ChatHistory', () => ({ __esModule: true, default: () => null }));
 jest.mock('@/frontend/components/Chat/ChatMessages', () => ({
   __esModule: true,
-  default: ({ messages, pendingQuestion, pendingElicitation, onAnswerQuestion, onDeclineQuestion, onSubmitElicitation, onCancelElicitation }: {
+  default: ({ messages, pendingQuestion, pendingElicitation, pendingToolCalls, onApproveToolCall, onAnswerQuestion, onDeclineQuestion, onSubmitElicitation, onCancelElicitation }: {
     messages?: unknown[];
+    pendingToolCalls?: Array<{ id: string; function: { name: string } }> | null;
+    onApproveToolCall?: (id: string) => void;
     pendingQuestion?: PendingQuestion | null;
     pendingElicitation?: PendingElicitation | null;
     onAnswerQuestion: (id: string, answers: string[][]) => void;
@@ -170,6 +179,10 @@ jest.mock('@/frontend/components/Chat/ChatMessages', () => ({
   }) => (
     <>
       <div data-testid="rendered-message-count">{messages?.length ?? 0}</div>
+      {pendingToolCalls?.length ? <div data-testid="approval-card">{pendingToolCalls.map((call) => call.function.name).join(',')}</div> : null}
+      {pendingToolCalls?.map((call) => (
+        <button key={call.id} type="button" onClick={() => onApproveToolCall?.(call.id)}>{`Approve ${call.function.name}`}</button>
+      ))}
       {pendingQuestion && <>
         <button type="button" onClick={() => onAnswerQuestion(pendingQuestion.questionId, [['Retained answer']])}>Answer pending question</button>
         <button type="button" onClick={() => onDeclineQuestion(pendingQuestion.questionId)}>Decline pending question</button>
@@ -311,6 +324,21 @@ describe('Talk conversation Agent switch terminology', () => {
     fireEvent.click(box);
 
     await waitFor(() => expect(mockUpdateConversationApproval).toHaveBeenCalledWith('conversation-current', true));
+    expect(await screen.findByText(translate('en', 'chat.page.approvalSaveFailed'))).toBeInTheDocument();
+    expect(approvalBox()).not.toBeChecked();
+  });
+
+  it('says a save failed also in a chat whose last run ended in an error, such as a Stop (#1284)', async () => {
+    const stopped = { ...detailedConversation, status: 'error', lastError: { message: 'Execution cancelled by user.', code: 'CANCELLED' } };
+    mockListConversations.mockResolvedValue([{ ...conversationSummary, status: 'error' }]);
+    mockGetConversation.mockResolvedValue(stopped);
+    mockUpdateConversationApproval.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    render(<Chat />);
+    await waitFor(() => expect(mockGetConversation).toHaveBeenCalled());
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+
+    fireEvent.click(approvalBox());
+
     expect(await screen.findByText(translate('en', 'chat.page.approvalSaveFailed'))).toBeInTheDocument();
     expect(approvalBox()).not.toBeChecked();
   });
@@ -681,6 +709,53 @@ describe('Talk conversation Agent switch terminology', () => {
       elicitations: [{ elicitationId: 'pending-form', createdAt: 1, message: 'Review', requestedSchema: { properties: { note: { type: 'string' } } } }],
     },
   };
+
+  it('shows the approval card again after a reload while a running agent waits on a tool (#1284)', async () => {
+    const waiting = {
+      ...detailedConversation, status: 'running',
+      pendingInputs: { nextSeq: 1, questions: [], elicitations: [],
+        toolCalls: [{ id: 'sdk-1', type: 'function', function: { name: 'send_email', arguments: '{"to":"a@b.c"}' } }] },
+    };
+    mockListConversations.mockResolvedValue([waiting]);
+    mockGetConversation.mockResolvedValue(waiting);
+
+    const view = render(<Chat />);
+    try {
+      expect(await screen.findByTestId('approval-card')).toHaveTextContent('send_email');
+    } finally { view.unmount(); }
+  });
+
+  it('sends one answer for a double click and keeps the other calls of the batch on the card (#1284)', async () => {
+    const waiting = {
+      ...detailedConversation, status: 'awaiting_tool_approval',
+      pendingToolCalls: [
+        { id: 'call-1', type: 'function', function: { name: 'send_email', arguments: '{}' } },
+        { id: 'call-2', type: 'function', function: { name: 'post_message', arguments: '{}' } },
+      ],
+    };
+    mockListConversations.mockResolvedValue([waiting]);
+    mockGetConversation.mockResolvedValue(waiting);
+    const { chatService } = jest.requireMock('@/frontend/services/chat') as { chatService: { respondToToolCall: jest.Mock } };
+    chatService.respondToToolCall.mockImplementation(() => new Promise(() => undefined));
+
+    const view = render(<Chat />);
+    try {
+      const approve = await screen.findByRole('button', { name: 'Approve send_email' });
+      fireEvent.click(approve);
+      fireEvent.click(approve);
+      // The answer goes out once the live stream is open.
+      await waitFor(() => expect(mockSubscribeToEvents).toHaveBeenCalled());
+      act(() => { (mockSubscribeToEvents.mock.calls.at(-1)![1] as EventStreamHandlers).onOpen?.(); });
+      await waitFor(() => expect(chatService.respondToToolCall).toHaveBeenCalled());
+      expect(chatService.respondToToolCall).toHaveBeenCalledTimes(1);
+      expect(chatService.respondToToolCall).toHaveBeenCalledWith('conversation-current', 'approve', 'call-1');
+      expect(screen.queryByRole('button', { name: 'Approve send_email' })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Approve post_message' })).toBeInTheDocument();
+    } finally {
+      view.unmount();
+      chatService.respondToToolCall.mockReset();
+    }
+  });
 
   it.each(SUPPORTED_LOCALES.map(({ code }) => code))('localizes a failed Persona input in %s without offering a new run', async locale => {
     const originalFetch = globalThis.fetch;

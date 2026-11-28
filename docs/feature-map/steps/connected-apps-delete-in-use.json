@@ -1,0 +1,18 @@
+[
+  { "do": "click", "role": "button", "name": "Delete server", "within": { "role": "article", "name": "notes-app", "exact": true } },
+  { "do": "wait-for", "role": "dialog", "name": "Delete “notes-app”?" },
+  { "do": "wait-for", "role": "group", "name": "Notes helper: Agent with 1 step that uses this app" },
+  { "do": "wait-for", "role": "group", "name": "Notes reader: Agent with 1 step that uses this app" },
+  { "do": "expect-state", "role": "button", "name": "Delete app", "state": "disabled", "within": { "role": "dialog", "name": "Delete “notes-app”?" } },
+  { "do": "select", "label": "Switch to", "option": "notes-app-2", "exactOption": true, "within": { "role": "group", "name": "Notes helper: Agent with 1 step that uses this app" } },
+  { "do": "expect-state", "role": "button", "name": "Delete app", "state": "disabled", "within": { "role": "dialog", "name": "Delete “notes-app”?" } },
+  { "do": "select", "label": "Switch to", "option": "Leave the steps without an app for now", "within": { "role": "group", "name": "Notes reader: Agent with 1 step that uses this app" } },
+  { "do": "expect-text", "text": "Notes reader will stop using this app.", "within": { "role": "dialog", "name": "Delete “notes-app”?" } },
+  { "do": "expect-state", "role": "button", "name": "Delete app", "state": "enabled", "within": { "role": "dialog", "name": "Delete “notes-app”?" } },
+  { "do": "shot", "out": "connected-apps/delete-in-use.png" },
+  { "do": "aria", "out": "connected-apps/delete-in-use.yml" },
+  { "do": "click", "role": "button", "name": "Delete app", "within": { "role": "dialog", "name": "Delete “notes-app”?" } },
+  { "do": "expect-no-text", "text": "Delete “notes-app”?" },
+  { "do": "goto", "route": "/mcp" },
+  { "do": "wait-for", "role": "article", "name": "notes-app-2", "exact": true }
+]

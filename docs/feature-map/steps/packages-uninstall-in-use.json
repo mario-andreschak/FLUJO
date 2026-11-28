@@ -1,0 +1,15 @@
+[
+  { "do": "wait-for", "role": "button", "name": "Uninstall", "exact": true },
+  { "do": "expect-text", "text": "Feature check helpers" },
+  { "do": "click", "role": "button", "name": "Uninstall", "exact": true },
+  { "do": "click", "role": "button", "name": "Uninstall", "exact": true, "within": { "role": "dialog", "name": "Uninstall “Feature check helpers”?" } },
+  { "do": "expect-text", "text": "Some of this package’s agents or Connected Apps are still used outside it.", "within": { "role": "dialog", "name": "Uninstall “Feature check helpers”?" } },
+  { "do": "wait-for", "role": "region", "name": "Agent “Package helper”" },
+  { "do": "expect-state", "role": "button", "name": "Uninstall", "exact": true, "state": "disabled", "within": { "role": "dialog", "name": "Uninstall “Feature check helpers”?" } },
+  { "do": "select", "label": "Switch to", "option": "FLUJO", "exactOption": true, "within": { "role": "group", "name": "Package user: Agent that calls this one in a step" } },
+  { "do": "expect-state", "role": "button", "name": "Uninstall", "exact": true, "state": "enabled", "within": { "role": "dialog", "name": "Uninstall “Feature check helpers”?" } },
+  { "do": "shot", "out": "packages/uninstall-in-use.png" },
+  { "do": "aria", "out": "packages/uninstall-in-use.yml" },
+  { "do": "click", "role": "button", "name": "Uninstall", "exact": true, "within": { "role": "dialog", "name": "Uninstall “Feature check helpers”?" } },
+  { "do": "expect-text", "text": "No packages installed yet." }
+]

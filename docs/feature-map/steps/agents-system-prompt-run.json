@@ -1,0 +1,15 @@
+[
+  { "do": "wait-for", "role": "textbox", "name": "Message", "timeout": 120000 },
+  { "do": "fill", "label": "Message", "value": "Say hello in one line.", "exact": true },
+  { "do": "click", "role": "button", "name": "Send message", "exact": true },
+  { "do": "expect-text", "text": "Hello from the local stub model.", "timeout": 120000 },
+  { "do": "click", "role": "button", "name": "Model input", "exact": true },
+  { "do": "wait-for", "role": "option", "name": "1. Process Node" },
+  { "do": "expect-text", "text": "\"role\":\"system\"" },
+  { "do": "expect-text", "text": "# GENERAL INFORMATION:" },
+  { "do": "expect-text", "text": "## FLUJO tools" },
+  { "do": "expect-text", "text": "## Stored results" },
+  { "do": "expect-no-text", "text": "workflow with other agents", "timeout": 1000 },
+  { "do": "shot", "out": "agents/system-prompt-run.png" },
+  { "do": "aria", "out": "agents/system-prompt-run.yml" }
+]

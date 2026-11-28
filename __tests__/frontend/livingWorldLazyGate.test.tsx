@@ -11,11 +11,10 @@ const mockTheme = {
   visualStyle: 'modern' as 'modern' | 'legacy',
 };
 
-jest.mock('next/dynamic', () => {
+jest.mock('@/frontend/lazy', () => {
   const dynamicRiverWorldStub = jest.fn(() => <div data-living-world-stub />);
   return {
-    __esModule: true,
-    default: () => dynamicRiverWorldStub,
+    lazyOptional: () => dynamicRiverWorldStub,
     dynamicRiverWorldStub,
   };
 });
@@ -24,7 +23,7 @@ jest.mock('@/frontend/contexts/ThemeContext', () => ({
   useTheme: () => mockTheme,
 }));
 
-const { dynamicRiverWorldStub: mockDynamicRiverWorld } = jest.requireMock('next/dynamic') as {
+const { dynamicRiverWorldStub: mockDynamicRiverWorld } = jest.requireMock('@/frontend/lazy') as {
   dynamicRiverWorldStub: jest.Mock;
 };
 

@@ -88,7 +88,7 @@ it.each(['object', 'scalar'])('keeps multi-MiB %s request options out of logs wi
   expect(response.status).toBe(200);
   expect(processChatCompletion).toHaveBeenCalledWith(expect.objectContaining({
     temperature: option, stream: option, max_tokens: option,
-  }), expect.anything(), expect.anything(), expect.anything(), undefined, false, true, undefined, expect.anything());
+  }), expect.anything(), undefined, expect.anything(), undefined, false, true, undefined, expect.anything()); // no approval choice: the saved setting applies
   expectBoundedLogArguments();
 });
 

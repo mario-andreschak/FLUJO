@@ -224,10 +224,26 @@ const SETTINGS_CATEGORIES: SettingsCategory[] = [
   },
 ];
 
-export default function Settings() {
+const isSectionId = (value: string | undefined): value is SettingsSectionId => SETTINGS_SECTIONS.some((section) => section.id === value);
+
+/**
+ * The open section lives in the address (`/settings?section=users`), so a link opens it and a
+ * reload (turning sign-in on or off reloads the page) keeps the person where they were.
+ */
+function showSectionInAddress(id: SettingsSectionId): void {
+  const url = new URL(window.location.href);
+  url.searchParams.set('section', id);
+  window.history.replaceState(window.history.state, '', url);
+}
+
+export default function Settings({ initialSection }: { initialSection?: string } = {}) {
   const theme = useTheme();
   const { t } = useI18n();
-  const [activeSectionId, setActiveSectionId] = useState<SettingsSectionId>('network');
+  const [activeSectionId, setActiveSection] = useState<SettingsSectionId>(isSectionId(initialSection) ? initialSection : 'network');
+  const setActiveSectionId = (id: SettingsSectionId) => {
+    setActiveSection(id);
+    showSectionInAddress(id);
+  };
 
   const sectionsById = useMemo(
     () =>

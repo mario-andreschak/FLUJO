@@ -507,6 +507,19 @@ for (const [label, change, expected] of [
     const upload = journeyJob(files).steps.find(step => step.uses?.startsWith('actions/upload-artifact@'));
     upload.with.path = upload.with.path.split('\n').filter(line => !line.includes('/evidence/front-door/')).join('\n');
   }, /signed-in front door/],
+  ['a first-use job without the tool approval check', files => {
+    journeyJob(files).steps = journeyJob(files).steps.filter(step => step.run !== 'npm run journey:tool-approval');
+  }, /tool approvals in the browser/],
+  ['an optional tool approval check', files => { journeyStep(files, 'npm run journey:tool-approval')['continue-on-error'] = true; }, /first-use journey/],
+  ['a tool approval check before the production build', files => {
+    const steps = journeyJob(files).steps;
+    const [check] = steps.splice(steps.findIndex(step => step.run === 'npm run journey:tool-approval'), 1);
+    steps.splice(steps.findIndex(step => step.run === 'npm run build'), 0, check);
+  }, /tool approvals in the browser/],
+  ['a tool approval check that drops its evidence', files => {
+    const upload = journeyJob(files).steps.find(step => step.uses?.startsWith('actions/upload-artifact@'));
+    upload.with.path = upload.with.path.split('\n').filter(line => !line.includes('/evidence/tool-approval-journey/')).join('\n');
+  }, /tool approvals in the browser/],
   ['a first-use job without the tool result size limit check', files => {
     journeyJob(files).steps = journeyJob(files).steps.filter(step => step.run !== 'npm run check:tool-result-limit');
   }, /tool result size limit/],
@@ -520,6 +533,24 @@ for (const [label, change, expected] of [
     const upload = journeyJob(files).steps.find(step => step.uses?.startsWith('actions/upload-artifact@'));
     upload.with.path = upload.with.path.split('\n').filter(line => !line.includes('/evidence/tool-result-limit/')).join('\n');
   }, /tool result size limit/],
+  ...['npm run journey:feature-steps', 'npm run journey:multi-user'].flatMap(command => [
+    [`a first-use job without ${command}`, files => {
+      journeyJob(files).steps = journeyJob(files).steps.filter(step => step.run !== command);
+    }, /every feature map step file/],
+    [`an optional ${command}`, files => { journeyStep(files, command)['continue-on-error'] = true; }, /first-use journey/],
+    [`a skipped ${command}`, files => { journeyStep(files, command).if = 'false'; }, /first-use journey/],
+    [`${command} narrowed to some checks`, files => { journeyStep(files, command).run += ' -- --only agents'; }, /every feature map step file/],
+    [`${command} before the production build`, files => {
+      const steps = journeyJob(files).steps;
+      const [check] = steps.splice(steps.findIndex(step => step.run === command), 1);
+      steps.splice(steps.findIndex(step => step.run === 'npm run build'), 0, check);
+    }, /every feature map step file/],
+    [`${command} without its evidence folder`, files => { delete journeyStep(files, command).env; }, /every feature map step file/],
+  ]),
+  ...['feature-steps', 'multi-user'].map(folder => [`a first-use job that drops the ${folder} evidence`, files => {
+    const upload = journeyJob(files).steps.find(step => step.uses?.startsWith('actions/upload-artifact@'));
+    upload.with.path = upload.with.path.split('\n').filter(line => !line.includes(`/evidence/${folder}/`)).join('\n');
+  }, /every feature map step file/]),
 ]) {
   test(`broad qualification refuses ${label}`, () => {
     const files = readWorkflows();

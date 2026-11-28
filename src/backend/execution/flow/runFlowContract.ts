@@ -65,7 +65,7 @@ export interface FlowRunInput extends FlowReplayInputs {
 
   /** Engine flags (defaults preserve the legacy completions behavior). */
   flujo?: boolean;               // default true
-  requireApproval?: boolean;     // default false
+  requireApproval?: boolean;     // default: the conversation's saved setting (missing is off)
   debug?: boolean;               // maps to the legacy flujodebug flag; default false
   continueDebug?: boolean;       // default false
   userTurn?: boolean;            // default false

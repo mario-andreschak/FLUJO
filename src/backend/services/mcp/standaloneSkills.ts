@@ -1,10 +1,22 @@
 import {
   type McpSkillEntry,
+  type MCPServerConfig,
   normalizeMcpResourceUri,
   parseMcpSkillUri,
 } from '@/shared/types/mcp';
+import { shippedDescriptorForConfig } from './shippedServers';
 
 export const FLUJO_STANDALONE_SKILL_SCHEME = 'skill+flujo:';
+
+/**
+ * The bundled FLUJO app serves the standalone Skill catalog: its `skills/list`
+ * calls the catalog route. Asking it while building that catalog would call
+ * the route again, forever, and open a new connection on every turn until the
+ * computer runs out of network ports.
+ */
+export function servesStandaloneSkillCatalog(config: MCPServerConfig): boolean {
+  return config.transport === 'stdio' && shippedDescriptorForConfig(config)?.packageDirectory === 'flujo';
+}
 
 function encodeServerName(serverName: string): string {
   if (!serverName) throw new Error('A server name is required.');

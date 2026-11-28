@@ -6,6 +6,7 @@ import { mcpService } from '@/backend/services/mcp';
 import {
   decodeStandaloneSkillResource,
   rewriteMcpSkillEntryForStandalone,
+  servesStandaloneSkillCatalog,
 } from '@/backend/services/mcp/standaloneSkills';
 import { json } from '@/app/api/mcp/_helpers';
 import { McpListSkillsResultSchema } from '@/shared/types/mcp';
@@ -26,7 +27,7 @@ async function GET_handler() {
 
   const skills = [];
   for (const config of configs) {
-    if (config.disabled || !mcpSkillsEnabled(config)) continue;
+    if (config.disabled || !mcpSkillsEnabled(config) || servesStandaloneSkillCatalog(config)) continue;
 
     let cursor: string | undefined;
     const seenCursors = new Set<string>();

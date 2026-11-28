@@ -15,10 +15,11 @@ export interface ChatCompletionMetadata {
   conversationId?: string;
 
   /**
-   * Indicates if tool calls within a Flujo execution require user approval before proceeding.
-   * Expected value: "true"
+   * The conversation's "Require tool approvals" setting for this run and the ones
+   * after it: "true" or "false". Left out, the conversation's saved setting applies
+   * (off for a new conversation).
    */
-  requireApproval?: "true";
+  requireApproval?: "true" | "false";
 
   /**
    * Indicates if the request should be executed in debug mode (step-by-step).

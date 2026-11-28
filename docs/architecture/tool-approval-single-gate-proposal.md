@@ -414,18 +414,15 @@ where the design left room:
 | Flow step rules | `requireApprovalFor` / `requireApprovalForWrites` (added November 4, after this design) feed the same gate; they decide whether a call asks, never how it is answered. |
 | Check | `flujo/single-tool-approval-gate` fails on a fallback other than `false` for the setting, on new importers of the decision points (`registerPendingApproval`, `withdrawPendingApproval`, `resolvePendingApproval`, `clearPendingApprovals`, `applyApprovalDecision`) and on any code other than runFlow setting `awaiting_tool_approval`. |
 
-Left open, with reasons:
+### Second pass (#1284, November 28, 2026)
 
-- **R2 for `/v1` callers.** The chat UI sends the saved value with each run.
-  API callers still opt in per request (`metadata.requireApproval`), as the
-  API documents; making the saved value override it would silently change
-  existing callers.
-- **R8 inside one live run.** An agent SDK run reads the setting when it
-  starts; a change applies from the next run, not from the next tool call of
-  the same live run.
-- **R12 accessibility.** The approval card was not changed; keyboard, focus and
-  status checks belong to the browser acceptance run.
-- **Rollback.** The only new stored field is the optional inbox `receipt`;
-  older code ignores it and still finds entries by conversation id. Older code
-  does not read the `tool:before` checkpoint as "do not run again", so after a
-  rollback an interrupted approved call could run again, as before this change.
+The first pass left these open; all of them are done:
+
+| Topic | Implementation |
+| --- | --- |
+| R2 for `/v1` callers | `metadata.requireApproval` is read by `parseRequireApproval()`: `"true"`/`true` and `"false"`/`false` are a choice the run saves (as before); left out (or `null`) hands `undefined` to runFlow, which keeps the conversation's saved value (`approvalSettingForRun()` in `approvalSetting.ts`, applied in `runStateSetup.ts`). A new conversation therefore starts off, exactly as before. Any other value is refused with `400 invalid_require_approval`. The only behaviour that changes: a request without the field on a conversation whose box is ticked used to run tools unasked and switch the saved box off; now it asks and the box stays on. Nothing that asked before stops asking. |
+| R8 inside one run | A run reads the setting when it accepts a batch (`approvalForBatch()`, the latest save of the conversation the person views; for a sub-flow the one it asks in). An agent SDK reads it before each call (`createLiveToolApproval({ followSetting })`, only for watched runs without an execution extension, native host or Persona). A PATCH of only `requireApproval` while a run holds the conversation is saved into that run's live state at once (`saveApprovalSettingDuringRun()`), instead of waiting for the run to end; while that save is written the next batch asks, and a failed save restores the old value and answers 500 (the chat then puts the box back). Calls already on the card keep waiting either way. |
+| Live waits in the inbox | Each live wait gets its own opaque receipt (`apr_…`) and `expiresAt` in `toolApprovalRegistry.ts`. `GET /api/approvals` lists them with `live: true`, ids and tool name only; `POST /api/approvals/{approvalId}` answers them through `resolvePendingApproval` (the inbox route is now a listed decision point of the lint rule) and returns `{ status: 'running', live: true }`; the receipt names one call and is 404 after it. The chat also restores a live card after a reload: `GET /v1/chat/conversations/{id}` carries the waiting calls in `pendingInputs.toolCalls`. |
+| R12 accessibility | The card is a region named by its title, its help line has `role="status"`, and each Approve/Reject button is described by its tool's name. No visible change. |
+| Rollback | `applyApprovalDecision` now takes an approved call out of `pendingToolCalls` (and flips the run to `running` when it was the last) in the same save as the `tool:before` checkpoint, before the tool starts. Every version, including one rolled back to, reads that as "not waiting": it cannot be approved again, and the resumed run's existing dangling-call repair answers it as interrupted (a crash with nothing else waiting ends as an interrupted run on load). An attempt that fails half way is settled at once with `INTERRUPTED_APPROVED_TOOL_RESULT` and, with nothing else waiting, an error status. States written before this pass, where an interrupted call still waits, are still settled by `approvedEffectIsUncertain`. The only other stored addition is the optional inbox `receipt`, which older code ignores. |
+| Browser acceptance | The eleven click-through steps are `scripts/tool-approval-journey/run.mjs` (`npm run journey:tool-approval`), on a production build with local stand-ins for an OpenAI-style model and for Anthropic's service, in the `First-use journey` job of `verify-full.yml` (`assertFirstUseJourneyJob` requires it). |

@@ -11,6 +11,7 @@ import {
 import { loadConversationState } from '@/backend/execution/flow/loadConversationState';
 import { listAllPendingQuestions } from '@/backend/services/questionRegistry';
 import { listAllPendingElicitations } from '@/backend/services/mcp/elicitationRegistry';
+import { listLiveApprovals } from '@/backend/execution/flow/toolApprovalRegistry';
 import { FlowExecutor } from '@/backend/execution/flow/FlowExecutor';
 import { assertLocalRequest } from '@/utils/http/localRequest';
 import { getSchedulerService } from '@/backend/services/scheduler';
@@ -44,6 +45,11 @@ function json(body: unknown, status = 200): Response {
  * Entries whose paused run is no longer awaiting approval (resolved out of
  * band, or the conversation was deleted) are pruned lazily here so the inbox
  * stays truthful.
+ *
+ * Calls a running agent or sub-flow waits on (a live wait, #1284) are listed
+ * too, one entry per call with `live: true` and the time the wait gives up
+ * (`expiresAt`). They have no run history record; POST their `approvalId`
+ * like any other entry.
  */
 async function GET_handler(request: Request) {
   const _lock = await assertUnlocked();
@@ -136,6 +142,22 @@ async function GET_handler(request: Request) {
         triggerSummary: entry.triggerSummary,
         pendingToolCalls: listed.pendingToolCalls, // { id, name } only — no args
         createdAt: entry.createdAt,
+      });
+    }
+
+    // Live waits: a running agent SDK or sub-flow holds the call until someone
+    // answers. One receipt per call; it stops working once the call is answered.
+    for (const live of listLiveApprovals()) {
+      const state = FlowExecutor.conversationStates.get(live.conversationId);
+      if (!state || isPersonaOwnedConversationState(state)) requiresStrictControlPlane = true;
+      approvals.push({
+        approvalId: live.receipt,
+        conversationId: live.conversationId,
+        ...(state?.flowId ? { flowId: state.flowId } : {}),
+        pendingToolCalls: [live.toolCall], // { id, name } only — no args
+        createdAt: new Date(live.createdAt).toISOString(),
+        ...(live.expiresAt ? { expiresAt: new Date(live.expiresAt).toISOString() } : {}),
+        live: true,
       });
     }
 

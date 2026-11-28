@@ -1,0 +1,16 @@
+[
+  { "do": "click", "role": "button", "name": "Delete server", "within": { "role": "article", "name": "bash", "exact": true } },
+  { "do": "wait-for", "role": "dialog", "name": "Delete “bash”?" },
+  { "do": "expect-text", "text": "This Connected App is still in use. Choose what happens in each place, then delete it.", "within": { "role": "dialog", "name": "Delete “bash”?" } },
+  { "do": "wait-for", "role": "group", "name": "FLUJO: Agent with 1 step that uses this app" },
+  { "do": "expect-state", "role": "button", "name": "Delete app", "state": "disabled", "within": { "role": "dialog", "name": "Delete “bash”?" } },
+  { "do": "select", "label": "Switch to", "option": "filesystem", "exactOption": true, "within": { "role": "group", "name": "FLUJO: Agent with 1 step that uses this app" } },
+  { "do": "expect-state", "role": "button", "name": "Delete app", "state": "enabled", "within": { "role": "dialog", "name": "Delete “bash”?" } },
+  { "do": "select", "label": "Switch to", "option": "Leave the steps without an app for now", "within": { "role": "group", "name": "FLUJO: Agent with 1 step that uses this app" } },
+  { "do": "expect-text", "text": "FLUJO will stop using this app.", "within": { "role": "dialog", "name": "Delete “bash”?" } },
+  { "do": "shot", "out": "connected-apps/delete-in-use-cancel.png" },
+  { "do": "aria", "out": "connected-apps/delete-in-use-cancel.yml" },
+  { "do": "click", "role": "button", "name": "Cancel", "exact": true, "within": { "role": "dialog", "name": "Delete “bash”?" } },
+  { "do": "wait-for", "role": "article", "name": "bash", "exact": true },
+  { "do": "expect-text", "text": "Connected", "within": { "role": "article", "name": "bash", "exact": true } }
+]
