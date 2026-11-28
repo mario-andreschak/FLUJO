@@ -99,12 +99,15 @@ export function toolResultLimitMode(settings: Partial<RunResourceSettings> | und
 /**
  * Decide which tool results are moved for a model with this context window.
  * Off still moves a result over half the window, so a run never fails just
- * because one tool answered with too much text.
+ * because one tool answered with too much text. An AI step's own limit
+ * (`step`) wins over the workspace setting.
  */
 export function resolveToolResultBound(
-  settings: Partial<RunResourceSettings> | undefined,
+  workspaceSettings: Partial<RunResourceSettings> | undefined,
   contextWindow?: number,
+  step?: StepToolResultLimit,
 ): ToolResultBound {
+  const settings = withStepToolResultLimit(workspaceSettings, step);
   const window = toolResultContextWindow(contextWindow);
   const safetyBytes = toolResultSafetyBytes(contextWindow);
   const base = { safetyBytes, contextWindow: window.tokens, contextWindowKnown: window.known };
@@ -120,6 +123,56 @@ export function resolveToolResultBound(
   return configured > safetyBytes
     ? { ...base, maxBytes: safetyBytes, maxLines, reason: 'safety' }
     : { ...base, maxBytes: configured, maxLines, reason: 'limit' };
+}
+
+// --- An AI step's own limit ----------------------------------------------------
+
+/**
+ * An AI step's own tool result size limit, saved with the agent as the step's
+ * `toolResultLimit` property. Without one the workspace setting decides.
+ *  - 'off': results stay in the conversation; the safety ceiling still applies.
+ *  - 'auto': an eighth of the step model's context window.
+ *  - 'custom': `maxBytes`, whole kilobytes from 1 KB to 100 MB.
+ */
+export type StepToolResultLimit =
+  | { mode: 'off' }
+  | { mode: 'auto' }
+  | { mode: 'custom'; maxBytes: number };
+
+export const STEP_TOOL_RESULT_LIMIT_MODES = ['off', 'auto', 'custom'] as const;
+
+/** Read a step's saved limit; anything unusable means "use the workspace setting". */
+export function normalizeStepToolResultLimit(value: unknown): StepToolResultLimit | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const { mode, maxBytes } = value as { mode?: unknown; maxBytes?: unknown };
+  if (mode === 'off' || mode === 'auto') return { mode };
+  if (mode === 'custom' && isValidCustomToolResultBytes(maxBytes)) return { mode, maxBytes };
+  return undefined;
+}
+
+/** The workspace settings with an AI step's own limit applied; the line limit stays the workspace's. */
+export function withStepToolResultLimit(
+  settings: Partial<RunResourceSettings> | undefined,
+  step: StepToolResultLimit | undefined,
+): Partial<RunResourceSettings> | undefined {
+  const limit = normalizeStepToolResultLimit(step);
+  if (!limit) return settings;
+  if (limit.mode === 'off') return { ...settings, toolResultTruncationEnabled: false };
+  return limit.mode === 'auto'
+    ? { ...settings, toolResultTruncationEnabled: true, toolResultLimitMode: 'auto' }
+    : { ...settings, toolResultTruncationEnabled: true, toolResultLimitMode: 'custom', toolResultMaxBytes: limit.maxBytes };
+}
+
+/**
+ * How one AI step's tool results are handled: its own size limit, and the
+ * conversation whose run resources keep moved results. A run that saves its
+ * conversation keeps them there; a run that saves nothing keeps them in the
+ * nearest saved conversation above it, or in a store of its own that is
+ * removed when the run ends.
+ */
+export interface StepToolResults {
+  limit?: StepToolResultLimit;
+  store?: string;
 }
 
 // --- Settings page and API ---------------------------------------------------

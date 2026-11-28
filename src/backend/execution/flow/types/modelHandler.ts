@@ -90,6 +90,8 @@ export interface ModelCallInput {
   toolCatalog?: import('../toolLoading/toolLoadingExecutors').StepToolCatalog;
   /** #1448: records deferred tools the model loaded, for the next turn. */
   markToolsLoaded?: (names: readonly string[]) => void;
+  /** #1226: the step's own tool result size limit and where moved results are kept. */
+  toolResults?: import('@/shared/toolResultLimit').StepToolResults;
   /** Issue #239: bound MCP node references for native resource tools. Forwarded to
    *  localToolExecutors so self-orchestrating adapters can execute list_mcp_resources
    *  and native-URI read_resource in-loop. */
@@ -181,6 +183,12 @@ export interface ToolCallProcessingInput {
    * unknown ⇒ a 128K-token window is assumed.
    */
   modelContextWindow?: number;
+  /**
+   * The step's own tool result size limit and the conversation whose run
+   * resources keep moved results (#1226). A run that saves nothing has no
+   * `conversationId` here but still a store (see stepToolResults.ts).
+   */
+  toolResults?: import('@/shared/toolResultLimit').StepToolResults;
   /** Metadata-only logical run id for tool attribution. */
   runId?: string;
   /** Process node driving these calls — recorded as resource lineage producer. */

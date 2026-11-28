@@ -50,7 +50,7 @@ import { waitForActiveSubflows } from './subflowCommunication';
 import { isInternalToolName } from '@/backend/execution/flow/handlers/toolNamespace';
 import { emitErrorOnce, emitNormalizedErrorOnce, deriveLastErrorFromLastResponse } from '@/backend/execution/flow/normalizeError';
 import { flowService } from '@/backend/services/flow/index';
-import { resolveToolCallContextWindow } from './toolResultContextWindow';
+import { releaseUnsavedRunStore, resolveStepToolResults } from './stepToolResults';
 import { StorageKey } from '@/shared/types/storage';
 import { MAX_SUBFLOW_DEPTH } from '@/backend/execution/flow/constants';
 import { isCancelledByAncestry, isConversationDeleted } from '@/backend/execution/flow/cancellation';
@@ -501,10 +501,8 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     try {
       result = await ModelHandler.processToolCalls({
         ...args,
-        // Sizes the tool result size limit for the model that reads these results (#1226).
-        ...(args.conversationId && args.modelContextWindow === undefined
-          ? { modelContextWindow: await resolveToolCallContextWindow(sharedState) }
-          : {}),
+        // The tool result size limit of the step and model that read these results (#1226).
+        ...(args.modelContextWindow === undefined ? await resolveStepToolResults(sharedState) : {}),
         signal: combineAbortSignals(args.signal, runtimeAbortSignal),
         beforeToolDispatch: input.executionAuthority?.assertCurrent,
         executionAuthority: sharedState.executionAuthority,
@@ -1994,6 +1992,7 @@ async function runFlowUnlocked(input: FlowRunInput): Promise<FlowRunResult> {
     ) {
       FlowExecutor.conversationStates.delete(effectiveConvId);
       forgetConversationCacheEntry(effectiveConvId);
+      void releaseUnsavedRunStore(effectiveConvId);
     }
   };
 

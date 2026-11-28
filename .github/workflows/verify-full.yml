@@ -829,6 +829,14 @@ jobs:
         env:
           FLUJO_DRIVE_HOME: ${{ runner.temp }}/flujo-drive
         run: npm run journey:first-use -- --viewport 390x844
+      # The tool result size limit (#1226) the way a person uses it, on the same
+      # build with a local stand-in AI: set it in Settings (a bad size is
+      # refused), see a big tool result moved behind a flujo://run/ link, then
+      # give the agent's AI step "Keep results in full" and see the whole result.
+      - name: Check the tool result size limit in the browser
+        env:
+          FLUJO_DRIVE_HOME: ${{ runner.temp }}/flujo-drive
+        run: npm run check:tool-result-limit
       # In-chat app views through a signed-in front door (#1336): the same build
       # in Localhost mode with the documented front door settings, behind a local
       # HTTPS gateway that needs a sign-in cookie. A browser signs in, opens a chat
@@ -858,6 +866,7 @@ jobs:
           path: |
             ${{ runner.temp }}/flujo-drive/evidence/first-journey/
             ${{ runner.temp }}/flujo-drive/evidence/front-door/
+            ${{ runner.temp }}/flujo-drive/evidence/tool-result-limit/
             test-results/features-first-use/
             feature-first-use-artifacts/
             test-results/features/

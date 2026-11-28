@@ -123,6 +123,8 @@ export interface NativeBrokerInput {
   executionExtensionContext?: ExecutionExtensionContext;
   /** Context window (tokens) of the model on this attempt; sizes the tool result size limit (#1226). */
   contextWindow?: number;
+  /** The step's own tool result size limit (#1226); moved results stay in the owner's conversation. */
+  toolResults?: import('@/shared/toolResultLimit').StepToolResults;
 }
 
 /** Freeze exactly the tools on this provider attempt; retain executors only here. */
@@ -313,7 +315,7 @@ export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
           toolCallId: toolInvocationId,
           server: bound[name].server, toolName: bound[name].tool,
           nodeId: bound[name].nodeId, content: transcriptText, settings,
-          contextWindow: input.contextWindow,
+          contextWindow: input.contextWindow, limit: input.toolResults?.limit,
         });
         if (bounded.spilled) {
           transcriptText = bounded.content;
@@ -333,12 +335,11 @@ export function createNativeToolPort(input: NativeBrokerInput): NativeToolPort {
           toolName: kind === 'mcp' ? bound[name].tool : name,
           nodeId: kind === 'mcp' ? bound[name].nodeId : input.receipt.owner.nodeId,
           content: JSON.stringify(result),
-          settings: {
-            ...await getRunResourceSettings(), toolResultTruncationEnabled: true, toolResultLimitMode: 'custom',
-            // JSON control-character escaping can expand a preview sixfold.
-            // Leave room for that, the resource URI and the enclosing result.
-            toolResultMaxBytes: 8 * 1024, toolResultMaxLines: 200,
-          },
+          settings: { ...await getRunResourceSettings(), toolResultMaxLines: 200 },
+          // The transport's own fixed limit, not the step's. JSON control-character
+          // escaping can expand a preview sixfold; leave room for that, the
+          // resource URI and the enclosing result.
+          limit: { mode: 'custom', maxBytes: 8 * 1024 },
         });
         result = {
           ...(result.isError === undefined ? {} : { isError: result.isError }),

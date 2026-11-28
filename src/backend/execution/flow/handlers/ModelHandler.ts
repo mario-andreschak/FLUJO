@@ -467,7 +467,7 @@ export class ModelHandler {
       onResponsesSessionChange: input.onResponsesSessionChange,
       localToolExecutors,
       shouldEndAgenticTurn,
-      runResourceMarkers,
+      runResourceMarkers, toolResults: input.toolResults,
       sessionResume,
       systemPromptPolicy: input.systemPromptPolicy,
       onSessionEvent: event => {
@@ -1015,7 +1015,7 @@ export class ModelHandler {
                       authority: opts.nativeBrokerAuthority!, signal: abortController.signal,
                       terminationProtocol, originalProcessHost: opts.nativeOriginalProcessHost,
                       executionExtensionContext: opts.executionExtensionContext,
-                      contextWindow: model.contextWindow,
+                      contextWindow: model.contextWindow, toolResults: opts.toolResults,
                     });
                   })()
                 : undefined;
@@ -1192,7 +1192,7 @@ export class ModelHandler {
               onCodexSessionChange: nativeToolPort ? undefined : opts?.onCodexSessionChange,
               responsesSession: nativeToolPort ? undefined : opts?.responsesSession,
               onResponsesSessionChange: nativeToolPort ? undefined : opts?.onResponsesSessionChange,
-              runResourceMarkers: opts?.runResourceMarkers,
+              runResourceMarkers: opts?.runResourceMarkers, toolResults: opts?.toolResults,
               sessionResume: nativeToolPort ? false : opts?.sessionResume,
               systemPromptPolicy: opts?.systemPromptPolicy,
               onSessionEvent: opts?.onSessionEvent,

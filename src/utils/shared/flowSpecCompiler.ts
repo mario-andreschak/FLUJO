@@ -46,6 +46,7 @@ import { CONDITION_SOURCE_NODE_TYPES, defaultConditionTarget, EDGE_CONDITION_TAR
 import { buildHandoffToolNameMap, type HandoffTargetRef } from '@/shared/utils/handoffNaming';
 import { normalizeExcludedSystemPromptSections } from '@/shared/utils/flujoSystemPrompt';
 import { CODE_MODE_SETTINGS, TOOL_LOADING_MODES, normalizeCodeModeSetting, normalizeToolLoadingMode, type CodeModeSetting, type ToolLoadingMode } from '@/shared/types/flow/toolLoading';
+import { TOOL_RESULT_CUSTOM_MAX_KB, TOOL_RESULT_CUSTOM_MIN_KB, kilobytesToToolResultBytes, normalizeStepToolResultLimit, toolResultBytesToKilobytes } from '@/shared/toolResultLimit';
 
 // ---------------------------------------------------------------------------
 // Recursion bounds (issue #94) — token/latency + loop guards
@@ -229,6 +230,8 @@ export interface FlowSpecNode extends FlowSpecHumanFields {
   toolLoading?: ToolLoadingMode;
   /** process only (#1448): offer `run_tool_script`. */
   codeMode?: CodeModeSetting;
+  /** process only (#1226): this step's tool result size limit, as "auto", "off" or whole kilobytes. */
+  toolResultLimit?: 'auto' | 'off' | number;
   /** process only: drop the bound model's base/system prompt from the rendered prompt. */
   excludeModelPrompt?: boolean;
   /** process only: drop the start node's prompt from this step's rendered prompt. */
@@ -1034,6 +1037,16 @@ export function compileFlowSpec(
             warn('invalid-code-mode', `Node "${key}": codeMode must be one of ${CODE_MODE_SETTINGS.join(', ')}; using auto.`, key);
           }
         }
+        // #1226: the step's own tool result size limit; absent = the workspace setting.
+        if (specNode.toolResultLimit !== undefined) {
+          const limit = specNode.toolResultLimit;
+          const maxBytes = typeof limit === 'number' ? kilobytesToToolResultBytes(String(limit)) : null;
+          if (limit === 'auto' || limit === 'off') properties.toolResultLimit = { mode: limit };
+          else if (maxBytes !== null) properties.toolResultLimit = { mode: 'custom', maxBytes };
+          else {
+            warn('invalid-tool-result-limit', `Node "${key}": toolResultLimit must be "auto", "off" or whole kilobytes from ${TOOL_RESULT_CUSTOM_MIN_KB} to ${TOOL_RESULT_CUSTOM_MAX_KB}; using the workspace setting.`, key);
+          }
+        }
       }
       if (type === 'signal') {
         // Signal node (issue #117): a pass-through that emits {topic, payload}.
@@ -1820,6 +1833,10 @@ export function flowToSpec(flow: Flow): FlowSpec {
       if (toolLoading !== 'auto') specNode.toolLoading = toolLoading;
       const codeMode = normalizeCodeModeSetting(props.codeMode);
       if (codeMode !== 'auto') specNode.codeMode = codeMode;
+      const toolResultLimit = normalizeStepToolResultLimit(props.toolResultLimit);
+      if (toolResultLimit) {
+        specNode.toolResultLimit = toolResultLimit.mode === 'custom' ? toolResultBytesToKilobytes(toolResultLimit.maxBytes) : toolResultLimit.mode;
+      }
       if (props.excludeModelPrompt === true) specNode.excludeModelPrompt = true;
       if (props.excludeStartNodePrompt === true) specNode.excludeStartNodePrompt = true;
       if (props.excludeSystemPrompt === true) specNode.excludeSystemPrompt = true;

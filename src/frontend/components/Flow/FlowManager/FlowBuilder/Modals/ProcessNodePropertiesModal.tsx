@@ -39,6 +39,11 @@ import ServerTools from './ProcessNodePropertiesModal/ServerTools/ServerTools'; 
 import ServerResources from './ProcessNodePropertiesModal/ServerTools/ServerResources'; // Adjusted path
 import WiredResources, { WiredResource } from './ProcessNodePropertiesModal/ServerTools/WiredResources';
 import ToolLoadingControls from './ProcessNodePropertiesModal/ToolLoadingControls';
+import ToolResultLimitControl, {
+  toolResultLimitFormValues,
+  toolResultLimitToSave,
+  type ToolResultLimitChoice,
+} from './ProcessNodePropertiesModal/ToolResultLimitControl';
 import { normalizeCodeModeSetting, normalizeToolLoadingMode, type CodeModeSetting, type ToolLoadingMode } from '@/shared/types/flow/toolLoading';
 import AgentTools from './ProcessNodePropertiesModal/ServerTools/AgentTools'; // Adjusted path
 import PromptTemplateEditor from './ProcessNodePropertiesModal/PromptTemplateEditor'; // Adjusted path
@@ -146,6 +151,9 @@ export const ProcessNodePropertiesModal = ({
   // #1448: deferred MCP tool descriptions and code mode.
   const [toolLoading, setToolLoading] = useState<ToolLoadingMode>('auto');
   const [codeMode, setCodeMode] = useState<CodeModeSetting>('auto');
+  // #1226: this step's own tool result size limit.
+  const [toolResultLimitChoice, setToolResultLimitChoice] = useState<ToolResultLimitChoice>('workspace');
+  const [toolResultLimitKb, setToolResultLimitKb] = useState('');
   const [requireApprovalForWrites, setRequireApprovalForWrites] = useState(false);
   const [personaAbilities, setPersonaAbilities] = useState<PersonaAbilityId[]>([]);
   // Data-flow capture editors (issue #203, Phase 3 of #186). captureKv is split
@@ -405,6 +413,9 @@ export const ProcessNodePropertiesModal = ({
       setEnableTodoTool(properties.enableTodoTool ?? false);
       setToolLoading(normalizeToolLoadingMode(properties.toolLoading));
       setCodeMode(normalizeCodeModeSetting(properties.codeMode));
+      const toolResultLimitForm = toolResultLimitFormValues(properties.toolResultLimit);
+      setToolResultLimitChoice(toolResultLimitForm.choice);
+      setToolResultLimitKb(toolResultLimitForm.sizeKb);
       setRequireApprovalForWrites(properties.requireApprovalForWrites === true);
       setPersonaAbilities(normalizePersonaAbilities(properties.personaTools));
 
@@ -600,6 +611,8 @@ export const ProcessNodePropertiesModal = ({
         // #1448: store only a choice that differs from the default `auto`.
         if (toolLoading !== 'auto') properties.toolLoading = toolLoading; else delete properties.toolLoading;
         if (codeMode !== 'auto') properties.codeMode = codeMode; else delete properties.codeMode;
+        const toolResultLimit = toolResultLimitToSave(toolResultLimitChoice, toolResultLimitKb);
+        if (toolResultLimit) properties.toolResultLimit = toolResultLimit; else delete properties.toolResultLimit;
         if (excludeSystemPromptSections.length > 0) {
           properties.excludeSystemPromptSections = excludeSystemPromptSections;
         } else {
@@ -844,6 +857,12 @@ export const ProcessNodePropertiesModal = ({
               codeMode={codeMode}
               setCodeMode={setCodeMode}
             />
+            <ToolResultLimitControl
+              choice={toolResultLimitChoice}
+              setChoice={setToolResultLimitChoice}
+              sizeKb={toolResultLimitKb}
+              setSizeKb={setToolResultLimitKb}
+            />
             {/* Issue #259: opt in to the run-scoped `todo` task list. */}
             <FormControlLabel
               sx={{ mt: 1 }}
@@ -996,7 +1015,12 @@ export const ProcessNodePropertiesModal = ({
 
       <DialogActions sx={{ px: { xs: 1.5, sm: 3 }, py: { xs: 1, sm: 1.5 }, flexShrink: 0 }}>
         <Button onClick={onClose}>{t('flows.modal.cancel')}</Button>
-        <Button onClick={handleSave} variant="contained" color="primary">
+        <Button
+          onClick={handleSave}
+          variant="contained"
+          color="primary"
+          disabled={authoringMode === 'advanced' && toolResultLimitToSave(toolResultLimitChoice, toolResultLimitKb) === null}
+        >
           {t('flows.modal.saveChanges')}
         </Button>
       </DialogActions>

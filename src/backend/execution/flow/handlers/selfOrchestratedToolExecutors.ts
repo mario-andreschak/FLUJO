@@ -57,7 +57,10 @@ export function buildSelfOrchestratedToolExecutors(context: SelfOrchestratedTool
   // present + we have a conversation to scope the write to; the request/
   // response path handles the same tool in processToolCalls instead.
   const runResourceNode = nodeId ? { nodeId, nodeName: nodeDisplayName, nodeType: 'process' as const } : undefined;
-  const hasRunResourceTool = conversationId && (tools ?? []).some((t) => t.type === 'function' && isRunResourceToolName(t.function.name));
+  // Run resources live where the step keeps its moved tool results (#1226): a
+  // run that saves nothing reads and writes the nearest saved conversation's.
+  const resourceConversationId = input.toolResults?.store ?? conversationId;
+  const hasRunResourceTool = resourceConversationId && (tools ?? []).some((t) => t.type === 'function' && isRunResourceToolName(t.function.name));
   const hasMCPResourceTool = conversationId && (tools ?? []).some((t) => t.type === 'function' && isMCPResourceToolName(t.function.name));
   const hasQuestionTool = conversationId && (tools ?? []).some((t) => t.type === 'function' && isQuestionToolName(t.function.name));
   const hasTodoTool = conversationId && (tools ?? []).some((t) => t.type === 'function' && isTodoToolName(t.function.name));
@@ -113,7 +116,7 @@ export function buildSelfOrchestratedToolExecutors(context: SelfOrchestratedTool
       ? {
           [WRITE_RESOURCE_TOOL_NAME]: async (args: Record<string, unknown>): Promise<unknown> => {
             const outcome = await executeRunResourceTool(WRITE_RESOURCE_TOOL_NAME, args, {
-              conversationId,
+              conversationId: resourceConversationId,
               node: runResourceNode,
               emit,
               ...durableContext,
@@ -126,7 +129,7 @@ export function buildSelfOrchestratedToolExecutors(context: SelfOrchestratedTool
           // Also dispatches native MCP resource URIs (issue #239) when mcpNodes is available.
           [READ_RESOURCE_TOOL_NAME]: async (args: Record<string, unknown>): Promise<unknown> => {
             const outcome = await executeRunResourceTool(READ_RESOURCE_TOOL_NAME, args, {
-              conversationId,
+              conversationId: resourceConversationId,
               maxImageTokens: modelContextWindow ? Math.min(8192, Math.floor(modelContextWindow / 8)) : 8192,
               node: runResourceNode,
               emit,
@@ -274,6 +277,7 @@ export function buildSelfOrchestratedToolExecutors(context: SelfOrchestratedTool
           beforeToolDispatch: input.beforeToolDispatch,
           authorizePersonaCoreMcp: input.executionAuthority?.authorizePersonaCoreMcp,
           contextWindow: modelContextWindow,
+          toolResults: input.toolResults,
         });
         if (!outcome.success) throw new Error(outcome.content);
         return toolLoadingResultValue(outcome.content);

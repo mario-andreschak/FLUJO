@@ -24,6 +24,25 @@ The switch and the size choice save at once. The two numbers save with **Save
 limits**. The next tool call uses the new setting; runs already waiting for a
 tool are not changed.
 
+## An agent's own limit
+
+Each AI step of an agent can set its own limit, which wins over the
+workspace setting for that step. In the agent editor, switch on **Expert
+view**, select the AI step and choose **Full settings** → tab **Input /
+output** → **Tool result size limit**:
+
+| Choice | What it does |
+|---|---|
+| Use the workspace setting (Settings → Advanced) | The default. The step follows Settings → Advanced. |
+| Automatic (based on the model) | An eighth of the step model's context window, even when the workspace switch is off. |
+| Custom size | **Size limit for this step (KB)**, whole kilobytes from 1 to 102,400. "Save changes" stays off until the number is valid. |
+| Keep results in full | Results stay in the conversation, even when the workspace limit is on. The safety net below still applies. |
+
+The choice is saved with the agent (the step's `toolResultLimit`), so it
+travels with copies, packages and exports. The line limit always comes from
+Settings → Advanced. In an agent description (FlowSpec) the same choice is
+`"toolResultLimit": "auto"`, `"off"` or a whole number of kilobytes.
+
 ## Safety net, even when the switch is off
 
 A single result may never take more than **half of the model's context
@@ -49,16 +68,38 @@ The same rule applies everywhere FLUJO hands a tool result to a model:
   program calls FLUJO's tools,
 - the tool broker for Persona and execution-extension runs, which also keeps
   its own fixed 64 KB transport limit,
-- conversations reloaded from history after an edit or a split.
+- conversations reloaded from history after an edit or a split (with the limit
+  and model of the step that produced the result),
+- a tool call that waited for your approval: it uses the conversation's store,
+  the step's limit and the run's own owner, exactly like a call that needed no
+  approval. A Bash session such a call starts now ends with the run, too.
 
-Subflows that save their own conversation (the default) follow the setting.
-A subflow set not to save its conversation has nowhere to store a moved
-result. Its results stay in full, and FLUJO's normal context fitting shortens
-them before the model would overflow.
+Where a moved result is kept:
 
-A tool call that waited for your approval runs without the conversation's
-resource store today, so its result is not moved at the tool. FLUJO's context
-fitting still protects the next model request.
+- A run that saves its conversation keeps it in that conversation.
+- A subflow that does not save its conversation keeps it in the nearest saved
+  conversation above it, usually the chat that started it. Its model reads it
+  with `read_resource`, and so can the chat's own model later. Nothing about
+  the subflow appears in the sidebar.
+- A run with no saved conversation above it (an agent an outside program calls
+  as a tool, a trigger check, a Harness experiment) keeps it in a store of its
+  own, `unsaved-<run>`. FLUJO removes that store when the run ends; the hourly
+  clean-up removes any a crash left behind.
+
+## How it is checked
+
+- `__tests__/flow/toolResultLimitRunPaths.test.ts` runs real flows against a
+  stand-in model: an approved call, a step's own limit both ways, a subflow
+  that saves nothing (including reading the result back), a run with nothing
+  saved above it, and the clean-up.
+- `__tests__/architecture/toolResultBoundSingleRule.test.ts` fails when a place
+  that sizes tool results skips the step's own limit.
+- `npm run check:tool-result-limit` (`scripts/tool-result-limit-check.mjs`)
+  drives a throwaway FLUJO in a browser with a local stand-in model: it sets the
+  limit in Settings, checks the error for `0` KB, runs an agent whose tool
+  returns about 43 KB and sees the `flujo://run/` link, then sets the agent's
+  step to "Keep results in full" and sees the full result instead. The
+  `First-use journey` job of `verify-full.yml` runs it on the production build.
 
 ## For administrators
 

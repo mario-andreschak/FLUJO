@@ -1,6 +1,6 @@
 import { createLogger } from '@/utils/logger';
 import type { RunResourceSettings } from '@/shared/types/runResources';
-import { resolveToolResultBound, type ToolResultBound } from '@/shared/toolResultLimit';
+import { resolveToolResultBound, type StepToolResultLimit, type ToolResultBound } from '@/shared/toolResultLimit';
 import { writeRunResource } from './index';
 import { measureToolResult } from './toolResultBound';
 
@@ -44,6 +44,8 @@ export interface BoundToolResultInput {
    * 'auto' limit and the safety ceiling; unknown ⇒ a 128K-token window.
    */
   contextWindow?: number;
+  /** The AI step's own limit; wins over the workspace setting. */
+  limit?: StepToolResultLimit;
 }
 
 export interface BoundToolResultOutcome {
@@ -120,7 +122,7 @@ function buildPreview(
 export async function boundToolResult(input: BoundToolResultInput): Promise<BoundToolResultOutcome> {
   const { conversationId, toolCallId, server, toolName, nodeId, content, settings } = input;
 
-  const bound = resolveToolResultBound(settings, input.contextWindow);
+  const bound = resolveToolResultBound(settings, input.contextWindow, input.limit);
   const { over, totalBytes } = measureToolResult(content, bound);
   if (!over) return { content, spilled: false };
 

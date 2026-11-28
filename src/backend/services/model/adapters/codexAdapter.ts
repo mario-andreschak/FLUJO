@@ -242,6 +242,7 @@ export class CodexAdapter implements CompletionAdapter {
       runId,
       nodeId,
       runResourceMarkers,
+      toolResults,
       sessionResume,
       codexSession,
       onCodexSessionChange,
@@ -679,12 +680,13 @@ export class CodexAdapter implements CompletionAdapter {
               // Tool-boundary bound (#251), same as the subscription path: this
               // bypasses ModelHandler's processToolCalls, so bound here or the
               // guarantee silently wouldn't apply on Codex runs.
-              if (conversationId && !executionExtensionContext) {
+              const resultStore = toolResults?.store ?? conversationId;
+              if (resultStore && !executionExtensionContext) {
                 const bound = async () => {
                   try {
                     const settings = await getRunResourceSettings();
                     return await boundToolResult({
-                      conversationId,
+                      conversationId: resultStore,
                       toolCallId: callId,
                       server,
                       toolName: originalTool,
@@ -692,6 +694,7 @@ export class CodexAdapter implements CompletionAdapter {
                       content: resultContent,
                       settings,
                       contextWindow: model.contextWindow,
+                      limit: toolResults?.limit,
                     });
                   } catch (err) {
                     log.warn('boundToolResult failed on Codex path; keeping full result', err);

@@ -367,3 +367,43 @@ describe('ProcessNodePropertiesModal Persona abilities', () => {
     expect(saved.properties).toHaveProperty('personaTools', []);
   });
 });
+
+describe('ProcessNodePropertiesModal tool result size limit (#1226)', () => {
+  const WORKSPACE_CHOICE = 'Use the workspace setting (Settings → Advanced)';
+  const chooseLimit = (label: string) => {
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Tool result size limit' }));
+    fireEvent.click(screen.getByRole('option', { name: label }));
+  };
+
+  it('saves the step\'s own size, and refuses one that is not whole kilobytes in range', async () => {
+    const onSave = jest.fn();
+    renderModal({ node: processNode('limit'), onSave });
+    fireEvent.click(await screen.findByRole('tab', { name: 'Input / output' }));
+
+    expect(screen.getByRole('combobox', { name: 'Tool result size limit' })).toHaveTextContent(WORKSPACE_CHOICE);
+    chooseLimit('Custom size');
+    const size = screen.getByRole('spinbutton', { name: 'Size limit for this step (KB)' });
+    fireEvent.change(size, { target: { value: '0' } });
+    expect(screen.getByText('Enter a whole number of kilobytes from 1 to 102,400.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+
+    fireEvent.change(size, { target: { value: '32' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    expect(onSave).toHaveBeenCalledWith('limit', expect.objectContaining({
+      properties: expect.objectContaining({ toolResultLimit: { mode: 'custom', maxBytes: 32 * 1024 } }),
+    }));
+  });
+
+  it('shows a saved choice and removes it when the step goes back to the workspace setting', async () => {
+    const onSave = jest.fn();
+    renderModal({ node: processNode('kept', { toolResultLimit: { mode: 'off' } }), onSave });
+    fireEvent.click(await screen.findByRole('tab', { name: 'Input / output' }));
+
+    expect(screen.getByRole('combobox', { name: 'Tool result size limit' })).toHaveTextContent('Keep results in full');
+    chooseLimit(WORKSPACE_CHOICE);
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    const saved = onSave.mock.calls[0][1].properties as Record<string, unknown>;
+    expect(saved).not.toHaveProperty('toolResultLimit');
+  });
+});
