@@ -616,11 +616,6 @@
       "count": 1
     }
   },
-  "src/frontend/components/Flow/FlowManager/FlowBuilder/Canvas/Canvas.tsx": {
-    "react-hooks/immutability": {
-      "count": 2
-    }
-  },
   "src/frontend/components/Flow/FlowManager/FlowBuilder/CustomNodes/index.tsx": {
     "flujo/no-raw-timers": {
       "count": 2
@@ -644,11 +639,6 @@
   "src/frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal/ServerTools/ServerTools.tsx": {
     "flujo/no-raw-timers": {
       "count": 2
-    }
-  },
-  "src/frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal/hooks/useModelManagement.ts": {
-    "react-hooks/immutability": {
-      "count": 1
     }
   },
   "src/frontend/components/Flow/FlowManager/FlowBuilder/Modals/ProcessNodePropertiesModal/hooks/useServerConnection.ts": {
@@ -757,9 +747,6 @@
   "src/frontend/components/PlannedExecutions/ExecutionModal.tsx": {
     "flujo/no-raw-timers": {
       "count": 3
-    },
-    "react-hooks/immutability": {
-      "count": 1
     }
   },
   "src/frontend/components/PlannedExecutions/SchedulePanel.tsx": {

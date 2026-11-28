@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -170,6 +170,11 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
   // Dialog mounts its portal after the first render. Track the actual element
   // so observer setup also runs when that delayed content becomes available.
   const [scrollContainer, setScrollContainer] = useState<HTMLDivElement | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const attachScrollContainer = useCallback((element: HTMLDivElement | null) => {
+    scrollContainerRef.current = element;
+    setScrollContainer(element);
+  }, []);
   const whenRef = useRef<HTMLDivElement>(null);
   const whatRef = useRef<HTMLDivElement>(null);
   const restrictionsRef = useRef<HTMLDivElement>(null);
@@ -215,7 +220,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
 
   useEffect(() => {
     if (!open) return;
-    if (scrollContainer) scrollContainer.scrollTop = 0;
+    if (scrollContainerRef.current) scrollContainerRef.current.scrollTop = 0;
   }, [open, execution]);
 
   // Load the available flows to choose from when the modal opens.
@@ -521,7 +526,7 @@ const ExecutionModal = ({ open, execution, onClose, onSaved }: ExecutionModalPro
           </Tabs>
         </Box>
         <Box
-          ref={setScrollContainer}
+          ref={attachScrollContainer}
           data-testid="execution-modal-scroll-container"
           sx={{
             flexGrow: 1,

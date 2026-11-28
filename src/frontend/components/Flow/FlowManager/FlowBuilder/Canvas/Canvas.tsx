@@ -28,6 +28,7 @@ import {
   OnConnectEnd
 } from '@xyflow/react';
 import { alpha, styled, useTheme } from '@mui/material/styles';
+import { useForkRef } from '@mui/material/utils';
 import { v4 as uuidv4 } from 'uuid';
 import { FlowNode, NodeType } from '@/frontend/types/flow/flow';
 import { flowService } from '@/frontend/services/flow';
@@ -402,7 +403,6 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
     onDrop,
     onDragOver,
     onInit,
-    reactFlowWrapper,
     onEditNode,
     onCreateNode,
     onSelectNode,
@@ -421,6 +421,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
   const storeApi = useStoreApi<FlowNode, Edge>();
 
   const flowContainerRef = useRef<HTMLDivElement | null>(null);
+  const containerRef = useForkRef(ref, flowContainerRef);
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance<FlowNode, Edge> | null>(null);
 
   // State for the node selection modal. It also carries the pending
@@ -1142,22 +1143,7 @@ export const Canvas = forwardRef<HTMLDivElement, CanvasProps>((props, ref) => {
         height: 440,
         minHeight: 440,
       } : undefined}
-      ref={(el) => {
-        // Set both refs
-        if (ref) {
-          if (typeof ref === 'function') {
-            ref(el);
-          } else {
-            ref.current = el;
-          }
-        }
-
-        if (reactFlowWrapper) {
-          reactFlowWrapper.current = el;
-        }
-
-        flowContainerRef.current = el;
-      }}
+      ref={containerRef}
     >
       <ReactFlow<FlowNode, Edge>
         nodes={nodes}

@@ -20,16 +20,33 @@ const useModelManagement = (
   const { t } = useI18n();
   log.debug('useModelManagement: Entering hook');
   const [models, setModels] = useState<Model[]>([]);
-  const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [isLoadingModels, setIsLoadingModels] = useState(open);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  // Load models when modal opens
+  // Each opening shows the loading state until a fresh model list arrives.
+  const [loadedOpen, setLoadedOpen] = useState(open);
+  if (open !== loadedOpen) {
+    setLoadedOpen(open);
+    if (open) {
+      setIsLoadingModels(true);
+      setLoadError(null);
+    }
+  }
+
   useEffect(() => {
     log.debug('useModelManagement useEffect: Checking if modal is open', { open });
-    if (open) {
-      // Clear the cache to force a fresh load of models
-      loadModels();
-    }
+    if (!open) return;
+    log.debug('loadModels: Entering method');
+    modelService.loadModels()
+      .then((modelsList) => {
+        setModels(modelsList);
+      }, (error) => {
+        log.warn('loadModels: Failed to load models:', error);
+        setLoadError(t('flows.process.loadModelsFailed'));
+      })
+      .finally(() => {
+        setIsLoadingModels(false);
+      });
   }, [open]);
 
   // Keep the cached technical name (properties.modelName) honest — silently, with no user
@@ -52,21 +69,6 @@ const useModelManagement = (
       };
     });
   }, [models, nodeData?.properties?.boundModel, nodeData?.properties?.modelName, setNodeData]);
-
-  // Load models from the service
-  const loadModels = async () => {
-    log.debug('loadModels: Entering method');
-    setIsLoadingModels(true);
-    setLoadError(null);
-    try {
-      const modelsList = await modelService.loadModels();
-      setModels(modelsList);
-    } catch (error) {
-      log.warn('loadModels: Failed to load models:', error);
-      setLoadError(t('flows.process.loadModelsFailed'));
-    }
-    setIsLoadingModels(false);
-  };
 
   const handleModelSelect = useCallback((modelId: string) => {
     log.debug('handleModelSelect: Entering method', { modelId });

@@ -2528,7 +2528,6 @@ export const FlowBuilder = React.forwardRef<FlowBuilderHandle, FlowBuilderProps>
                 onDrop={onDrop}
                 onDragOver={onDragOver}
                 onInit={onInit}
-                reactFlowWrapper={reactFlowWrapper}
                 onEditNode={openNodeProperties}
                 onCreateNode={handleCreateNode}
                 onConfigureNode={configureQuickCreatedAttachment}
