@@ -59,6 +59,7 @@ for (const [label, overrides, message] of [
   ['an empty command', { restore: `<!-- operator-step: restore -->\n${block('bash', '  ')}\n${block('powershell', 'x')}` }, /"restore" step has no bash command/],
   ['a command for a step done by hand', { stop: `<!-- operator-step: stop -->\n${block('bash', 'kill 1')}` }, /done by hand; it must not hold a bash command/],
   ['a choose step that misses a setting', { choose: `<!-- operator-step: choose -->\n${block('bash', 'export FLUJO_VERSION=1')}\n${block('powershell', choosePowerShell)}` }, /bash "choose" step sets FLUJO_VERSION; it must set exactly/],
+  ['a PowerShell -Form upload, which FLUJO refuses', { restore: `<!-- operator-step: restore -->\n${block('bash', 'curl -F x=1 "$FLUJO_PORT"')}\n${block('powershell', 'Invoke-RestMethod $env:FLUJO_PORT -Method Post -Form @{ file = 1 }')}` }, /uploads with -Form[\s\S]*curl\.exe -F/],
   ['a step that uses an unset setting', { check: `<!-- operator-step: check -->\n${block('bash', 'curl "$FLUJO_HOST"')}\n${block('powershell', 'Invoke-RestMethod $env:FLUJO_URL')}` }, /bash "check" step uses FLUJO_HOST[\s\S]*powershell "check" step uses FLUJO_URL/],
 ]) {
   test(`the runbook check refuses ${label}`, () => {

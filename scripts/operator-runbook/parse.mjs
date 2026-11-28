@@ -86,6 +86,9 @@ export function parseRunbook(markdown) {
         continue;
       }
       if (script === undefined || !script.trim()) { problems.push(`The "${id}" step has no ${shell} command.`); continue; }
+      if (shell === 'powershell' && /(^|\s)-Form\b/i.test(script)) {
+        problems.push(`The powershell "${id}" step uploads with -Form, whose unquoted multipart headers FLUJO refuses; upload with curl.exe -F instead.`);
+      }
       if (id === 'choose') {
         const assigned = assignedVariables(shell, script);
         if (!sameSet(assigned, OPERATOR_VARIABLES)) {
