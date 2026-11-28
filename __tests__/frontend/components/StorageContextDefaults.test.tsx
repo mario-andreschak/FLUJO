@@ -51,10 +51,7 @@ describe('StorageProvider fresh-install defaults', () => {
     await waitFor(() => {
       const value = JSON.parse(screen.getByTestId('settings').textContent ?? '{}');
       expect(value.settingsHydrated).toBe(true);
-      expect(value.settings.experimental).toEqual({
-        claudeSessionResume: true,
-        autoUnloadOllamaModels: true,
-      });
+      expect(value.settings.experimental).toEqual({});
     });
 
     const settingsWrite = fetchMock.mock.calls.find(([input, init]) => (
@@ -64,10 +61,7 @@ describe('StorageProvider fresh-install defaults', () => {
     expect(JSON.parse(String(settingsWrite?.[1]?.body))).toEqual({
       key: StorageKey.SPEECH_SETTINGS,
       value: expect.objectContaining({
-        experimental: expect.objectContaining({
-          claudeSessionResume: true,
-          autoUnloadOllamaModels: true,
-        }),
+        experimental: {},
       }),
     });
   });

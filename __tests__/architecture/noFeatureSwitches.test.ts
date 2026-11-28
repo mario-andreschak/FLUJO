@@ -28,8 +28,6 @@ const SETTINGS_SWITCHES: Record<string, string> = {
   'ModelAccessSettings.directModelCalls': 'Security: the owner can close direct model calls on the API.',
   'ModelAccessSettings.quickChat': 'Security: the owner can close Quick Chat and what is built on it.',
   'McpStartupSettings.lazyStart': 'The user trades start-up time for first-use time.',
-  'ExperimentalSettings.claudeSessionResume': 'Pending: always true; ModelHandler.ts (#571 split) still reads it.',
-  'ExperimentalSettings.autoUnloadOllamaModels': 'Pending: always true; ModelHandler.ts (#571 split) still reads it.',
   'ExperimentalSettings.compactionEnabled': 'Pending: ignored; ModelHandler.ts (#571 split) still reads it.',
   'ExperimentalSettings.visualCompactionEnabled': 'Pending: ignored; ModelHandler.ts (#571 split) still reads it.',
   'ExperimentalSettings.visualCompactionToolResultsOnly': 'Pending: ignored; ModelHandler.ts (#571 split) still reads it.',

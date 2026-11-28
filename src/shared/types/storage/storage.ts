@@ -256,10 +256,6 @@ export interface NetworkSettings {
  * `src/shared/config/retiredSettings.ts`.
  */
 export interface ExperimentalSettings {
-  /** @deprecated Always true: Claude sessions resume and fall back to the full history by themselves (#1449). */
-  claudeSessionResume?: boolean;
-  /** @deprecated Always true: FLUJO unloads the previous Ollama model before loading another (#1449). */
-  autoUnloadOllamaModels?: boolean;
   /**
    * When true, an MCP App that has already passed the per-server
    * `enableMcpApps` permission still waits for an explicit launch click in chat

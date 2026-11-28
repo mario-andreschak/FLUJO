@@ -243,14 +243,13 @@ function isHandoffName(name: string): boolean {
  * .ts) so warmed-cache reads stop inflating the headline.
  *
  * #154 STATUS: the efficiency fix — reuse the SDK session per `(conversationId,
- * nodeId)` via `resume` and send only the per-turn delta — is now IMPLEMENTED,
- * behind the experimental `claudeSessionResume` setting (threaded as
- * `CompletionInput.sessionResume`). When it is ON and a reusable session exists,
- * `createCompletion` resumes that session (so its prior turns are loaded
- * natively) and this function is called only over the DELTA messages. When it is
- * OFF — the default — this flatten path over the whole history remains the
- * always-correct behaviour and the fallback whenever a session can't be reused
- * (prefix change, history divergence, error, handoff, or a scoped wire view).
+ * nodeId)` via `resume` and send only the per-turn delta — is IMPLEMENTED and
+ * on for every full-history node (`CompletionInput.sessionResume`, #1449). When a
+ * reusable session exists, `createCompletion` resumes that session (so its prior
+ * turns are loaded natively) and this function is called only over the DELTA
+ * messages. This flatten path over the whole history remains the always-correct
+ * fallback whenever a session can't be reused (prefix change, history
+ * divergence, error, handoff, or a scoped wire view).
  */
 export function buildUserMessage(
   messages: OpenAI.ChatCompletionMessageParam[],

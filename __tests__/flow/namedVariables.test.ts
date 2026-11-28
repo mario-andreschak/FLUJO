@@ -25,7 +25,6 @@ import { SubflowNode } from '@/backend/execution/flow/nodes/SubflowNode';
 import { promptRenderer } from '@/backend/utils/PromptRenderer';
 import { flowService } from '@/backend/services/flow/index';
 import { modelService } from '@/backend/services/model';
-import { ModelHandler } from '@/backend/execution/flow/handlers/ModelHandler';
 import { saveItem } from '@/utils/storage/backend';
 import { StorageKey } from '@/shared/types/storage';
 import type {
@@ -110,10 +109,9 @@ describe('ProcessNode.prep — ${var:NAME} resolution', () => {
 });
 
 describe('ProcessNode.prep — Claude session resume and output folding (#294)', () => {
-  it('keeps full history when another node folds output and Claude resume is enabled', async () => {
+  it('keeps full history for Claude when another node folds output', async () => {
     renderPromptMock.mockResolvedValue('SYS');
     await saveItem(StorageKey.MODELS, [{ id: 'm', name: 'm', provider: 'anthropic', adapter: 'claude-cli', ApiKey: '' }]);
-    jest.spyOn(ModelHandler, 'isClaudeSessionResumeEnabled').mockResolvedValue(true);
     (flowService.getFlow as jest.Mock).mockResolvedValue({
       id: 'flow-1',
       name: 'f',

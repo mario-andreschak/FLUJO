@@ -22,7 +22,6 @@ it('materializes fresh authority from actual ProcessNode preparation and passes 
   const model = { id: 'model', name: 'Model', adapter: 'claude-cli', provider: 'claude-subscription', ApiKey: '' } as const;
   await saveItem(StorageKey.MODELS, [model]);
   jest.spyOn(modelService, 'getModel').mockResolvedValue(model as Awaited<ReturnType<typeof modelService.getModel>>);
-  jest.spyOn(ModelHandler, 'isClaudeSessionResumeEnabled').mockResolvedValue(false);
   const params: ProcessNodeParams = { id: 'process', label: 'Process', type: 'process', properties: { boundModel: 'model', systemPromptPolicy: 'per-turn' } };
   const node = new ProcessNode();
   const prep = await node.prep(state, params);
@@ -40,7 +39,6 @@ it.each(['Literal @receipt.txt', 'Literal ${global:UNDEFINED_PROMPT_REFERENCE}']
     const model = { id: 'literal-model', name: 'Model', adapter: 'claude-cli', provider: 'claude-subscription', ApiKey: '' } as const;
     await saveItem(StorageKey.MODELS, [model]);
     jest.spyOn(modelService, 'getModel').mockResolvedValue(model as Awaited<ReturnType<typeof modelService.getModel>>);
-    jest.spyOn(ModelHandler, 'isClaudeSessionResumeEnabled').mockResolvedValue(true);
     jest.spyOn(promptRenderer, 'renderPrompt').mockResolvedValue('Current instructions');
     jest.spyOn(promptRenderer, 'resolveChatMessageReferences').mockImplementation(async text => text);
     const state = {
@@ -62,7 +60,6 @@ it('retains a wire-only projection when a chat reference actually changes', asyn
   const model = { id: 'resolved-model', name: 'Model', adapter: 'claude-cli', provider: 'claude-subscription', ApiKey: '' } as const;
   await saveItem(StorageKey.MODELS, [model]);
   jest.spyOn(modelService, 'getModel').mockResolvedValue(model as Awaited<ReturnType<typeof modelService.getModel>>);
-  jest.spyOn(ModelHandler, 'isClaudeSessionResumeEnabled').mockResolvedValue(true);
   jest.spyOn(promptRenderer, 'renderPrompt').mockResolvedValue('Current instructions');
   jest.spyOn(promptRenderer, 'resolveChatMessageReferences').mockResolvedValue('Resolved resource content');
   const state = {
@@ -83,7 +80,6 @@ it.each(['stable', 'per-turn'] as const)('archives the effective %s system instr
   const model = { id: 'archive-policy-model', name: 'Model', adapter: 'claude-cli', provider: 'claude-subscription', ApiKey: '' } as const;
   await saveItem(StorageKey.MODELS, [model]);
   jest.spyOn(modelService, 'getModel').mockResolvedValue(model as Awaited<ReturnType<typeof modelService.getModel>>);
-  jest.spyOn(ModelHandler, 'isClaudeSessionResumeEnabled').mockResolvedValue(true);
   jest.spyOn(promptRenderer, 'renderPrompt').mockResolvedValue('Newly rendered instructions');
   const state = {
     trackingInfo: { executionId: 'archive-policy', startTime: 1, nodeExecutionTracker: [] },
@@ -104,7 +100,6 @@ it('adds no [System update] message when stable instructions drift on every turn
   const model = { id: 'drift-model', name: 'Model', adapter: 'claude-cli', provider: 'claude-subscription', ApiKey: '' } as const;
   await saveItem(StorageKey.MODELS, [model]);
   jest.spyOn(modelService, 'getModel').mockResolvedValue(model as Awaited<ReturnType<typeof modelService.getModel>>);
-  jest.spyOn(ModelHandler, 'isClaudeSessionResumeEnabled').mockResolvedValue(false);
   jest.spyOn(promptRenderer, 'resolveChatMessageReferences').mockImplementation(async text => text);
   const render = jest.spyOn(promptRenderer, 'renderPrompt');
   const state = {

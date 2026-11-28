@@ -61,8 +61,8 @@ test('stored turns are found in order, and a missing answer is reported', () => 
 });
 
 test('the speed settings check needs all three effects, judged by what was observed', () => {
-  const series = (on, { claimed = on, mcpLists = on ? 0 : 2, saves = on ? 3 : 8, parked = on ? 1 : 0, resume = false } = {}) => ({
-    on, claudeSessionResume: resume, scenarios: Object.fromEntries(['direct', 'tool', 'continue'].map((scenario) => [scenario, {
+  const series = (on, { claimed = on, mcpLists = on ? 0 : 2, saves = on ? 3 : 8, parked = on ? 1 : 0 } = {}) => ({
+    on, scenarios: Object.fromEntries(['direct', 'tool', 'continue'].map((scenario) => [scenario, {
       parkedAfter: parked, runs: Array.from({ length: 4 }, (_, index) => ({ claimed: index > 0 && claimed, mcpLists, saves })) }])) });
   const off = series(false);
   assert.doesNotThrow(() => assertSpeedSettingsWork(off, series(true)));
@@ -78,7 +78,7 @@ test('the speed settings check needs all three effects, judged by what was obser
   assert.doesNotThrow(() => assertSpeedSettingsWork(off, oneMiss));
   oneMiss.scenarios.tool.runs[3] = { ...oneMiss.scenarios.tool.runs[3], claimed: false, spareMiss: 'options' };
   assert.throws(() => assertSpeedSettingsWork(off, oneMiss), /only 1 of 3 later tool requests .*\(differing: options\)/);
-  const resumed = series(true, { resume: true });
+  const resumed = series(true);
   resumed.scenarios.continue.runs = resumed.scenarios.continue.runs.map((run) => ({ ...run, claimed: false }));
   assert.doesNotThrow(() => assertSpeedSettingsWork(off, resumed));
   assert.equal(median([3, 1, 2]), 2);

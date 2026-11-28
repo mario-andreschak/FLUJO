@@ -9,8 +9,8 @@
  * with conversation length. The efficient fix is to REUSE the SDK session across
  * turns of the same single-node Flow via the SDK's `resume` option
  * (`options.resume?: string` loads a persisted session's history) and send only
- * the per-turn delta. That fix is now wired through this registry and gated by
- * the experimental `claudeSessionResume` setting.
+ * the per-turn delta. That fix is wired through this registry and is on for
+ * every full-history Claude subscription node (#1449).
  *
  * WHY A REGISTRY. A session is only safe to resume while the reusable prefix is
  * stable: each Process/MCP node has its OWN systemPrompt + tool set, so the key
@@ -23,8 +23,8 @@
  * accounting checkpoints and process/session leases. The adapter READS it (to
  * decide whether to `resume` this turn) and WRITES it (recording the captured
  * session id + watermark after a successful run). The actual send-path behaviour
- * change lives in the adapter and is gated by the experimental
- * `claudeSessionResume` setting; this module stays behaviour-agnostic.
+ * change lives in the adapter (`CompletionInput.sessionResume`); this module
+ * stays behaviour-agnostic.
  */
 
 import { getCurrentWorkspace } from '@/utils/workspace';

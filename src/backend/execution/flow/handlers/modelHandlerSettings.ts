@@ -5,16 +5,6 @@ import { createLogger } from '@/utils/logger';
 
 const log = createLogger('backend/flow/execution/handlers/modelHandlerSettings');
 
-export async function isExperimentalFlagEnabled(name: 'claudeSessionResume'): Promise<boolean> {
-  try {
-    const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
-    return Boolean(settings?.experimental?.[name]);
-  } catch (err) {
-    log.warn(`Failed to read ${name} setting; defaulting to disabled`, { err });
-    return false;
-  }
-}
-
 /**
  * Read the experimental summarizing-compaction settings (issue #248) from the
  * persisted Settings blob. Best-effort: any failure reads as disabled, so the
@@ -44,20 +34,6 @@ export async function getCompactionGlobalSettings(): Promise<{
   } catch (err) {
     log.warn('Failed to read compaction settings; defaulting to disabled', { err });
     return { compactionEnabled: false, visualCompactionEnabled: false };
-  }
-}
-
-/**
- * Read the `autoUnloadOllamaModels` flag from persisted settings.
- * Best-effort: any failure returns false (disabled).
- */
-export async function isAutoUnloadOllamaEnabled(): Promise<boolean> {
-  try {
-    const settings = await loadItem<Settings | undefined>(StorageKey.SPEECH_SETTINGS, undefined);
-    return Boolean(settings?.experimental?.autoUnloadOllamaModels);
-  } catch (err) {
-    log.warn('Failed to read autoUnloadOllamaModels setting; defaulting to disabled', { err });
-    return false;
   }
 }
 

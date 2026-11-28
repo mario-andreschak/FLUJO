@@ -1,11 +1,8 @@
 import { createDefaultSettings } from '@/shared/config/defaultSettings';
 
 describe('fresh-install settings', () => {
-  it('holds no feature switches, only the values still pinned for the #571 split (#1449)', () => {
-    expect(createDefaultSettings().experimental).toEqual({
-      claudeSessionResume: true,
-      autoUnloadOllamaModels: true,
-    });
+  it('holds no feature switches (#1449)', () => {
+    expect(createDefaultSettings().experimental).toEqual({});
   });
 
   it('returns independent settings objects', () => {
