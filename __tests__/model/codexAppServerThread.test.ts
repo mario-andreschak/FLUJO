@@ -21,6 +21,7 @@ beforeEach(() => {
     if (method === 'thread/start' || method === 'thread/resume') return { thread: { id: 'thread-1' }, model: 'model' };
     if (method === 'turn/start') return { turn: { id: 'turn-1', status: 'inProgress' } };
     if (method === 'turn/steer') return { turnId: 'turn-1' };
+    if (method === 'thread/turns/list') return { data: [], nextCursor: null, backwardsCursor: null };
     return {};
   });
   jest.mocked(startOwnedCodexAppServer).mockReset().mockImplementation(async input => {

@@ -144,6 +144,13 @@ export default defineConfig([
     },
   },
   {
+    files: ['src/**/*.{js,jsx,ts,tsx}'],
+    ignores: ['src/utils/transientFileRetry.ts'],
+    rules: {
+      'flujo/no-hand-rolled-file-retry': 'error',
+    },
+  },
+  {
     files: ['src/frontend/**/*.tsx', 'src/app/**/*.tsx', 'src/frontend/**/hooks/**/*.ts'],
     ignores: ['src/frontend/hooks/timing.ts'],
     rules: {

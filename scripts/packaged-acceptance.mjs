@@ -15,6 +15,7 @@ import { parseArgs } from 'node:util';
 import { runAcceptance } from './packaged-acceptance/checks.mjs';
 import { createFlujoProbe } from './packaged-acceptance/flujo-probe.mjs';
 import { createDockerVolume, createHostVolume } from './packaged-acceptance/low-disk.mjs';
+import { createMcpChecks, startReferenceServers } from './packaged-acceptance/mcp-checks.mjs';
 import { startStandIns } from './packaged-acceptance/stand-ins.mjs';
 import {
   DOCKER_HOST_NAME, OWNER_LABEL, assertHostIdentity, createDockerTarget, createHostTarget, dockerCommand, dockerStandInHost,
@@ -209,8 +210,15 @@ export async function main(argv = process.argv.slice(2)) {
     else await hostTargets(options, sandbox, report, setup);
     report.volume = setup.volume.description;
     const probe = createFlujoProbe({ JSZip: loadJSZip([root, ...setup.appRoots]) });
+    // The host forms also run the MCP checks; the SDK may come from the installed app.
+    let mcp;
+    if (options.form !== 'docker') {
+      const reference = await startReferenceServers({ moduleRoots: [root, ...setup.appRoots] });
+      setup.cleanups.push(['MCP reference servers', () => reference.stop()]);
+      mcp = createMcpChecks(reference);
+    }
     Object.assign(report, await runAcceptance({ candidate: setup.candidate, previous: setup.previous, probe,
-      volume: setup.volume, standIns: setup.standIns, log: printCheck }));
+      volume: setup.volume, standIns: setup.standIns, mcp, log: printCheck }));
   } catch (error) {
     report.result = 'failed';
     report.failure ??= error.message;

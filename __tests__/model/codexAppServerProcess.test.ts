@@ -43,6 +43,12 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
     process.stdout.write(JSON.stringify({id:m.id,result:{}})+'\\n'+JSON.stringify({id:'input-1',method:'item/tool/requestUserInput',params:{threadId:'thread-1',turnId:'turn-1',questions:[]}})+'\\n'+
       (mode==='incoming-resolved' ? JSON.stringify({method:'serverRequest/resolved',params:{threadId:'thread-1',requestId:'input-1'}})+'\\n' : ''));return;
   }
+  // Like Codex's own helpers (git): on Windows outside Node's kill-on-close
+  // job, on POSIX in the same process group.
+  if(mode==='helper' && m.method==='initialize'){
+    const helper=require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore',detached:process.platform==='win32'});
+    process.stdout.write(JSON.stringify({id:m.id,result:{helperPid:helper.pid}})+'\\n');return;
+  }
   if(mode==='silent')return;
   if(mode==='malformed'){process.stdout.write('{invalid\\n');return;}
   if(mode==='unknown'){process.stdout.write(JSON.stringify({id:m.id+100,result:{}})+'\\n');return;}
@@ -210,6 +216,17 @@ it('registers the born child before writing and brands it for only its owner',as
   expect(await registration.exit).toEqual({code:0,signal:null});
   await registration.close;
   expect(JSON.parse((await wire()).trim()).method).toBe('initialize');
+});
+
+it('a forced stop also ends the helpers Codex started, so cancelling leaves no orphan process',async()=>{
+  const child=await startOwnedCodexAppServer(options('helper'));children.push(child);
+  const {helperPid}=await child.request('initialize',{}) as {helperPid:number};
+  expect(()=>process.kill(helperPid,0)).not.toThrow();
+  child.registration.requestStop();
+  await child.registration.close;
+  const deadline=Date.now()+10000;
+  while(Date.now()<deadline){try{process.kill(helperPid,0);}catch{break;}await new Promise(resolve=>setTimeout(resolve,50));}
+  expect(()=>process.kill(helperPid,0)).toThrow();
 });
 
 it('closes the original child when registration fails without any wire input',async()=>{

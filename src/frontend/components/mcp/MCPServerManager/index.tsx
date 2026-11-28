@@ -13,6 +13,9 @@ import { SaveAndAuthenticateResult, type ServerSetupTab } from './Modals/ServerM
 import McpConnectionWizard from './McpConnectionWizard';
 import ServerDetailsModal from './ServerDetailsModal';
 import McpAgentJourney from './McpAgentJourney';
+import McpServerDeleteDialog from './McpServerDeleteDialog';
+import type { DeletePlan } from '@/shared/types/deletePlan';
+import type { McpServerUsage } from '@/shared/types/mcp/serverUsage';
 import { useMcpBundleInstaller } from './McpBundleInstaller';
 import McpAppsDashboard, { type McpAppsDashboardSelection } from '../McpAppsDashboard';
 import type { ToolTesterPrefill } from '../MCPToolManager/ToolTester';
@@ -149,6 +152,13 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
   const [showImportModal, setShowImportModal] = useState(false);
   const [importText, setImportText] = useState('');
   const [importError, setImportError] = useState<string | null>(null);
+  // #1389: a Connected App that flows, Personas or automations still use asks what each place uses instead.
+  const [pendingDelete, setPendingDelete] = useState<{
+    usage: McpServerUsage;
+    error: string | null;
+    notice: string | null;
+  } | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [importFormat, setImportFormat] = useState<McpFormatId>('claude');
   const [exportMenuAnchor, setExportMenuAnchor] = useState<null | HTMLElement>(null);
@@ -395,10 +405,28 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
     await retryServer(serverName);
   };
 
-  const handleServerDelete = async (serverName: string) => {
+  const runServerDelete = async (serverName: string, plan?: DeletePlan) => {
     log.debug(`Deleting server: ${serverName}`);
-    await deleteServer(serverName);
+    setDeleteBusy(true);
+    try {
+      const result = await deleteServer(serverName, plan);
+      if (result.status === 'deleted') {
+        setPendingDelete(null);
+      } else if (result.status === 'in-use') {
+        setPendingDelete({ usage: result.usage, error: null, notice: result.changed ? t('flows.delete.changed') : null });
+      } else {
+        setPendingDelete((current) => ({
+          usage: current?.usage ?? { serverName, uses: [] },
+          error: result.error || t('mcp.delete.failed', { name: serverName }),
+          notice: null,
+        }));
+      }
+    } finally {
+      setDeleteBusy(false);
+    }
   };
+
+  const handleServerDelete = (serverName: string) => runServerDelete(serverName);
 
   const handleEditServer = (server: MCPServerConfig) => {
     log.debug(`Editing server: ${server.name}`);
@@ -1276,6 +1304,15 @@ const ServerManager: React.FC<ServerManagerProps> = ({ onServerModalToggle }) =>
       />
       {/* Multi-user mode (#575): "someone else saved this server first". */}
       <EditConflictHost kind="mcp-server" onReload={loadServers} />
+      <McpServerDeleteDialog
+        usage={pendingDelete?.usage ?? null}
+        servers={servers.map((server) => ({ name: server.name, disabled: server.disabled === true }))}
+        busy={deleteBusy}
+        error={pendingDelete?.error ?? null}
+        notice={pendingDelete?.notice ?? null}
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={(plan) => { if (pendingDelete) void runServerDelete(pendingDelete.usage.serverName, plan); }}
+      />
 
       {modern ? (
         <McpConnectionWizard

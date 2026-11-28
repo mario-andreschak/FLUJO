@@ -38,6 +38,7 @@ import { prepareCodexModelCatalogSnapshot } from './codexModelCatalog';
 import { prepareCodexRuntimeEnvironment } from './codexRuntimeHome';
 import { acquireOrdinaryCodexExecutable, readCodexRuntimeCompatibility } from './codexRuntimeUpdate';
 import { createCodexAppServerThread } from './codexAppServerThread';
+import { nativeCompactionCarry } from '@/backend/execution/flow/compaction/nativeCompactionCarry';
 import { readCodexAllowanceAccountKey, recordCodexRateLimitUpdate } from '@/backend/services/model/allowance/codex';
 import { answerCodexUserInput, answerCodexAsyncUserInput } from './codexUserInput';
 import { mapCodexUsage, subtractCodexUsage, subtractKnownCodexUsage, type CodexUsageLike } from './codexUsage';
@@ -571,18 +572,24 @@ export class CodexAdapter implements CompletionAdapter {
           description,
           inputSchema,
           ...(annotations ? { annotations } : {}),
-          handler: async (args) => {
+          handler: async (args, _requestIdentity, requestSignal) => {
             if (shouldEndAgenticTurn?.()) return endedToolResult();
             if (executionExtensionContext) {
               await assertExecutionModelTool(executionExtensionContext, fnName, decoded);
             }
+            // A cancelled run, or Codex dropping this call, ends its approval wait.
+            const callSignal = requestSignal ? AbortSignal.any([abortController.signal, requestSignal]) : abortController.signal;
             const callId = `call_${uuidv4()}`;
             const argsJson = JSON.stringify(args ?? {});
             // Emit before the approval gate and mcpService call. Large/slow tools
             // therefore appear in chat as pending as soon as the MCP request
             // reaches FLUJO instead of after their result is available, with the
             // arguments paced into the card while they are still being read (#337).
-            await streamToolCall({ id: callId, name: readableName, argsJson });
+            try { await streamToolCall({ id: callId, name: readableName, argsJson }, callSignal); } catch (error) {
+              if (callSignal.aborted && unansweredTools.has(callId)) recordToolResult({ id: callId,
+                resultContent: 'The run ended before this tool call started; it did not run.' });
+              throw error;
+            }
             const effectiveArgs = await applyPresetArguments(args ?? {}, presetArgs, context);
             const denied = await gate(
               callId,
@@ -600,6 +607,7 @@ export class CodexAdapter implements CompletionAdapter {
                   ? { ...link, cancelledReason: reason, isError: true }
                   : undefined;
               },
+              callSignal,
             );
             if (denied) return denied;
             await beforeToolDispatch?.();
@@ -1046,6 +1054,15 @@ export class CodexAdapter implements CompletionAdapter {
       ordinaryThread = ordinaryThreadPath ? createCodexAppServerThread({
         executable: codexExecutable!, env: nativeCodexEnvironment(runtime.env), config,
         options: threadOptions, resumeThreadId, outputSchema: input.outputSchema, maxTurns: input.maxTurns,
+        serviceTier: model.serviceTier ?? 'default',
+        // Codex's own compaction keeps whatever its summary says. FLUJO's
+        // standing instructions and receipts go back in right after it.
+        compactionCarry: () => {
+          const carry = nativeCompactionCarry([...messages, ...transcript]);
+          if (carry && !carry.complete) ordinarySessionCompatible = false;
+          return carry?.text;
+        },
+        onCompactionCarryLost: () => { ordinarySessionCompatible = false; },
         ...(forkCandidate ? { fork: { threadId: forkCandidate.session.threadId, lastTurnId: forkCandidate.checkpoint.turnId,
           ...(forkCandidate.session.nativeSessionId ? { sessionId: forkCandidate.session.nativeSessionId } : {}) } } : {}),
         beforeContinuation: input.beforeModelDispatch,
@@ -1596,7 +1613,7 @@ export class CodexAdapter implements CompletionAdapter {
           },
         },
       ],
-      ...(!unknownResumedSdkUsage && !unknownForkUsage ? { usage: {
+      ...(!unknownResumedSdkUsage && !unknownForkUsage && !ordinaryThread?.usageUnknown() ? { usage: {
         prompt_tokens: mappedUsage.promptTokens,
         completion_tokens: mappedUsage.completionTokens,
         total_tokens: mappedUsage.totalTokens,

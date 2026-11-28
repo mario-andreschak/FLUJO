@@ -5,6 +5,7 @@ import { createLogger } from '@/utils/logger';
 import { loadServerConfigs, saveConfig } from '@/backend/services/mcp/config';
 import { MCPStreamableConfig } from '@/shared/types/mcp';
 import { mcpService } from '@/backend/services/mcp';
+import { revokeOAuthGrant } from '@/backend/services/mcp/oauth';
 
 const log = createLogger('api/oauth/reset');
 
@@ -57,6 +58,9 @@ async function POST_handler(request: NextRequest) {
       );
     }
 
+    // End the grant at the provider first, so the forgotten refresh token stays unusable.
+    const revokedAtProvider = await revokeOAuthGrant(serverConfig);
+
     // Clear OAuth tokens and related data
     serverConfig.oauthTokens = undefined;
     serverConfig.oauthCodeVerifier = undefined;
@@ -100,6 +104,7 @@ async function POST_handler(request: NextRequest) {
     
     return NextResponse.json({
       success: true,
+      revokedAtProvider,
       message: `OAuth tokens reset for ${serverName}. The server will require re-authentication on next connection.`
     });
 

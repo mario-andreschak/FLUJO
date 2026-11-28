@@ -31,6 +31,28 @@ describe('Codex tool bridge', () => {
       await call('actual-owned-thread'); expect(dispatched).toHaveBeenCalledTimes(1);
     } finally { await bridge.close(); }
   });
+  it.each(['Codex drops the call', 'the bridge closes'])('tells a running tool call when %s', async ending => {
+    let signal: AbortSignal | undefined, reached!: () => void;
+    const started = new Promise<void>(resolve => { reached = resolve; });
+    const bridge = await startCodexToolBridge([{ name: 'slow_tool', description: '', inputSchema: {},
+      handler: async (_args, _identity, requestSignal) => {
+        signal = requestSignal; reached();
+        await new Promise(resolve => requestSignal!.addEventListener('abort', resolve, { once: true }));
+        return { content: [] };
+      } }]);
+    const request = new AbortController();
+    const response = fetch(bridge.url, { method: 'POST', signal: request.signal,
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'slow_tool', arguments: {} } }) }).catch(() => undefined);
+    try {
+      await started;
+      expect(signal!.aborted).toBe(false);
+      if (ending === 'Codex drops the call') request.abort(); else await bridge.close();
+      await new Promise<void>(resolve => { if (signal!.aborted) resolve(); else signal!.addEventListener('abort', () => resolve(), { once: true }); });
+      expect(signal!.aborted).toBe(true);
+    } finally { await response; await bridge.close(); }
+  });
+
   it('advertises host instructions during MCP initialization', async () => {
     const bridge = await startCodexToolBridge([], 'Use FLUJO tools as the filesystem authority.');
     const client = new Client({ name: 'codex-bridge-test', version: '1.0.0' });

@@ -88,10 +88,8 @@ export enum StorageKey {
   SNAPSHOT_RETENTION_POLICY = 'snapshot_retention_policy',
   /** Memory embeddings sidecar collection (issue #451), keyed by safe Persona id. */
   MEMORY_EMBEDDINGS = 'memory_embeddings',
-  /** Workspace choice for Persona runtime retention: off, measure only, or clean up (#481). */
-  PERSONA_RUNTIME_RETENTION_SETTINGS = 'persona_runtime_retention_settings',
-  /** Recent Persona runtime retention sweep summaries: counts and sizes only (#481). */
-  PERSONA_RUNTIME_RETENTION_REPORTS = 'persona_runtime_retention_reports'
+  /** Persona history cleanup rollout: measuring or cleaning up, and why (#481). */
+  PERSONA_RUNTIME_RETENTION_STATE = 'persona_runtime_retention_state'
 }
 
 export const StorageKeys = {
@@ -136,8 +134,7 @@ export const StorageKeys = {
   TELEMETRY_STATE: StorageKey.TELEMETRY_STATE,
   SNAPSHOT_RETENTION_POLICY: StorageKey.SNAPSHOT_RETENTION_POLICY,
   MEMORY_EMBEDDINGS: StorageKey.MEMORY_EMBEDDINGS,
-  PERSONA_RUNTIME_RETENTION_SETTINGS: StorageKey.PERSONA_RUNTIME_RETENTION_SETTINGS,
-  PERSONA_RUNTIME_RETENTION_REPORTS: StorageKey.PERSONA_RUNTIME_RETENTION_REPORTS,
+  PERSONA_RUNTIME_RETENTION_STATE: StorageKey.PERSONA_RUNTIME_RETENTION_STATE,
 } as const;
 
 /**
@@ -284,14 +281,6 @@ export interface ExperimentalSettings {
    * of `enabled` (a backend behaviour, not a UI reveal).
    */
   claudeSessionResume?: boolean;
-  /**
-   * When true, the Antigravity CLI adapter keeps one native CLI conversation
-   * per conversation node and reopens it on later turns, sending only the new
-   * messages (issue #1094). Any change to the instructions, tools, model or
-   * key, or an edited history, replays the full conversation. Off by default;
-   * a missing value is disabled.
-   */
-  antigravitySessionResume?: boolean;
   /**
    * When true, the Claude Subscription adapter keeps one started Claude Code
    * process parked for the next request with the same model, instructions,

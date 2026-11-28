@@ -12,16 +12,20 @@ import {
   settle, tail,
 } from '../flujo-drive.mjs';
 import { drillEnvironment } from '../maintainer-drill.mjs';
-import { problemsFromReport } from './problems.mjs';
+import { problemsFromReport, runnerCause, runnerNotes } from './problems.mjs';
 import { loadPlan, slug } from './steps.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SANDBOX_PREFIX = 'flujo-sweep-';
 const RESERVED_PORT = '4200';
 const INSTALL_ATTEMPTS = 3;
+const STARTUP_ATTEMPTS = 3;
+const RUNNER_RETRIES = 2;
+const RUNNER_PAUSE_MS = 15_000;
 const ANSWER_WAIT_MS = 120_000;
 const SANDBOX_REMOVAL_MS = 60_000;
-export const EXIT = Object.freeze({ passed: 0, problems: 1, broken: 2 });
+export const EXIT = Object.freeze({ passed: 0, problems: 1, broken: 2, runner: 3 });
+const delay = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 
 export const USAGE = `Usage: node scripts/release-sweep/run.mjs [target] [options]
 
@@ -44,9 +48,16 @@ Options:
   --check-timeout SECONDS  Longest one check may take (default 180).
   --page-timeout SECONDS   Longest all checks of one entry may take together (default 600).
   --startup-timeout SECONDS  Longest the instance may take to answer (default 600).
+  --total-timeout SECONDS  Longest the whole sweep may take, install included (default 3600); steps
+                           it does not reach in time are listed as not run.
   --no-warm                Skip loading every swept page once before the sweep (dev mode only).
 
-Exit code 0: every runnable step passed. 1: the sweep found problems. 2: the sweep could not run.`;
+A failed step runs once more in a fresh browser and counts as a problem only if it fails again.
+Failures the sweep machine causes (disk, memory, network, its own browser) are retried and, if they
+persist, listed apart: they are never counted as FLUJO problems.
+
+Exit code 0: every runnable step passed. 1: the sweep found problems. 2: FLUJO could not be
+installed or started. 3: the sweep machine failed, so the sweep says nothing about FLUJO.`;
 
 class UsageError extends Error {}
 
@@ -132,7 +143,7 @@ function runToEnd(args, { cwd, env, timeoutMs, logFile }) {
 }
 
 /** Installs the published package into the sandbox with empty npm settings, so no private registry or token is used. */
-async function installRelease(version, sandbox, env, log) {
+async function installRelease(version, sandbox, env, log, deadline) {
   const consumer = path.join(sandbox, 'consumer');
   mkdirSync(consumer, { recursive: true });
   writeFileSync(path.join(consumer, 'package.json'), '{"private":true}\n');
@@ -141,15 +152,16 @@ async function installRelease(version, sandbox, env, log) {
   const installLog = path.join(sandbox, 'install.log');
   // A version published a minute ago may not be on every registry mirror yet, and networks drop; try a few times.
   let code;
-  for (let attempt = 1; attempt <= INSTALL_ATTEMPTS; attempt += 1) {
+  for (let attempt = 1; attempt <= INSTALL_ATTEMPTS && deadline - Date.now() > 60_000; attempt += 1) {
     log(`Installing flujo-ai@${version} from npm into ${consumer}${attempt > 1 ? ` (try ${attempt} of ${INSTALL_ATTEMPTS})` : ''}`);
     code = await runToEnd([npmCli(), 'install', `flujo-ai@${version}`, '--ignore-scripts', '--no-audit', '--no-fund',
       '--registry=https://registry.npmjs.org', `--userconfig=${emptyConfig}`, `--globalconfig=${emptyConfig}`], {
-      cwd: consumer, env: { ...env, npm_config_cache: path.join(sandbox, 'npm-cache') }, timeoutMs: 900_000, logFile: installLog,
+      cwd: consumer, env: { ...env, npm_config_cache: path.join(sandbox, 'npm-cache') }, timeoutMs: Math.min(900_000, deadline - Date.now()), logFile: installLog,
     });
     if (code === 0) break;
     if (attempt < INSTALL_ATTEMPTS) await new Promise((resolve) => { setTimeout(resolve, 30_000 * attempt); });
   }
+  if (code === undefined) throw new Error("npm-cli.js took longer than the sweep's time limit allows.");
   if (code !== 0) throw new Error(`npm install flujo-ai@${version} failed ${INSTALL_ATTEMPTS} times (exit ${code}):\n${tail(installLog)}`);
   const appRoot = path.join(consumer, 'node_modules', 'flujo-ai');
   const manifest = JSON.parse(readFileSync(path.join(appRoot, 'package.json'), 'utf8'));
@@ -175,7 +187,7 @@ async function waitUntil(condition, timeoutMs, stepMs = 1_000) {
 }
 
 /** Starts FLUJO with all its data inside a new temporary folder. The handle says what `stopInstance` removes. */
-async function startInstance(target, options, log) {
+async function startInstance(target, options, log, deadline) {
   const sandbox = mkdtempSync(path.join(os.tmpdir(), SANDBOX_PREFIX));
   const handle = { sandbox, logFile: path.join(sandbox, 'flujo.log'), pid: undefined, baseUrl: undefined };
   try {
@@ -189,7 +201,7 @@ async function startInstance(target, options, log) {
     if (target.kind === 'release') {
       env = { ...drillEnvironment(process.env, sandbox), NODE_ENV: 'production', NEXT_TELEMETRY_DISABLED: '1' };
       for (const dir of [env.HOME, env.TEMP]) mkdirSync(dir, { recursive: true });
-      cwd = await installRelease(target.version, sandbox, env, log);
+      cwd = await installRelease(target.version, sandbox, env, log, deadline);
       args = [path.join(cwd, 'bin', 'flujo.mjs'), '--no-open', '--port', String(port)];
     } else {
       if (target.mode === 'start' && !existsSync(path.join(target.appDir, '.next', 'BUILD_ID'))) {
@@ -205,12 +217,13 @@ async function startInstance(target, options, log) {
     handle.pid = child.pid;
     handle.baseUrl = `http://127.0.0.1:${port}/`;
     log(`Starting FLUJO at ${handle.baseUrl} (pid ${child.pid}, everything in ${sandbox}).`);
+    const startupMs = Math.max(0, Math.min(Number(options['startup-timeout'] ?? 600) * 1000, deadline - Date.now()));
     const ready = await waitUntil(async () => {
       if (!isAlive(child.pid)) throw new Error(`FLUJO exited during startup. Last log lines:\n${tail(handle.logFile)}`);
       const { api, page } = await probe(handle.baseUrl);
       return api && page;
-    }, Number(options['startup-timeout'] ?? 600) * 1000, 2_000);
-    if (!ready) throw new Error(`FLUJO did not answer within ${options['startup-timeout'] ?? 600}s. Last log lines:\n${tail(handle.logFile)}`);
+    }, startupMs, 2_000);
+    if (!ready) throw new Error(`FLUJO did not answer within ${Math.round(startupMs / 1000)}s. Last log lines:\n${tail(handle.logFile)}`);
     return handle;
   } catch (error) {
     error.handle = handle;
@@ -238,6 +251,35 @@ async function stopInstance(handle, out, log) {
   }, SANDBOX_REMOVAL_MS, 5_000);
   log(removed ? `Stopped FLUJO${handle.pid ? ` (pid ${handle.pid})` : ''} and removed ${handle.sandbox}.`
     : `! Stopped FLUJO, but ${handle.sandbox} was still locked after ${SANDBOX_REMOVAL_MS / 1000}s; delete that folder by hand.`);
+}
+
+/** Starting over in a new folder helps when the sweep machine failed (network, disk); a FLUJO failure is reported at once. */
+async function startWithRetries(target, options, log, deadline) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await startInstance(target, options, log, deadline);
+    } catch (error) {
+      const cause = runnerCause(error.message);
+      if (!cause || attempt >= STARTUP_ATTEMPTS || deadline - Date.now() < 10 * 60_000) throw error;
+      log(`! ${cause}; starting over in a new folder (try ${attempt + 1} of ${STARTUP_ATTEMPTS}).`);
+      await stopInstance(error.handle, undefined, log);
+      await delay(RUNNER_PAUSE_MS * attempt);
+    }
+  }
+}
+
+/** The sweep's own browser; failing to start it is always the sweep machine's fault, never FLUJO's. */
+async function launchBrowser() {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await loadChromium();
+    } catch (error) {
+      if (attempt >= STARTUP_ATTEMPTS) {
+        throw Object.assign(new Error(`The sweep's browser would not start: ${error.message}`), { runnerCause: "the sweep's browser stopped or would not start" });
+      }
+      await delay(RUNNER_PAUSE_MS * attempt);
+    }
+  }
 }
 
 /** After a failure: is FLUJO still there? Dev mode can be busy compiling for a while, so wait before deciding it is gone. */
@@ -282,8 +324,8 @@ async function save(page, kind, file) {
   else writeFileSync(file, await page.locator('body').ariaSnapshot({ timeout: 15_000 }));
 }
 
-/** Runs one check in a fresh browser session, within `budgetMs`. */
-async function runCheck(browser, check, { baseUrl, viewport, out, budgetMs }) {
+/** Runs one check in a fresh browser session, within `budgetMs`. Later tries keep their own evidence files. */
+async function runCheck(browser, check, { baseUrl, viewport, out, budgetMs, attempt = 1 }) {
   const context = await browser.newContext({ viewport, locale: 'en-US' });
   await context.addInitScript(() => { try { localStorage.setItem('flujo.locale', 'en'); } catch { /* storage blocked */ } });
   const page = await context.newPage();
@@ -311,7 +353,7 @@ async function runCheck(browser, check, { baseUrl, viewport, out, budgetMs }) {
     await Promise.race([run, budget]);
     return finish({ status: 'passed' });
   } catch (error) {
-    const base = path.join(check.entry, `${slug(check.label)}-failed`);
+    const base = path.join(check.entry, `${slug(check.label)}-failed${attempt > 1 ? `-try${attempt}` : ''}`);
     const evidence = {};
     for (const [kind, file] of [['shot', `${base}.png`], ['aria', `${base}.aria.yml`]]) {
       try {
@@ -338,11 +380,27 @@ async function runCheck(browser, check, { baseUrl, viewport, out, budgetMs }) {
   }
 }
 
-export async function sweep(plan, { baseUrl, viewport, out, log, checkTimeoutMs, pageTimeoutMs, browser, pid }) {
+/**
+ * Walks the plan. A failed check runs once more in a fresh browser and is a problem only if it fails again
+ * (the first failure is kept, so its fingerprint does not depend on how much time the second try had).
+ * A failure the sweep machine caused is retried RUNNER_RETRIES times, then marked "runner", never "failed".
+ * `browsers.current` is relaunched with `browsers.launch` when the browser itself has died.
+ */
+export async function sweep(plan, {
+  baseUrl, viewport, out, log, checkTimeoutMs, pageTimeoutMs, totalTimeoutMs = Infinity, deadline = Infinity, browsers, pid,
+  runCheckImpl = runCheck, stillAnsweringImpl = stillAnswering, pause = delay, runnerPauseMs = RUNNER_PAUSE_MS,
+}) {
   const entries = [];
   let instanceProblem;
+  const browserNow = async () => {
+    if (browsers.current?.isConnected?.() === false && browsers.launch) {
+      await browsers.current.close().catch(() => undefined);
+      browsers.current = await browsers.launch();
+    }
+    return browsers.current;
+  };
   for (const entry of plan) {
-    const pageDeadline = Date.now() + pageTimeoutMs;
+    const pageDeadline = Math.min(Date.now() + pageTimeoutMs, deadline);
     const checks = [];
     log(`\n${entry.title} (${entry.file})`);
     for (const check of entry.checks) {
@@ -350,11 +408,47 @@ export async function sweep(plan, { baseUrl, viewport, out, log, checkTimeoutMs,
       let result;
       if (instanceProblem) result = { status: 'not-run', reason: 'FLUJO had stopped answering' };
       else if (check.status !== 'auto') result = { status: check.status, reason: check.reason };
+      else if (deadline <= Date.now()) result = { status: 'not-run', reason: `the sweep used its ${Math.round(totalTimeoutMs / 60_000)} minutes` };
       else if (pageDeadline <= Date.now()) result = { status: 'not-run', reason: `the entry used its ${pageTimeoutMs / 1000}s` };
       else {
         const pageViewport = check.viewport ? parseViewport(check.viewport) : viewport;
-        result = await runCheck(browser, check, { baseUrl, viewport: pageViewport, out, budgetMs: Math.min(checkTimeoutMs, pageDeadline - Date.now()) });
-        if (result.status === 'failed' && !(await stillAnswering(baseUrl, pid))) instanceProblem = `FLUJO stopped answering during ${check.id}: ${result.error}`;
+        const attempt = async (number) => {
+          try {
+            return await runCheckImpl(await browserNow(), check, {
+              baseUrl, viewport: pageViewport, out, attempt: number, budgetMs: Math.min(checkTimeoutMs, pageDeadline - Date.now()),
+            });
+          } catch (error) {
+            return { status: 'failed', error: String(error.message ?? error).split('\n')[0].slice(0, 500), pageErrors: [], consoleErrors: [] };
+          }
+        };
+        result = await attempt(1);
+        let first;
+        let confirmed = false;
+        let runnerTries = 0;
+        for (let number = 2; result.status === 'failed'; number += 1) {
+          if (!(await stillAnsweringImpl(baseUrl, pid))) {
+            instanceProblem = `FLUJO stopped answering during ${check.id}: ${result.error}`;
+            break;
+          }
+          const cause = runnerCause(result.error);
+          if (!cause && first) {
+            confirmed = true;
+            break;
+          }
+          if (cause && runnerTries >= RUNNER_RETRIES) {
+            result = { ...result, status: 'runner', reason: cause };
+            break;
+          }
+          if (pageDeadline <= Date.now()) break;
+          if (cause) {
+            runnerTries += 1;
+            log(`  ! ${check.label}: ${cause}; trying again (${runnerTries} of ${RUNNER_RETRIES})`);
+            await pause(runnerPauseMs * runnerTries);
+          } else first = result;
+          result = await attempt(number);
+        }
+        if (first && result.status === 'passed') result = { ...result, firstError: first.error };
+        else if (first && result.status === 'failed') result = { ...first, confirmed, ...(confirmed ? { retryError: result.error } : {}) };
       }
       const mark = { passed: '✓', failed: '✗' }[result.status] ?? '·';
       log(`  ${mark} ${check.label}${result.status === 'failed' ? `: ${result.error}` : ''}${result.reason ? ` (${result.status}: ${result.reason})` : ''}`
@@ -367,11 +461,12 @@ export async function sweep(plan, { baseUrl, viewport, out, log, checkTimeoutMs,
 }
 
 export function countResults(entries) {
-  const counts = { passed: 0, failed: 0, pageErrors: 0, needs: 0, manual: 0, unsafe: 0, notRun: 0 };
+  const counts = { passed: 0, failed: 0, pageErrors: 0, needs: 0, manual: 0, unsafe: 0, notRun: 0, runner: 0, secondTry: 0 };
   for (const check of entries.flatMap((entry) => entry.checks)) {
     const key = check.status === 'not-run' ? 'notRun' : check.status;
     counts[key] = (counts[key] ?? 0) + 1;
     if (check.pageErrors?.length) counts.pageErrors += 1;
+    if (check.status === 'passed' && check.firstError) counts.secondTry += 1;
   }
   return counts;
 }
@@ -381,12 +476,16 @@ export function renderReport(report) {
   const lines = [
     `# Release sweep: ${report.target.version ?? 'unknown version'}`,
     '',
-    `Result: **${report.result}** (exit ${report.exitCode}). ${counts.passed} passed, ${counts.failed} failed, ${counts.pageErrors} with page errors, `
-      + `${counts.notRun} not run. Not covered by the sweep: ${counts.needs} need setup, ${counts.manual} manual, ${counts.unsafe} unsafe.`,
+    `Result: **${report.result}** (exit ${report.exitCode}). ${counts.passed} passed (${counts.secondTry} only on the second try), ${counts.failed} failed, `
+      + `${counts.pageErrors} with page errors, ${counts.runner} stopped by the sweep machine, ${counts.notRun} not run. `
+      + `Not covered by the sweep: ${counts.needs} need setup, ${counts.manual} manual, ${counts.unsafe} unsafe.`,
     '',
     `Target: ${report.target.kind}${report.target.baseUrl ? ` at ${report.target.baseUrl}` : ''}. Started ${report.startedAt}, finished ${report.finishedAt}.`,
   ];
-  if (report.brokenReason) lines.push('', `The sweep could not run: ${report.brokenReason}`);
+  if (report.brokenReason) {
+    lines.push('', report.result === 'runner' ? `The sweep machine failed (${report.runnerCause}), so this run says nothing about FLUJO: ${report.brokenReason}`
+      : `The sweep could not run: ${report.brokenReason}`);
+  }
   if (report.instanceProblem) lines.push('', `FLUJO stopped answering: ${report.instanceProblem}`);
   if (report.problems.length) {
     lines.push('', '## Problems', '');
@@ -399,7 +498,7 @@ export function renderReport(report) {
   for (const entry of report.entries) {
     lines.push(`### ${entry.title}`, '');
     for (const check of entry.checks) {
-      const detail = check.status === 'failed' ? `: ${check.error}` : check.reason ? `: ${check.reason}` : '';
+      const detail = check.status === 'failed' ? `: ${check.error}` : check.reason ? `: ${check.reason}` : check.firstError ? ` (on the second try; first: ${check.firstError})` : '';
       lines.push(`- ${check.status} · ${check.label}${detail}`);
     }
     lines.push('');
@@ -442,8 +541,10 @@ export async function main(argv = process.argv.slice(2), log = console.log) {
     schema: 1, tool: 'release-sweep', target: { kind: target.kind, version, mode: target.mode, baseUrl: target.baseUrl },
     startedAt: startedAt.toISOString(), viewport: options.viewport ?? '1280x720', entries: [], problems: [],
   };
+  const totalTimeoutMs = Number(options['total-timeout'] ?? 3600) * 1000;
+  const deadline = startedAt.getTime() + totalTimeoutMs;
   let handle;
-  let browser;
+  const browsers = { current: undefined, launch: launchBrowser };
   const stopOnSignal = () => {
     killTree(handle?.pid);
     process.exit(EXIT.broken);
@@ -458,7 +559,7 @@ export async function main(argv = process.argv.slice(2), log = console.log) {
     let baseUrl = target.baseUrl;
     if (target.kind !== 'url') {
       try {
-        handle = await startInstance(target, options, log);
+        handle = await startWithRetries(target, options, log, deadline);
       } catch (error) {
         handle = error.handle;
         throw error;
@@ -468,34 +569,37 @@ export async function main(argv = process.argv.slice(2), log = console.log) {
     }
     report.target.baseUrl = baseUrl;
     report.dataDir = await assertThrowawayData(baseUrl, roots);
-    browser = await loadChromium();
+    browsers.current = await launchBrowser();
     const devMode = target.mode === 'dev' || target.fromDrive;
     if (devMode && options['no-warm'] === undefined) {
       const routes = [...new Set(autoChecks.flatMap((check) => check.steps).filter((step) => step.do === 'goto').map((step) => step.route))];
       log(`Loading ${routes.length} pages once, then opening each in the browser, so dev mode compiles them before the sweep times anything.`);
       await drive(['warm', ...routes, '--base-url', baseUrl], log);
-      await warmInBrowser(browser, routes, { baseUrl, viewport, log });
+      await warmInBrowser(browsers.current, routes, { baseUrl, viewport, log });
     }
     const result = await sweep(plan, {
-      baseUrl, viewport, out, log, browser, pid: handle?.pid,
+      baseUrl, viewport, out, log, browsers, pid: handle?.pid, deadline, totalTimeoutMs,
       checkTimeoutMs: Number(options['check-timeout'] ?? 180) * 1000,
       pageTimeoutMs: Number(options['page-timeout'] ?? 600) * 1000,
     });
     report.entries = result.entries;
     if (result.instanceProblem) report.instanceProblem = result.instanceProblem;
   } catch (error) {
-    report.result = 'broken';
+    const cause = error.runnerCause ?? runnerCause(error.message);
+    report.result = cause ? 'runner' : 'broken';
+    if (cause) report.runnerCause = cause;
     report.brokenReason = String(error.message ?? error);
-    log(`The sweep could not run: ${report.brokenReason}`);
+    log(cause ? `The sweep machine failed (${cause}), so this run says nothing about FLUJO: ${report.brokenReason}`
+      : `The sweep could not run: ${report.brokenReason}`);
   } finally {
-    await browser?.close().catch(() => undefined);
+    await browsers.current?.close().catch(() => undefined);
     await stopInstance(handle, out, log).catch((error) => log(`! Could not stop FLUJO cleanly: ${error.message}`));
     process.off('SIGINT', stopOnSignal);
     process.off('SIGTERM', stopOnSignal);
   }
   report.counts = countResults(report.entries);
   report.problems = problemsFromReport(report);
-  report.result ??= report.problems.length ? 'problems' : 'passed';
+  report.result ??= report.problems.length ? 'problems' : runnerNotes(report).length ? 'runner' : 'passed';
   report.exitCode = EXIT[report.result];
   report.finishedAt = new Date().toISOString();
   mkdirSync(out, { recursive: true });

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import YAML from 'yaml';
-import { PACKAGED_ACCEPTANCE_TESTS, assertFullWorkflowContract, assertReleaseSweepReportsOnly, assertWorkflowContract } from './workflow-contract.mjs';
+import { PACKAGED_ACCEPTANCE_TESTS, assertFullWorkflowContract, assertReleaseSweepReportsOnly, assertReleaseSweepRunsByDefault, assertWorkflowContract } from './workflow-contract.mjs';
 
 const directory = new URL('../.github/workflows/', import.meta.url);
 const readWorkflows = () => Object.fromEntries(readdirSync(directory).filter((file) => /\.ya?ml$/.test(file) && file !== 'verify.yml')
@@ -160,6 +160,45 @@ for (const [label, change] of [
   });
 }
 
+test('the release sweep workflow is strict YAML and needs only the built-in token with issues: write', () => {
+  const text = readFileSync(new URL('release-sweep.yml', directory), 'utf8');
+  const document = YAML.parseDocument(text, { strict: true, uniqueKeys: true, prettyErrors: true });
+  assert.deepEqual([...document.errors, ...document.warnings].map(String), []);
+  const sweep = document.toJS();
+  assertReleaseSweepRunsByDefault(sweep);
+  assert.deepEqual(sweep.permissions, { contents: 'read' });
+  assert.deepEqual(Object.fromEntries(Object.entries(sweep.jobs).map(([id, job]) => [id, job.permissions])),
+    { sweep: { contents: 'read' }, report: { contents: 'read', issues: 'write' } });
+  const tokens = [...text.matchAll(/\$\{\{\s*([^}]*?(?:token|secrets)[^}]*?)\s*\}\}/g)].map((match) => match[1]);
+  assert.deepEqual(tokens, ['github.token']);
+  assert.ok(!/RELEASE_SWEEP/.test(text), 'the RELEASE_SWEEP switch is gone for good');
+});
+
+for (const [label, change] of [
+  ['waits for a repository variable', (sweep) => { sweep.jobs.sweep.if = `vars.RELEASE_SWEEP == 'report' && ${sweep.jobs.sweep.if}`; }],
+  ['files only when a variable says so', (sweep) => { sweep.jobs.report.steps.find((step) => step.name === 'File one issue per real problem').env.FILE_ISSUES = '${{ vars.RELEASE_SWEEP }}'; }],
+  ['needs a secret', (sweep) => { sweep.jobs.report.steps.find((step) => step.name === 'File one issue per real problem').env.GH_TOKEN = '${{ secrets.SWEEP_PAT }}'; }],
+  ['files only on request', (sweep) => { sweep.jobs.report.steps.find((step) => step.name === 'File one issue per real problem').if = "github.event_name == 'workflow_dispatch'"; }],
+  ['only plans issues', (sweep) => {
+    const step = sweep.jobs.report.steps.find((item) => item.name === 'File one issue per real problem');
+    step.run = step.run.replace(' --file', '');
+  }],
+  ['has a job without a time limit', (sweep) => { delete sweep.jobs.sweep['timeout-minutes']; }],
+  ['has a job that may run for hours', (sweep) => { sweep.jobs.report['timeout-minutes'] = 360; }],
+  ['does not bound the sweep itself', (sweep) => {
+    const step = sweep.jobs.sweep.steps.find((item) => item.id === 'sweep');
+    step.run = step.run.replace(/ --total-timeout \d+/, '');
+  }],
+  ['is not started by releases', (sweep) => { delete sweep.on.workflow_run; }],
+]) {
+  test(`the release sweep runs after every release by default: refuses a sweep that ${label}`, () => {
+    const files = readWorkflows();
+    assertReleaseSweepRunsByDefault(files['release-sweep.yml']);
+    change(files['release-sweep.yml']);
+    assert.throws(() => assertFullWorkflowContract(files), /release-sweep\.yml/);
+  });
+}
+
 const releaseGateCases = [
   ['image promotion without exact-commit verification', files => {
     const step = files['publish-image.yml'].jobs.publish.steps.find(item => item.run?.includes('image-release.mjs promote'));
@@ -234,6 +273,19 @@ function journeyGitFixture(t) {
     return result;
   };
   return { ancestor, workflowSha, unmerged, git, execute };
+}
+
+for (const [label, change] of [
+  ['omitted installed Codex checks', files => { const job = files['installer.yml'].jobs['installer-acceptance']; job.steps = job.steps.filter(step => !step.run?.includes('packaged-codex-acceptance.mjs')); }],
+  ['tolerated installed Codex checks', files => { files['installer.yml'].jobs['installer-acceptance'].steps.find(step => step.run?.includes('packaged-codex-acceptance.mjs'))['continue-on-error'] = true; }],
+  ['installed Codex checks after the evidence upload', files => { const steps = files['installer.yml'].jobs['installer-acceptance'].steps; const index = steps.findIndex(step => step.run?.includes('packaged-codex-acceptance.mjs')); steps.push(...steps.splice(index, 1)); }],
+  ['omitted shipped Codex tests', files => { const job = files['verify.yml'].jobs['release-safety']; job.steps = job.steps.filter(step => step.run !== 'node --test scripts/packaged-codex-acceptance.test.mjs'); }],
+]) {
+  test(`workflow validation refuses ${label}`, () => {
+    const files = readWorkflows();
+    change(files);
+    assert.throws(() => assertFullWorkflowContract(files), /Codex checks/);
+  });
 }
 
 test('real selected-source guard accepts trusted workflow and ancestor checkouts', (t) => {
@@ -375,4 +427,40 @@ sleep() { :; }
     if (expectedStatus === 0) assert.ok(output.includes(`FLUJO_TEST_ISOLATION_IMAGE=${image}\n`));
     else assert.equal(output, '', 'A failed pull or malformed image must not supply probe environment.');
   }
+});
+
+const antigravityJob = files => files['verify.yml'].jobs['antigravity-cli'];
+const antigravityStep = (files, prefix) => antigravityJob(files).steps.find(step => step.run?.startsWith(prefix));
+for (const [label, change, expected] of [
+  ['a missing official Antigravity CLI job', files => { delete files['verify.yml'].jobs['antigravity-cli']; }, /official Antigravity CLI suite on macOS and Windows/],
+  ['an Antigravity job without macOS', files => { antigravityJob(files).strategy.matrix.os = ['windows-latest']; }, /official Antigravity CLI suite/],
+  ['an Antigravity job with extra matrix rows', files => { antigravityJob(files).strategy.matrix.include = [{ os: 'ubuntu-latest' }]; }, /official Antigravity CLI suite/],
+  ['an optional Antigravity suite', files => { antigravityStep(files, 'node scripts/run-local-jest.cjs')['continue-on-error'] = true; }, /official Antigravity CLI suite/],
+  ['a skipped Antigravity job', files => { antigravityJob(files).if = 'false'; }, /official Antigravity CLI suite/],
+  ['an Antigravity suite filtered to fewer cases', files => { antigravityStep(files, 'node scripts/run-local-jest.cjs').run += ' -t effort'; }, /official Antigravity CLI suite/],
+  ['an Antigravity suite run before the CLI is installed', files => {
+    const steps = antigravityJob(files).steps;
+    const [installer] = steps.splice(steps.findIndex(step => step.run?.includes('antigravity-runtime.cjs')), 1);
+    steps.push(installer);
+  }, /official Antigravity CLI suite/],
+  ['an Antigravity job without the verified Node runtime', files => {
+    antigravityJob(files).steps = antigravityJob(files).steps.filter(step => !step.run?.startsWith('node scripts/verify-ci-node.mjs'));
+  }, /verify official binary identity/],
+  ['a verification gate that ignores the Antigravity job', files => { const gate = files['verify.yml'].jobs.verification; gate.needs = gate.needs.filter(id => id !== 'antigravity-cli'); }, /evaluate every prerequisite/],
+  ['a verification gate that ignores the installed Windows build check', files => { const gate = files['verify.yml'].jobs.verification; gate.needs = gate.needs.filter(id => id !== 'installed-windows-acceptance'); }, /evaluate every prerequisite/],
+  ['a verification gate that ignores the Docker image check', files => { const gate = files['verify.yml'].jobs.verification; gate.needs = gate.needs.filter(id => id !== 'image-acceptance'); }, /evaluate every prerequisite/],
+]) {
+  test(`broad qualification refuses ${label}`, () => {
+    const files = readWorkflows();
+    change(files);
+    assert.throws(() => assertFullWorkflowContract(files), expected);
+  });
+}
+
+test('the main pull-request bridge does not need the broad-only jobs, and the broad gate waits for them', () => {
+  const files = Object.fromEntries(readdirSync(directory).filter(file => /\.ya?ml$/.test(file))
+    .map(file => [file, YAML.parse(readFileSync(new URL(file, directory), 'utf8'))]));
+  const broadOnly = ['antigravity-cli', 'installed-windows-acceptance', 'image-acceptance'];
+  for (const id of broadOnly) assert.equal(files['verify.yml'].jobs[id], undefined, id);
+  assert.deepEqual(files['verify-full.yml'].jobs.verification.needs.slice(-broadOnly.length), broadOnly);
 });

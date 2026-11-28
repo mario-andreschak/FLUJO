@@ -24,12 +24,12 @@ import { createHash } from 'crypto';
 import { Transform } from 'stream';
 import { pipeline } from 'stream/promises';
 import JSZip from 'jszip';
-import type { McpbSignatureStatus } from '@/shared/types/mcp/mcpb';
+import type { McpbSignature } from '@/shared/types/mcp/mcpb';
 import { McpbError } from './manifest';
+import { checkMcpbSignature, feedInChunks, splitMcpbSignature } from './signature';
 
 const MIB = 1024 * 1024;
 const GIB = 1024 * MIB;
-const HASH_CHUNK_BYTES = 8 * MIB;
 const WRITE_CONCURRENCY = 8;
 
 export interface McpbLimits {
@@ -63,37 +63,10 @@ export function formatBytes(bytes: number): string {
   return `${bytes} bytes`;
 }
 
-const SIGNATURE_HEADER = Buffer.from('MCPB_SIG_V1', 'utf8');
-const SIGNATURE_FOOTER = Buffer.from('MCPB_SIG_END', 'utf8');
-const MAX_SIGNATURE_BYTES = 4 * MIB;
-
-/**
- * A signed bundle ends with `MCPB_SIG_V1`, a 4-byte little-endian length, a
- * PKCS#7 signature and `MCPB_SIG_END` (see `src/node/sign.ts` upstream).
- */
-export function splitMcpbSignature(bytes: Buffer): { content: Buffer; status: McpbSignatureStatus } {
-  const footerAt = bytes.length - SIGNATURE_FOOTER.length;
-  if (footerAt < 0 || !bytes.subarray(footerAt).equals(SIGNATURE_FOOTER)) {
-    return { content: bytes, status: 'unsigned' };
-  }
-  const lowest = Math.max(0, footerAt - SIGNATURE_HEADER.length - 4 - MAX_SIGNATURE_BYTES);
-  for (let at = footerAt - SIGNATURE_HEADER.length - 4; at >= lowest; at--) {
-    if (bytes[at] !== SIGNATURE_HEADER[0] || !bytes.subarray(at, at + SIGNATURE_HEADER.length).equals(SIGNATURE_HEADER)) continue;
-    const length = bytes.readUInt32LE(at + SIGNATURE_HEADER.length);
-    if (at + SIGNATURE_HEADER.length + 4 + length === footerAt && length > 0) {
-      return { content: bytes.subarray(0, at), status: 'signed-unverified' };
-    }
-  }
-  return { content: bytes, status: 'damaged' };
-}
-
-/** SHA-256 in chunks, yielding between them so a big bundle never stalls the app. */
+/** SHA-256 of the whole file, in chunks so a big bundle never stalls the app. */
 export async function digestBytes(bytes: Buffer): Promise<string> {
   const hash = createHash('sha256');
-  for (let offset = 0; offset < bytes.length; offset += HASH_CHUNK_BYTES) {
-    hash.update(bytes.subarray(offset, offset + HASH_CHUNK_BYTES));
-    if (offset + HASH_CHUNK_BYTES < bytes.length) await new Promise<void>((resolve) => setImmediate(resolve));
-  }
+  await feedInChunks([bytes], (chunk) => hash.update(chunk));
   return hash.digest('hex');
 }
 
@@ -130,7 +103,7 @@ export interface McpbArchiveEntry {
 export interface OpenedMcpbArchive {
   digest: string;
   packedBytes: number;
-  signature: McpbSignatureStatus;
+  signature: McpbSignature;
   manifestText: string;
   entries: McpbArchiveEntry[];
   files: ReadonlySet<string>;
@@ -166,7 +139,7 @@ async function loadZip(bytes: Buffer, content: Buffer): Promise<JSZip> {
   }
 }
 
-/** Read the zip's table of contents and manifest.json. Nothing is written. */
+/** Read the zip's table of contents, manifest.json and signature. Nothing is written. */
 export async function openMcpbArchive(bytes: Buffer, limits: McpbLimits = mcpbLimits()): Promise<OpenedMcpbArchive> {
   if (bytes.length > limits.bundleBytes) {
     throw new McpbError(
@@ -178,8 +151,12 @@ export async function openMcpbArchive(bytes: Buffer, limits: McpbLimits = mcpbLi
   if (bytes.length < 22 || bytes[0] !== 0x50 || bytes[1] !== 0x4b) {
     throw new McpbError('This file is not an MCP bundle: it is not a zip file.', 'not-a-bundle');
   }
-  const signature = splitMcpbSignature(bytes);
-  const [digest, zip] = await Promise.all([digestBytes(bytes), loadZip(bytes, signature.content)]);
+  const split = splitMcpbSignature(bytes);
+  const [digest, zip, signature] = await Promise.all([
+    digestBytes(bytes),
+    loadZip(bytes, split.content),
+    checkMcpbSignature(bytes, split),
+  ]);
 
   const entries: McpbArchiveEntry[] = [];
   const files = new Set<string>();
@@ -223,7 +200,7 @@ export async function openMcpbArchive(bytes: Buffer, limits: McpbLimits = mcpbLi
   } catch {
     throw new McpbError('The bundle’s manifest.json cannot be read; the file may be damaged.', 'not-a-bundle');
   }
-  return { digest, packedBytes: bytes.length, signature: signature.status, manifestText, entries, files, unpackedBytes };
+  return { digest, packedBytes: bytes.length, signature, manifestText, entries, files, unpackedBytes };
 }
 
 /** Free space where the bundle goes, or undefined when the system cannot tell. */

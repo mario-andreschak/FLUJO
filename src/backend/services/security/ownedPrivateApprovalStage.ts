@@ -2,6 +2,7 @@ import fs, { constants } from 'node:fs';
 import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { readPrivateApprovalAsync } from './trustedHostMcp';
+import { replaceFileWithRetry } from '@/utils/transientFileRetry';
 
 function same(first: fs.BigIntStats, second: fs.BigIntStats): boolean {
   return first.dev === second.dev && first.ino === second.ino && first.size === second.size
@@ -46,10 +47,16 @@ export async function createOwnedPrivateApprovalStage(filename: string, value: u
         if (bytesRead !== content.length || createHash('sha256').update(bytes.subarray(0, bytesRead)).digest('hex') !== expectedDigest
             || !same(identity, await handle.stat({ bigint: true })) || !same(identity, await fs.promises.lstat(stage, { bigint: true }))) throw new Error('Owned approval bytes changed.');
       } finally { bytes.fill(0); }
-      if (signal.aborted) throw new Error('Approval publication retired.');
-      await beforeEffect?.();
-      if (signal.aborted) throw new Error('Approval publication retired.');
-      await fs.promises.rename(stage, destination); published = true;
+      // A reader holding the ledger open (antivirus, the indexer, a concurrent
+      // approval check) makes Windows refuse the rename for a moment. Each new
+      // attempt checks the stage and the caller's authority again first.
+      await replaceFileWithRetry(stage, destination, { label: 'approval-ledger-replace', signal, beforeAttempt: async () => {
+        if (signal.aborted) throw new Error('Approval publication retired.');
+        if (!same(identity, await handle.stat({ bigint: true })) || !await owned()) throw new Error('Owned approval stage changed.');
+        await beforeEffect?.();
+        if (signal.aborted) throw new Error('Approval publication retired.');
+      } });
+      published = true;
     },
     dispose,
   };

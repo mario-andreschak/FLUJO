@@ -243,7 +243,7 @@ jobs:
         run: node scripts/require-release-verification.mjs installer
 
       - name: Attach installer to version release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           files: |
             ${{ env.INSTALLER_RELEASE_DIR }}/flujo-setup.exe
@@ -294,6 +294,14 @@ jobs:
           $report = Join-Path $env:RUNNER_TEMP 'flujo-install-evidence\packaged-acceptance.json'
           node scripts/packaged-acceptance.mjs --form checkout --app-root $appRoot --from npm:latest --report $report @runtimeArguments
           if ($LASTEXITCODE -ne 0) { throw "Installed backup, restart, upgrade and restore checks failed (exit $LASTEXITCODE)." }
+      # The installed copy's own Codex against the local model stand-in: no login or account.
+      - name: Run a Codex conversation, restart and cancel with the installed application's Codex
+        shell: pwsh
+        run: |
+          $appRoot = Join-Path $env:RUNNER_TEMP 'FLUJO fresh install'
+          $report = Join-Path $env:RUNNER_TEMP 'flujo-install-evidence\packaged-codex.json'
+          node scripts/packaged-codex-acceptance.mjs --app-root $appRoot --report $report
+          if ($LASTEXITCODE -ne 0) { throw "Installed Codex checks failed (exit $LASTEXITCODE)." }
       - name: Retain release installation evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

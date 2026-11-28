@@ -1,45 +1,49 @@
-import { randomUUID } from 'crypto';
+/**
+ * The hourly Persona history cleanup sweep (#453, #481), the only path that
+ * writes cleaned-up records. Each workspace measures first; the rollout control
+ * switches cleanup on once enough clean runs passed, and back to measuring on
+ * any anomaly this sweep finds.
+ */
 
-import type { PersonaRuntimeRetentionMode } from '@/config/features';
 import { createLogger } from '@/utils/logger';
 import { getCurrentWorkspace } from '@/utils/workspace';
 
+import { listBehaviorCallPins } from './behaviorCallPins';
 import {
   getActivityRetentionPolicy,
   getBehaviorCallPinRetentionPolicy,
   getFlowDispatchRetentionPolicy,
   getMailboxItemRetentionPolicy,
 } from './compactRuntime';
-import { listBehaviorCallPins } from './behaviorCallPins';
-import type { PersonaRetentionEligibilityReason } from './personaRuntimeRetentionCohort';
+import { listPersonaFlowDispatchRecordsForRetention } from './personaFlowDispatchRetention';
 import {
   acquirePersonaRuntimeRetentionWriteGrant,
-  decidePersonaRuntimeRetention,
-  getPersonaRuntimeRetentionControl,
-  getPersonaRuntimeRetentionDecision,
-  type PersonaRuntimeRetentionControl,
-  type PersonaRuntimeRetentionControlOptions,
-  type PersonaRuntimeRetentionModeSource,
+  personaRuntimeRetentionVolumeBudget,
+  readPersonaRuntimeRetentionState,
+  recordPersonaRuntimeRetentionAnomaly,
+  recordPersonaRuntimeRetentionSweep,
+  type PersonaRuntimeRetentionAnomaly,
+  type PersonaRuntimeRetentionMode,
+  type PersonaRuntimeRetentionWriteGrant,
 } from './personaRuntimeRetentionControl';
-import { listPersonaFlowDispatchRecordsForRetention } from './personaFlowDispatchRetention';
-import { recordPersonaRuntimeRetentionSweep } from './personaRuntimeRetentionReports';
+import { findPersonaRuntimeRecordsInUse } from './personaRuntimeRetentionReferences';
 import {
   executeRetentionPlan,
   planRetention,
   type RetentionExecutionResult,
+  type RetentionPlan,
   type RetentionPolicy,
 } from './retention';
 import { withPersonaRuntimeLock } from './runtimeLock';
-import { getPersonaStorageStats, type PersonaStorageStats } from './runtimeStorageStats';
 import {
+  listBehaviorMaintenanceRuns,
   listPersonaActivities,
   listPersonaMailboxItems,
   listPersonas,
 } from './store';
 
 const log = createLogger('enduringAgents/personaRuntimeRetentionRollout');
-const DEFAULT_MAX_PERSONA_CONCURRENCY = 2;
-const MAX_PERSONA_CONCURRENCY = 8;
+const MAX_PERSONA_CONCURRENCY = 2;
 /**
  * A sweep still running after two hourly intervals is treated as stuck: the
  * next trigger starts a fresh one. Writes stay serialized by the Persona lock.
@@ -52,57 +56,44 @@ export type PersonaRuntimeRetentionCollection =
   | 'flowDispatches'
   | 'behaviorCallPins';
 
-export interface PersonaRuntimeRetentionCollectionTotals extends RetentionExecutionResult {
+export interface PersonaRuntimeRetentionCollectionTotals {
   scanned: number;
-  candidateCount: number;
+  /** Records cleanup would rewrite, before the per-sweep write cap. */
+  candidates: number;
+  inUse: number;
+  invalid: number;
+  notSmaller: number;
+  alreadyCompacted: number;
+  overCap: number;
+  selected: number;
+  compacted: number;
+  failed: number;
+  stopped: number;
+  bytesBefore: number;
+  projectedBytesAfter: number;
 }
 
-export interface PersonaRuntimeRetentionCollectionObservation
-  extends PersonaRuntimeRetentionCollectionTotals {
-  collection: PersonaRuntimeRetentionCollection;
-  /** Measured persisted size. Only active mode measures it, because only it can change. */
-  actualBytesBefore?: number;
-  actualBytesAfter?: number;
-}
-
-export interface PersonaRuntimeRetentionObservation {
-  sweepId: string;
-  personaId: string;
-  mode: PersonaRuntimeRetentionMode;
-  cohortVersion: string;
-  cohortBucket: number;
-  rolloutBasisPoints: number;
-  eligibilityReason: PersonaRetentionEligibilityReason;
-  durationMs: number;
-  /** Time spent waiting for this Persona's runtime lock. */
-  lockWaitMs: number;
-  /** Time this sweep held this Persona's runtime lock. */
-  lockHeldMs: number;
-  collections: PersonaRuntimeRetentionCollectionObservation[];
-}
-
-export interface PersonaRuntimeRetentionSweepOptions extends PersonaRuntimeRetentionControlOptions {
+export interface PersonaRuntimeRetentionSweepOptions {
   now?: number;
-  maxPersonaConcurrency?: number;
 }
 
 export interface PersonaRuntimeRetentionSweepResult {
-  sweepId: string;
+  /** What the sweep did: `active` only when it started with cleanup on. */
   mode: PersonaRuntimeRetentionMode;
-  modeSource: PersonaRuntimeRetentionModeSource;
-  cohortVersion: string;
-  rolloutBasisPoints: number;
+  /** The stored mode after this sweep. */
+  modeAfter: PersonaRuntimeRetentionMode;
   startedAt: number;
+  durationMs: number;
   personasExamined: number;
-  personasSelected: number;
-  personasSkipped: number;
   personasFailed: number;
+  anomalies: PersonaRuntimeRetentionAnomaly[];
   maxLockWaitMs: number;
   maxLockHeldMs: number;
   collections: Record<PersonaRuntimeRetentionCollection, PersonaRuntimeRetentionCollectionTotals>;
-  observations: PersonaRuntimeRetentionObservation[];
-  durationMs: number;
+  /** True when the sweep did not run because another one is still running. */
   overlappingSweepSkipped: boolean;
+  /** True when the stored state could not be read; nothing was written or recorded. */
+  stateUnreadable: boolean;
 }
 
 const inFlightByWorkspace = new Map<string, {
@@ -110,325 +101,249 @@ const inFlightByWorkspace = new Map<string, {
   startedAt: number;
 }>();
 
-const MODE_RANK: Record<PersonaRuntimeRetentionMode, number> = {
-  disabled: 0,
-  shadow: 1,
-  active: 2,
-};
-
-function emptyCollectionTotals(): PersonaRuntimeRetentionCollectionTotals {
+function emptyTotals(): PersonaRuntimeRetentionCollectionTotals {
   return {
     scanned: 0,
-    candidateCount: 0,
+    candidates: 0,
+    inUse: 0,
+    invalid: 0,
+    notSmaller: 0,
+    alreadyCompacted: 0,
+    overCap: 0,
     selected: 0,
     compacted: 0,
-    alreadyCompacted: 0,
-    skipped: 0,
     failed: 0,
-    unauthorized: 0,
-    remaining: 0,
+    stopped: 0,
     bytesBefore: 0,
     projectedBytesAfter: 0,
   };
 }
 
-function emptySweepResult(
-  control: PersonaRuntimeRetentionControl,
-  overlappingSweepSkipped = false,
-): PersonaRuntimeRetentionSweepResult {
+function emptyResult(mode: PersonaRuntimeRetentionMode, startedAt: number): PersonaRuntimeRetentionSweepResult {
   return {
-    sweepId: randomUUID(),
-    mode: control.config.mode,
-    modeSource: control.source,
-    cohortVersion: control.config.cohortVersion,
-    rolloutBasisPoints: control.config.rolloutBasisPoints,
-    startedAt: Date.now(),
+    mode,
+    modeAfter: mode,
+    startedAt,
+    durationMs: 0,
     personasExamined: 0,
-    personasSelected: 0,
-    personasSkipped: 0,
     personasFailed: 0,
+    anomalies: [],
     maxLockWaitMs: 0,
     maxLockHeldMs: 0,
     collections: {
-      mailboxItems: emptyCollectionTotals(),
-      activities: emptyCollectionTotals(),
-      flowDispatches: emptyCollectionTotals(),
-      behaviorCallPins: emptyCollectionTotals(),
+      mailboxItems: emptyTotals(),
+      activities: emptyTotals(),
+      flowDispatches: emptyTotals(),
+      behaviorCallPins: emptyTotals(),
     },
-    observations: [],
-    durationMs: 0,
-    overlappingSweepSkipped,
+    overlappingSweepSkipped: false,
+    stateUnreadable: false,
   };
 }
 
-function mergeCollectionTotals(
-  target: PersonaRuntimeRetentionCollectionTotals,
-  source: PersonaRuntimeRetentionCollectionTotals,
-): void {
-  target.scanned += source.scanned;
-  target.candidateCount += source.candidateCount;
-  target.selected += source.selected;
-  target.compacted += source.compacted;
-  target.alreadyCompacted += source.alreadyCompacted;
-  target.skipped += source.skipped;
-  target.failed += source.failed;
-  target.unauthorized += source.unauthorized;
-  target.remaining += source.remaining;
-  target.bytesBefore += source.bytesBefore;
-  target.projectedBytesAfter += source.projectedBytesAfter;
-}
-
-function storageBytes(
-  stats: PersonaStorageStats,
-  collection: PersonaRuntimeRetentionCollection,
-): number {
-  return stats.kinds[collection].approxBytes;
-}
-
-async function processCollection<T extends { id: string }>(input: {
+interface PlannedCollection {
   collection: PersonaRuntimeRetentionCollection;
-  records: readonly T[];
-  policy: RetentionPolicy<T>;
-  now: number;
-  authorizeWrite: (() => Promise<boolean>) | null;
-  actualBytesBefore?: number;
-}): Promise<PersonaRuntimeRetentionCollectionObservation> {
-  const plan = planRetention(input.records, input.policy, input.now);
-  const authorizeWrite = input.authorizeWrite;
-  const execution = await executeRetentionPlan(plan, input.policy, {
-    shadow: authorizeWrite === null,
-    ...(authorizeWrite ? { authorizeWrite: () => authorizeWrite() } : {}),
-    continueOnFailure: true,
-    onWriteFailure: () => {
-      log.warn(`Persona runtime retention could not compact one ${input.collection} record.`);
-    },
-  });
-  return {
-    collection: input.collection,
-    scanned: plan.scanned,
-    candidateCount: plan.candidateCount,
-    ...(input.actualBytesBefore === undefined
-      ? {}
-      : { actualBytesBefore: input.actualBytesBefore, actualBytesAfter: input.actualBytesBefore }),
-    ...execution,
-  };
+  plan: RetentionPlan<{ id: string }>;
+  execute: (grant: PersonaRuntimeRetentionWriteGrant | null) => Promise<RetentionExecutionResult>;
 }
 
-function isSweepEnabled(control: PersonaRuntimeRetentionControl): boolean {
-  return control.config.mode !== 'disabled' && control.config.rolloutBasisPoints > 0;
+function planned<T extends { id: string }>(
+  collection: PersonaRuntimeRetentionCollection,
+  records: readonly T[],
+  policy: RetentionPolicy<T>,
+  now: number,
+  inUse: ReadonlySet<string>,
+): PlannedCollection {
+  const plan = planRetention(records, policy, now, { isInUse: (record) => inUse.has(record.id) });
+  return { collection, plan, execute: (grant) => executeRetentionPlan(plan, policy, { grant }) };
 }
 
-function summary(result: PersonaRuntimeRetentionSweepResult): string {
-  const totals = Object.values(result.collections).reduce((sum, collection) => ({
-    candidates: sum.candidates + collection.candidateCount,
-    compacted: sum.compacted + collection.compacted,
-    failed: sum.failed + collection.failed,
-    bytesBefore: sum.bytesBefore + collection.bytesBefore,
-    projectedBytesAfter: sum.projectedBytesAfter + collection.projectedBytesAfter,
-  }), { candidates: 0, compacted: 0, failed: 0, bytesBefore: 0, projectedBytesAfter: 0 });
-  return JSON.stringify({
-    sweepId: result.sweepId,
-    mode: result.mode,
-    modeSource: result.modeSource,
-    personasExamined: result.personasExamined,
-    personasSelected: result.personasSelected,
-    personasFailed: result.personasFailed,
-    durationMs: result.durationMs,
-    maxLockHeldMs: result.maxLockHeldMs,
-    ...totals,
-  });
+class Sweep {
+  readonly result: PersonaRuntimeRetentionSweepResult;
+  private readonly recorded = new Set<PersonaRuntimeRetentionAnomaly>();
+  private candidatesSoFar = 0;
+
+  constructor(
+    mode: PersonaRuntimeRetentionMode,
+    private readonly now: number,
+    private readonly volumeBudget: number | null,
+  ) {
+    this.result = emptyResult(mode, now);
+  }
+
+  /**
+   * Stored at once, so every later write in any sweep sees measuring only.
+   * This sweep writes nothing more even when storing the anomaly fails.
+   */
+  async anomaly(kind: PersonaRuntimeRetentionAnomaly): Promise<void> {
+    if (this.recorded.has(kind)) return;
+    this.recorded.add(kind);
+    this.result.anomalies.push(kind);
+    try {
+      await recordPersonaRuntimeRetentionAnomaly(kind, this.now);
+    } catch (error) {
+      log.warn('Persona history cleanup could not store an anomaly; this sweep stops writing.', error);
+    }
+  }
+
+  async persona(personaId: string): Promise<void> {
+    const waitStartedAt = Date.now();
+    await withPersonaRuntimeLock(personaId, async (lock) => {
+      const lockedAt = Date.now();
+      const grant = this.result.mode === 'active'
+        ? await acquirePersonaRuntimeRetentionWriteGrant(personaId, lock)
+        : null;
+      const [mailboxItems, activities, flowDispatches, behaviorCallPins, maintenanceRuns] =
+        await Promise.all([
+          listPersonaMailboxItems(personaId),
+          listPersonaActivities(personaId),
+          listPersonaFlowDispatchRecordsForRetention(personaId),
+          listBehaviorCallPins(personaId),
+          listBehaviorMaintenanceRuns(personaId),
+        ]);
+      const inUse = findPersonaRuntimeRecordsInUse({
+        mailboxItems, activities, flowDispatches, behaviorCallPins, maintenanceRuns,
+      });
+      const collections = [
+        planned('mailboxItems', mailboxItems, getMailboxItemRetentionPolicy(), this.now, inUse.mailboxItems),
+        planned('activities', activities, getActivityRetentionPolicy(), this.now, inUse.activities),
+        planned(
+          'flowDispatches', flowDispatches, getFlowDispatchRetentionPolicy(), this.now, inUse.flowDispatches,
+        ),
+        planned(
+          'behaviorCallPins',
+          behaviorCallPins,
+          getBehaviorCallPinRetentionPolicy(activities, lock),
+          this.now,
+          inUse.behaviorCallPins,
+        ),
+      ];
+
+      const found: PersonaRuntimeRetentionAnomaly[] = [];
+      if (collections.some(({ plan }) => plan.inUse > 0)) found.push('referenced');
+      if (collections.some(({ plan }) => plan.invalid > 0)) found.push('invalid');
+      this.candidatesSoFar += collections.reduce((total, { plan }) => total + plan.candidateCount, 0);
+      if (this.volumeBudget !== null && this.candidatesSoFar > this.volumeBudget) found.push('volume');
+      for (const kind of found) await this.anomaly(kind);
+
+      const writeGrant = this.recorded.size === 0 ? grant : null;
+      for (const entry of collections) await this.execute(entry, writeGrant);
+
+      const heldMs = Date.now() - lockedAt;
+      this.result.maxLockWaitMs = Math.max(this.result.maxLockWaitMs, lockedAt - waitStartedAt);
+      this.result.maxLockHeldMs = Math.max(this.result.maxLockHeldMs, heldMs);
+    });
+  }
+
+  private async execute(
+    { collection, plan, execute }: PlannedCollection,
+    grant: PersonaRuntimeRetentionWriteGrant | null,
+  ): Promise<void> {
+    const execution = await execute(grant);
+    const totals = this.result.collections[collection];
+    totals.scanned += plan.scanned;
+    totals.candidates += plan.candidateCount;
+    totals.inUse += plan.inUse;
+    totals.invalid += plan.invalid;
+    totals.notSmaller += plan.notSmaller;
+    totals.alreadyCompacted += plan.alreadyCompacted;
+    totals.overCap += plan.overCap;
+    totals.selected += execution.selected;
+    totals.compacted += execution.compacted;
+    totals.failed += execution.failed;
+    totals.stopped += execution.stopped;
+    totals.bytesBefore += plan.bytesBefore;
+    totals.projectedBytesAfter += plan.projectedBytesAfter;
+    if (execution.failed > 0) {
+      log.warn(`Persona history cleanup could not rewrite one ${collection} record.`);
+      await this.anomaly('error');
+    }
+  }
 }
 
 async function runSweep(
-  workspaceId: string,
   options: PersonaRuntimeRetentionSweepOptions,
-  initial: PersonaRuntimeRetentionControl,
 ): Promise<PersonaRuntimeRetentionSweepResult> {
-  const result = emptySweepResult(initial);
-  const startedAt = result.startedAt;
-  const now = options.now ?? startedAt;
-  const personas = await listPersonas();
-  result.personasExamined = personas.length;
-
-  const selected = personas.flatMap((persona) => {
-    const decision = decidePersonaRuntimeRetention(initial, workspaceId, persona.id);
-    if (decision.mode === 'disabled' || !decision.eligibility) return [];
-    return [{ persona, eligibility: decision.eligibility }];
-  });
-  result.personasSelected = selected.length;
-  result.personasSkipped = personas.length - selected.length;
-
-  const requestedConcurrency = options.maxPersonaConcurrency
-    ?? DEFAULT_MAX_PERSONA_CONCURRENCY;
-  if (
-    !Number.isSafeInteger(requestedConcurrency)
-    || requestedConcurrency < 1
-    || requestedConcurrency > MAX_PERSONA_CONCURRENCY
-  ) {
-    throw new Error(
-      `maxPersonaConcurrency must be an integer from 1 through ${MAX_PERSONA_CONCURRENCY}.`,
-    );
+  const now = options.now ?? Date.now();
+  const startedAt = Date.now();
+  const stored = await readPersonaRuntimeRetentionState();
+  if (!stored.readable) {
+    return { ...emptyResult('shadow', now), stateUnreadable: true };
   }
+  const sweep = new Sweep(stored.state.mode, now, personaRuntimeRetentionVolumeBudget(stored.state));
+  const { result } = sweep;
 
-  let nextIndex = 0;
-  const workers = Array.from(
-    { length: Math.min(requestedConcurrency, selected.length) },
-    async () => {
-      while (nextIndex < selected.length) {
-        const current = selected[nextIndex++];
-        const personaId = current.persona.id;
-        const personaStartedAt = Date.now();
-        try {
-          const observation = await withPersonaRuntimeLock(personaId, async (lock) => {
-            const lockAcquiredAt = Date.now();
-            const live = await getPersonaRuntimeRetentionDecision(personaId, options);
-            const mode = MODE_RANK[live.mode] < MODE_RANK[initial.config.mode]
-              ? live.mode
-              : initial.config.mode;
-            if (
-              mode === 'disabled'
-              || live.control.config.cohortVersion !== initial.config.cohortVersion
-            ) {
-              return null;
-            }
-            const grant = mode === 'active'
-              ? await acquirePersonaRuntimeRetentionWriteGrant(personaId, lock, {
-                ...options,
-                cohortVersion: initial.config.cohortVersion,
-              })
-              : null;
-            if (mode === 'active' && !grant) return null;
-            const authorizeWrite = grant ? () => grant.authorize() : null;
-
-            const [mailboxItems, activities, flowDispatches, behaviorCallPins, before] =
-              await Promise.all([
-                listPersonaMailboxItems(personaId),
-                listPersonaActivities(personaId),
-                listPersonaFlowDispatchRecordsForRetention(personaId),
-                listBehaviorCallPins(personaId),
-                grant ? getPersonaStorageStats(personaId) : Promise.resolve(null),
-              ]);
-            const measured = (collection: PersonaRuntimeRetentionCollection) => (
-              before ? storageBytes(before, collection) : undefined
-            );
-
-            const collections = [
-              await processCollection({
-                collection: 'mailboxItems',
-                records: mailboxItems,
-                policy: getMailboxItemRetentionPolicy(),
-                now,
-                authorizeWrite,
-                actualBytesBefore: measured('mailboxItems'),
-              }),
-              await processCollection({
-                collection: 'activities',
-                records: activities,
-                policy: getActivityRetentionPolicy(),
-                now,
-                authorizeWrite,
-                actualBytesBefore: measured('activities'),
-              }),
-              await processCollection({
-                collection: 'flowDispatches',
-                records: flowDispatches,
-                policy: getFlowDispatchRetentionPolicy(),
-                now,
-                authorizeWrite,
-                actualBytesBefore: measured('flowDispatches'),
-              }),
-              await processCollection({
-                collection: 'behaviorCallPins',
-                records: behaviorCallPins,
-                policy: getBehaviorCallPinRetentionPolicy(activities, lock),
-                now,
-                authorizeWrite,
-                actualBytesBefore: measured('behaviorCallPins'),
-              }),
-            ];
-
-            if (grant) {
-              const after = await getPersonaStorageStats(personaId);
-              for (const collection of collections) {
-                collection.actualBytesAfter = storageBytes(after, collection.collection);
-              }
-            }
-
-            const finishedAt = Date.now();
-            return {
-              sweepId: result.sweepId,
-              personaId,
-              mode,
-              cohortVersion: current.eligibility.cohort.version,
-              cohortBucket: current.eligibility.cohort.bucket,
-              rolloutBasisPoints: initial.config.rolloutBasisPoints,
-              eligibilityReason: current.eligibility.reason,
-              durationMs: finishedAt - personaStartedAt,
-              lockWaitMs: lockAcquiredAt - personaStartedAt,
-              lockHeldMs: finishedAt - lockAcquiredAt,
-              collections,
-            } satisfies PersonaRuntimeRetentionObservation;
-          });
-
-          if (!observation) {
-            result.personasSkipped += 1;
-            result.personasSelected -= 1;
-            continue;
-          }
-          result.observations.push(observation);
-          result.maxLockWaitMs = Math.max(result.maxLockWaitMs, observation.lockWaitMs);
-          result.maxLockHeldMs = Math.max(result.maxLockHeldMs, observation.lockHeldMs);
-          for (const collection of observation.collections) {
-            mergeCollectionTotals(result.collections[collection.collection], collection);
-          }
-        } catch (error) {
-          result.personasFailed += 1;
-          log.warn(
-            `Persona runtime retention failed closed for one Persona: ${
-              error instanceof Error ? error.name : 'unknown error'
-            }.`,
-          );
-        }
-      }
-    },
-  );
-  await Promise.all(workers);
-  result.durationMs = Date.now() - startedAt;
-
-  const failed = result.personasFailed > 0
-    || Object.values(result.collections).some((collection) => collection.failed > 0);
-  const line = `Persona runtime retention sweep: ${summary(result)}`;
-  if (failed) log.warn(line);
-  else log.info(line);
   try {
-    await recordPersonaRuntimeRetentionSweep(result);
+    const personas = await listPersonas();
+    result.personasExamined = personas.length;
+    let next = 0;
+    await Promise.all(Array.from(
+      { length: Math.min(MAX_PERSONA_CONCURRENCY, personas.length) },
+      async () => {
+        while (next < personas.length) {
+          const persona = personas[next++];
+          try {
+            await sweep.persona(persona.id);
+          } catch (error) {
+            result.personasFailed += 1;
+            log.warn(`Persona history cleanup could not check one Persona: ${
+              error instanceof Error ? error.name : 'unknown error'
+            }.`);
+            await sweep.anomaly('error');
+          }
+        }
+      },
+    ));
   } catch (error) {
-    log.warn('Could not store the Persona runtime retention sweep report.', error);
+    log.warn('Persona history cleanup could not list the Personas.', error);
+    await sweep.anomaly('error');
   }
+
+  result.durationMs = Date.now() - startedAt;
+  const totals = Object.values(result.collections);
+  try {
+    const after = await recordPersonaRuntimeRetentionSweep({
+      at: now,
+      mode: result.mode,
+      personas: result.personasExamined,
+      candidates: totals.reduce((total, collection) => total + collection.candidates, 0),
+      compacted: totals.reduce((total, collection) => total + collection.compacted, 0),
+      anomalies: result.anomalies,
+    });
+    result.modeAfter = after?.mode ?? 'shadow';
+  } catch (error) {
+    result.modeAfter = 'shadow';
+    log.warn('Persona history cleanup could not store this sweep; it will count the next one.', error);
+  }
+  log.info(`Persona history cleanup sweep: ${JSON.stringify({
+    mode: result.mode,
+    modeAfter: result.modeAfter,
+    personas: result.personasExamined,
+    anomalies: result.anomalies,
+    durationMs: result.durationMs,
+    maxLockHeldMs: result.maxLockHeldMs,
+  })}`);
   return result;
 }
 
 /**
- * Run one non-overlapping, bounded-concurrency retention sweep for the current
- * workspace. Disabled configuration returns before any Persona/storage read.
+ * Run one non-overlapping sweep for the current workspace, at most two
+ * Personas at a time, each under its own runtime lock.
  */
 export async function runPersonaRuntimeRetentionSweep(
   options: PersonaRuntimeRetentionSweepOptions = {},
 ): Promise<PersonaRuntimeRetentionSweepResult> {
-  const control = await getPersonaRuntimeRetentionControl(options);
-  if (!isSweepEnabled(control)) return emptySweepResult(control);
-
   const workspaceId = getCurrentWorkspace();
   const running = inFlightByWorkspace.get(workspaceId);
   if (running) {
     if (Date.now() - running.startedAt < PERSONA_RUNTIME_RETENTION_STUCK_SWEEP_MS) {
-      return emptySweepResult(control, true);
+      return { ...emptyResult('shadow', options.now ?? Date.now()), overlappingSweepSkipped: true };
     }
-    log.warn('A Persona runtime retention sweep looks stuck; starting a fresh one.');
+    log.warn('A Persona history cleanup sweep looks stuck; starting a fresh one.');
   }
 
   const startedAt = Date.now();
-  const sweep = runSweep(workspaceId, options, control).finally(() => {
+  const sweep = runSweep(options).finally(() => {
     if (inFlightByWorkspace.get(workspaceId)?.sweep === sweep) {
       inFlightByWorkspace.delete(workspaceId);
     }

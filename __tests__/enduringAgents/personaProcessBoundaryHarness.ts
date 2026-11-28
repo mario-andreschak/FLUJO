@@ -51,7 +51,7 @@ export type PersonaProcessCommand =
   | { type: 'claim'; personaId: string; ttlMs?: number }
   | { type: 'release'; fence: PersonaLeaseFence }
   | { type: 'reconcile'; personaId: string }
-  | { type: 'complete'; fence: PersonaLeaseFence }
+  | { type: 'complete'; fence: PersonaLeaseFence & { outcomeRef?: string } }
   | { type: 'assertFence'; fence: PersonaLeaseFence }
   | { type: 'inspect'; personaId: string }
   | { type: 'appendEvent'; personaId: string; event: Record<string, unknown> }
@@ -72,6 +72,11 @@ export type PersonaProcessCommand =
   | { type: 'previewRecovery'; archive: string; destination: string }
   | { type: 'restoreRecovery'; archive: string; destination: string; previewToken: string; holdAt?: 'file_written' | 'before_publish' | 'published' }
   | { type: 'recoveryCheckpoint' }
+  | { type: 'retentionCleanupOn' }
+  | { type: 'retentionSweep'; now: number; holdAfterWrites?: number }
+  | { type: 'retentionCheckpoint' }
+  | { type: 'retentionState' }
+  | { type: 'retentionRecords'; personaId: string }
   | { type: 'shutdown' };
 
 interface WireSuccess {

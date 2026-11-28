@@ -83,7 +83,7 @@ function serialize(binding: ChatProjectBinding): string {
 async function readBindingFile(chatId: string): Promise<StoredChatProject | undefined> {
   let text: string;
   try {
-    text = await retryTransientFileOperation(() => fs.readFile(bindingFile(chatId), 'utf8'));
+    text = await retryTransientFileOperation(() => fs.readFile(bindingFile(chatId), 'utf8'), { label: 'chat-project-read' });
   } catch (error) {
     if (fileErrorCode(error) === 'ENOENT') return undefined;
     throw error;
@@ -170,7 +170,7 @@ export async function deleteChatProject(chatId: string): Promise<void> {
 async function chatExists(chatId: string): Promise<boolean> {
   if (getConversationStates().has(chatId)) return true;
   try {
-    await retryTransientFileOperation(() => fs.stat(path.join(getWorkspaceDbDir(), 'conversations', `${chatId}.json`)));
+    await retryTransientFileOperation(() => fs.stat(path.join(getWorkspaceDbDir(), 'conversations', `${chatId}.json`)), { label: 'chat-exists' });
     return true;
   } catch (error) {
     // Only a chat that is certainly gone is dropped; anything unclear keeps it.
@@ -187,7 +187,7 @@ async function backupLegacyChatProjects(workspace: string, raw: unknown): Promis
   const file = path.join(getWorkspaceDir(workspace), LEGACY_BACKUP_FILE);
   let saved: Record<string, unknown> = {};
   try {
-    const parsed = JSON.parse(await retryTransientFileOperation(() => fs.readFile(file, 'utf8'))) as { chatProjects?: unknown };
+    const parsed = JSON.parse(await retryTransientFileOperation(() => fs.readFile(file, 'utf8'), { label: 'chat-project-backup-read' })) as { chatProjects?: unknown };
     if (parsed.chatProjects && typeof parsed.chatProjects === 'object' && !Array.isArray(parsed.chatProjects)) {
       saved = parsed.chatProjects as Record<string, unknown>;
     }

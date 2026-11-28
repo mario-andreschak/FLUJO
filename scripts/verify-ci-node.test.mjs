@@ -15,8 +15,9 @@ function readHistoricalInput(url, encoding) {
   const bytes = readArchivedFixture(path);
   return encoding ? bytes.toString(encoding) : bytes;
 }
+import { gzipSync } from 'node:zlib';
 import {
-  CI_NODE_PROFILES, assertCiContainerContract, assertShippedInstallerSources, shippedNodeRuntimes, verifyCiNode,
+  CI_NODE_PROFILES, archiveMember, assertCiContainerContract, assertShippedInstallerSources, shippedNodeRuntimes, verifyCiNode,
 } from './verify-ci-node.mjs';
 
 function fixture(t) {
@@ -53,6 +54,68 @@ test('a one-byte change is refused against the original pinned digest', async (t
   await assert.rejects(verifyCiNode(f), /executable differs/);
 });
 
+function tarEntry(name, body, type = '0') {
+  const header = Buffer.alloc(512);
+  header.write(name, 0, 100, 'utf8');
+  for (const [offset, value] of [[100, '0000644\0'], [108, '0000000\0'], [116, '0000000\0'], [136, '00000000000\0'], [148, '        '], [257, 'ustar\x0000']]) header.write(value, offset, 'latin1');
+  header.write(`${body.length.toString(8).padStart(11, '0')}\0`, 124, 'latin1');
+  header.write(type, 156, 'latin1');
+  header.write(`${[...header].reduce((sum, byte) => sum + byte, 0).toString(8).padStart(6, '0')}\0 `, 148, 'latin1');
+  return Buffer.concat([header, body, Buffer.alloc((512 - body.length % 512) % 512)]);
+}
+
+/** An official-looking release: signed checksums naming a macOS archive that holds the executable. */
+function darwinRelease(f, arch, { executable = readFileSync(f.executable), listArchive = true, alterArchive = false } = {}) {
+  const name = `node-v${f.expectedVersion}-darwin-${arch}`;
+  const archive = gzipSync(Buffer.concat([tarEntry(`${name}/`, Buffer.alloc(0), '5'), tarEntry(`${name}/README.md`, Buffer.from('readme')),
+    tarEntry(`${name}/bin/node`, executable), Buffer.alloc(1024)]));
+  const listed = createHash('sha256').update(alterArchive ? Buffer.concat([archive, Buffer.from('!')]) : archive).digest('hex');
+  const sums = Buffer.from(`${'0'.repeat(64)}  node-v${f.expectedVersion}-linux-x64.tar.gz
+${listArchive ? `${listed}  ${name}.tar.gz
+` : ''}`);
+  f.binaries.runtimes[f.expectedVersion].signedChecksumsSha256 = createHash('sha256').update(sums).digest('hex');
+  const requested = [];
+  const download = async (url) => {
+    requested.push(url);
+    if (url === `https://nodejs.org/dist/v${f.expectedVersion}/SHASUMS256.txt`) return sums;
+    if (url === `https://nodejs.org/dist/v${f.expectedVersion}/${name}.tar.gz`) return archive;
+    throw new Error(`unexpected download ${url}`);
+  };
+  return { download, requested, sums };
+}
+
+test('macOS runtimes are checked against the official archive named by the pinned signed checksums', async (t) => {
+  for (const arch of ['arm64', 'x64']) {
+    const f = fixture(t);
+    const release = darwinRelease(f, arch);
+    const result = await verifyCiNode({ ...f, platform: 'darwin', arch, download: release.download });
+    assert.equal(result.officialArchive, `node-v${f.expectedVersion}-darwin-${arch}.tar.gz`);
+    assert.deepEqual(release.requested, [`https://nodejs.org/dist/v${f.expectedVersion}/SHASUMS256.txt`, `https://nodejs.org/dist/v${f.expectedVersion}/node-v${f.expectedVersion}-darwin-${arch}.tar.gz`]);
+  }
+});
+
+for (const [label, prepare, expected] of [
+  ['checksums that differ from the signed record', (f) => { const release = darwinRelease(f, 'arm64'); f.binaries.runtimes[f.expectedVersion].signedChecksumsSha256 = 'f'.repeat(64); return release; }, /differ from the signed release record/],
+  ['checksums that do not list the macOS archive', (f) => darwinRelease(f, 'arm64', { listArchive: false }), /do not list the macOS archive/],
+  ['an archive that differs from the checksums', (f) => darwinRelease(f, 'arm64', { alterArchive: true }), /differs from the signed checksums/],
+  ['a running executable other than the official one', (f) => darwinRelease(f, 'arm64', { executable: Buffer.from('another executable') }), /executable differs/],
+  ['a missing signed checksum record', (f) => { const release = darwinRelease(f, 'arm64'); delete f.binaries.runtimes[f.expectedVersion].signedChecksumsSha256; return release; }, /binary\/libuv evidence/],
+]) {
+  test(`macOS measurement refuses ${label}`, async (t) => {
+    const f = fixture(t);
+    const release = prepare(f);
+    await assert.rejects(verifyCiNode({ ...f, platform: 'darwin', arch: 'arm64', download: release.download }), expected);
+  });
+}
+
+test('archive reading takes only the exact regular member', () => {
+  const archive = gzipSync(Buffer.concat([tarEntry('pkg/bin/node', Buffer.alloc(0), '5'), tarEntry('pkg/bin/node2', Buffer.from('wrong')),
+    tarEntry('pkg/bin/node', Buffer.from('right')), Buffer.alloc(1024)]));
+  assert.equal(archiveMember(archive, 'pkg/bin/node').toString(), 'right');
+  assert.throws(() => archiveMember(archive, 'pkg/bin/missing'), /lacks its executable/);
+  assert.throws(() => archiveMember(gzipSync(Buffer.concat([tarEntry('pkg/bin/node', Buffer.from('cut')).subarray(0, 512)])), 'pkg/bin/node'), /malformed/);
+});
+
 test('historical build scope cannot admit the old runtime to installed acceptance or other versions to history', async (t) => {
   const f = fixture(t);
   const old = { ...f, expectedVersion: '22.13.1', version: '22.13.1', uv: '1.49.2' };
@@ -68,7 +131,7 @@ for (const [label, change, expected] of [
   ['outside selected LTS lines', (f) => { f.expectedVersion = f.version = '26.10.0'; }, /exact selected runtime/],
   ['retired Node 22 minimum', (f) => { f.expectedVersion = f.version = '22.17.0'; }, /exact selected runtime/],
   ['wrong libuv', (f) => { f.uv = '1.49.2'; }, /binary\/libuv evidence/],
-  ['unsupported OS', (f) => { f.platform = 'darwin'; }, /unsupported platform/],
+  ['unsupported OS', (f) => { f.platform = 'freebsd'; }, /unsupported platform/],
   ['unsupported architecture', (f) => { f.arch = 'arm64'; }, /unsupported platform/],
   ['missing binary hash', (f) => { delete f.binaries.runtimes[f.version].executables.win32; }, /binary\/libuv evidence/],
   ['missing evidence schema', (f) => { delete f.binaries.schemaVersion; }, /binary\/libuv evidence/],

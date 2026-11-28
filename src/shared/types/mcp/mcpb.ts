@@ -13,10 +13,46 @@ export type McpbUserConfigValue = string | number | boolean | string[];
 export type McpbPlatform = 'darwin' | 'win32' | 'linux';
 
 /**
- * FLUJO reads the signature block but cannot check it yet, so a signed bundle
- * is treated like an unsigned one. `damaged` means the block is cut off.
+ * What the bundle's signature (PKCS#7, appended by `mcpb sign`) proves:
+ * - `signed`: the signature matches the file, and a certificate authority this
+ *   computer trusts vouches for the signer.
+ * - `invalid`: the file carries a signature that does not hold up. FLUJO
+ *   refuses to install it; `problem` says why.
+ * - `unsigned`: no signature, or a sound signature from a certificate no
+ *   trusted authority vouches for (anyone can make one). Installing is allowed.
  */
-export type McpbSignatureStatus = 'unsigned' | 'signed-unverified' | 'damaged';
+export type McpbSignatureStatus = 'signed' | 'invalid' | 'unsigned';
+
+export type McpbSignatureProblem =
+  /** The signature block or the signature inside it cannot be read. */
+  | 'damaged'
+  /** The file was changed after it was signed. */
+  | 'changed'
+  /** The signature was not made with the certificate that comes with it. */
+  | 'wrong-certificate'
+  | 'expired'
+  | 'not-yet-valid'
+  /** The certificate may not be used to sign software. */
+  | 'not-for-code-signing'
+  /** An outdated or unknown signing method, such as SHA-1. */
+  | 'unsupported-method';
+
+/** Who the signing certificate names. Confirmed only when the status is `signed`. */
+export interface McpbSigner {
+  name: string;
+  organization?: string;
+  issuer: string;
+  validFrom: string;
+  validTo: string;
+  /** SHA-256 fingerprint of the signing certificate. */
+  fingerprint: string;
+}
+
+export interface McpbSignature {
+  status: McpbSignatureStatus;
+  signer?: McpbSigner;
+  problem?: McpbSignatureProblem;
+}
 
 /** Things the review screen points out. The browser words them. */
 export type McpbReviewWarning =
@@ -24,7 +60,7 @@ export type McpbReviewWarning =
   | 'runs-bundled-program'
   | 'installs-python-packages'
   | 'newer-format'
-  | 'signature-damaged';
+  | 'signer-changed';
 
 export interface McpbUserConfigField {
   key: string;
@@ -74,11 +110,14 @@ export interface McpbReview {
   promptsGenerated: boolean;
   privacyPolicies: string[];
   userConfig: McpbUserConfigField[];
-  signature: { status: McpbSignatureStatus };
+  signature: McpbSignature;
   files: { count: number; packedBytes: number; unpackedBytes: number };
   suggestedServerName: string;
-  /** Set when this bundle is already installed: installing again upgrades it. */
-  existing?: { serverName: string; version: string };
+  /**
+   * Set when this bundle is already installed: installing again upgrades it.
+   * `signer` is who signed the installed version, when it was signed.
+   */
+  existing?: { serverName: string; version: string; signer?: string };
   warnings: McpbReviewWarning[];
 }
 
@@ -112,4 +151,5 @@ export type McpbErrorCode =
   | 'missing-config'
   | 'invalid-config'
   | 'in-use'
-  | 'host-install-blocked';
+  | 'host-install-blocked'
+  | 'invalid-signature';

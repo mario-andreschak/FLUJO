@@ -69,7 +69,7 @@ declare global {
   var __flujo_memory_lifecycle_cron: Cron | undefined;
   // Default-off, irreversible Persona lease-history pruning sweep (issue #478).
   var __flujo_persona_lease_history_pruning_cron: Cron | undefined;
-  // Staged Persona soft-retention sweep (issue #481); the runner fails closed.
+  // Persona history cleanup sweep (issue #481): measures, then cleans up by itself.
   var __flujo_persona_runtime_retention_cron: Cron | undefined;
   // Closed Persona runtime-event segment retention (issue #482).
   var __flujo_persona_runtime_event_retention_cron: Cron | undefined;
@@ -280,10 +280,9 @@ function armRetentionSweep(): void {
     );
     log.info('Armed Persona lease-history pruning sweep (hourly)');
   }
-  // Persona runtime soft retention (issue #481) is armed unconditionally so a
-  // deployment can move between disabled, shadow, and active without restarting.
-  // The runner checks the emergency flag/config before any Persona storage read,
-  // prevents overlap per workspace, and re-authorizes every active write.
+  // Persona history cleanup (issue #481) is armed unconditionally. Each
+  // workspace measures first and switches cleanup on and off by itself; the
+  // runner prevents overlap per workspace and re-authorizes every write.
   if (!global.__flujo_persona_runtime_retention_cron) {
     global.__flujo_persona_runtime_retention_cron = new Cron(
       '47 * * * *',

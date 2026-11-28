@@ -6,13 +6,21 @@ import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import JSZip from 'jszip';
+import type { X509Certificate } from 'crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import type { MCPServerConfig } from '@/shared/types/mcp';
 
+let mockDataDir = '';
 let mockWorkspaceDir = '';
 jest.mock('@/utils/workspace', () => ({
   getWorkspaceDataDir: () => mockWorkspaceDir,
+  getWorkspacesDir: () => path.join(mockDataDir, 'workspaces'),
+}));
+
+let mockTrustedRoots: X509Certificate[] = [];
+jest.mock('@/backend/services/mcp/mcpb/trustedRoots', () => ({
+  systemTrustedRoots: async () => mockTrustedRoots,
 }));
 
 const mockServers = new Map<string, MCPServerConfig>();
@@ -44,10 +52,11 @@ jest.mock('@/backend/services/accounts/hostAccess', () => {
 });
 
 import { installMcpbBundle, reviewMcpbBundle } from '@/backend/services/mcp/mcpb/install';
-import { checkEntryPath, mcpbLimits, MCPB_UPLOAD_CEILING_BYTES, openMcpbArchive, splitMcpbSignature } from '@/backend/services/mcp/mcpb/archive';
+import { checkEntryPath, mcpbLimits, MCPB_UPLOAD_CEILING_BYTES, openMcpbArchive } from '@/backend/services/mcp/mcpb/archive';
 import { LEFTOVER_AGE_MS, mcpbInstallDir, mcpbRoot, removeMcpbServerFiles, siblingDir, sweepMcpbLeftovers } from '@/backend/services/mcp/mcpb/files';
 import { buildLaunchPlan, checkUserConfig, McpbError, parseMcpbManifest, userConfigFields } from '@/backend/services/mcp/mcpb/manifest';
 import { HostAccessRequiredError } from '@/backend/services/accounts/hostAccess';
+import { makeCertificate, OIDS, signBundle, type TestCertificate } from './fixtures/mcpbSigning';
 
 type Json = Record<string, unknown>;
 
@@ -117,15 +126,23 @@ async function listRoot(): Promise<string[]> {
   return fs.readdir(mcpbRoot()).catch(() => []);
 }
 
+/** A real folder for the bundle's folder setting; install checks that it exists. */
+let dataFolder = '';
+
 beforeEach(async () => {
-  mockWorkspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-mcpb-'));
+  mockDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'flujo-mcpb-'));
+  mockWorkspaceDir = path.join(mockDataDir, 'workspaces', 'default');
+  dataFolder = path.join(mockDataDir, 'data');
+  await fs.mkdir(mockWorkspaceDir, { recursive: true });
+  await fs.mkdir(dataFolder);
   mockServers.clear();
+  mockTrustedRoots = [];
   jest.clearAllMocks();
   mockMayStart.mockResolvedValue(true);
 });
 
 afterEach(async () => {
-  await fs.rm(mockWorkspaceDir, { recursive: true, force: true });
+  await fs.rm(mockDataDir, { recursive: true, force: true });
 });
 
 describe('reviewing a bundle', () => {
@@ -273,20 +290,78 @@ describe('unsafe files', () => {
 });
 
 describe('signatures', () => {
-  it('finds a signature block, keeps the bundle readable and calls it unverified', async () => {
-    const plain = await validBundle();
-    const signature = Buffer.from('fake-pkcs7');
-    const length = Buffer.alloc(4);
-    length.writeUInt32LE(signature.length);
-    const signed = Buffer.concat([plain, Buffer.from('MCPB_SIG_V1'), length, signature, Buffer.from('MCPB_SIG_END')]);
-    expect(splitMcpbSignature(signed)).toMatchObject({ status: 'signed-unverified' });
-    expect(splitMcpbSignature(signed).content.equals(plain)).toBe(true);
-    const review = await reviewMcpbBundle(signed);
-    expect(review.signature.status).toBe('signed-unverified');
+  let root: TestCertificate;
+  let signer: TestCertificate;
 
-    const cut = Buffer.concat([plain, Buffer.from('MCPB_SIG_END')]);
-    expect(splitMcpbSignature(cut).status).toBe('damaged');
-    expect(splitMcpbSignature(plain).status).toBe('unsigned');
+  beforeAll(() => {
+    root = makeCertificate({ commonName: 'Test Root', ca: true });
+    signer = makeCertificate({ commonName: 'Ada Example', organization: 'Example Tools', issuer: root, extendedKeyUsage: [OIDS.codeSigning] });
+  });
+
+  async function installSigned(bytes: Buffer) {
+    const review = await reviewMcpbBundle(bytes);
+    return { review, install: () => installMcpbBundle({ bytes, reviewedDigest: review.digest, serverName: 'hello-bundle', userConfig: { api_key: 'k', roots: dataFolder } }) };
+  }
+
+  it('shows who signed a trusted bundle, unpacks it like any other and remembers the signer', async () => {
+    mockTrustedRoots = [root.x509];
+    const bytes = signBundle(await validBundle(), signer);
+    const archive = await openMcpbArchive(bytes);
+    expect(archive.files.has('server/index.js')).toBe(true);
+
+    const { review, install } = await installSigned(bytes);
+    expect(review.signature).toMatchObject({ status: 'signed', signer: { name: 'Ada Example', organization: 'Example Tools', issuer: 'Test Root' } });
+    await install();
+    expect(mockServers.get('hello-bundle')?.source).toMatchObject({ type: 'mcpb', signer: { name: 'Ada Example', fingerprint: signer.x509.fingerprint256 } });
+    await expect(fs.readFile(path.join(mcpbInstallDir('hello-bundle'), 'server', 'index.js'), 'utf8')).resolves.toBe('console.log("hello")');
+  });
+
+  it('refuses to install a bundle whose signature does not hold up, and writes nothing', async () => {
+    mockTrustedRoots = [root.x509];
+    const changed = signBundle(await validBundle({}, { 'server/extra.js': 'extra' }), signer);
+    changed.write('server/extrA.js', changed.indexOf('server/extra.js'));
+    const changedReview = await installSigned(changed);
+    expect(changedReview.review.signature).toMatchObject({ status: 'invalid', problem: 'changed', signer: { name: 'Ada Example' } });
+    expect((await expectMcpbError(changedReview.install(), 'invalid-signature')).message)
+      .toBe('FLUJO will not install this bundle: its signature does not hold up. The bundle was changed after it was signed.');
+
+    const other = makeCertificate({ commonName: 'Mallory', issuer: root, extendedKeyUsage: [OIDS.codeSigning] });
+    const wrongKey = await installSigned(signBundle(await validBundle(), signer, { signingKey: other }));
+    expect(wrongKey.review.signature).toMatchObject({ status: 'invalid', problem: 'wrong-certificate' });
+    await expectMcpbError(wrongKey.install(), 'invalid-signature');
+
+    const cut = Buffer.concat([await validBundle(), Buffer.from('MCPB_SIG_END')]);
+    const { review, install } = await installSigned(cut);
+    expect(review.signature).toEqual({ status: 'invalid', problem: 'damaged' });
+    await expectMcpbError(install(), 'invalid-signature');
+    expect(await listRoot()).toEqual([]);
+    expect(mockServers.size).toBe(0);
+  });
+
+  it('installs an unsigned bundle, and one whose signer nobody trusted vouches for, as unsigned', async () => {
+    const plain = await installSigned(await validBundle());
+    expect(plain.review.signature).toEqual({ status: 'unsigned' });
+
+    const selfMade = makeCertificate({ commonName: 'Mallory', extendedKeyUsage: [OIDS.codeSigning] });
+    const untrusted = await installSigned(signBundle(await validBundle(), selfMade));
+    expect(untrusted.review.signature).toMatchObject({ status: 'unsigned', signer: { name: 'Mallory' } });
+    await untrusted.install();
+    expect(mockServers.get('hello-bundle')?.source).not.toHaveProperty('signer');
+  });
+
+  it('warns when an update is not signed by whoever signed the installed version', async () => {
+    mockTrustedRoots = [root.x509];
+    await (await installSigned(signBundle(await validBundle(), signer))).install();
+
+    const renewed = makeCertificate({ commonName: 'Ada Example', organization: 'Example Tools', issuer: root, extendedKeyUsage: [OIDS.codeSigning] });
+    const sameSigner = await reviewMcpbBundle(signBundle(await validBundle({ version: '1.1.0' }), renewed));
+    expect(sameSigner.existing).toMatchObject({ signer: 'Ada Example' });
+    expect(sameSigner.warnings).not.toContain('signer-changed');
+
+    const unsigned = await reviewMcpbBundle(await validBundle({ version: '2.0.0' }));
+    expect(unsigned.warnings).toContain('signer-changed');
+    const someoneElse = makeCertificate({ commonName: 'Someone Else', issuer: root, extendedKeyUsage: [OIDS.codeSigning] });
+    expect((await reviewMcpbBundle(signBundle(await validBundle({ version: '2.0.0' }), someoneElse))).warnings).toContain('signer-changed');
   });
 });
 
@@ -307,6 +382,42 @@ describe('settings', () => {
 
     expect(() => checkUserConfig(fields, { roots: '/a', limit: 99 })).toThrow(expect.objectContaining({ code: 'invalid-config', fields: ['limit'] }));
     expect(() => checkUserConfig(fields, {})).toThrow(expect.objectContaining({ code: 'missing-config', fields: ['roots'] }));
+  });
+
+  it('checks folder and file settings on this computer before installing', async () => {
+    const parsed = manifest({
+      user_config: {
+        roots: { type: 'directory', title: 'Folders', description: '', multiple: true, required: true },
+        config: { type: 'file', title: 'Config file', description: '' },
+      },
+      server: { type: 'node', entry_point: 'server/index.js', mcp_config: { command: 'node', args: ['${__dirname}/server/index.js', '${user_config.roots}', '${user_config.config}'] } },
+    });
+    const bytes = await validBundle(parsed);
+    const configFile = path.join(dataFolder, 'settings.json');
+    await fs.writeFile(configFile, '{}');
+    const keyFolder = path.join(mockDataDir, 'workspaces', 'other', 'db');
+    await fs.mkdir(keyFolder, { recursive: true });
+    const install = async (userConfig: Json) => {
+      const review = await reviewMcpbBundle(bytes);
+      return installMcpbBundle({ bytes, reviewedDigest: review.digest, serverName: 'hello-bundle', userConfig });
+    };
+
+    const missing = await expectMcpbError(install({ roots: `${dataFolder}\n${path.join(dataFolder, 'nope')}` }), 'invalid-config');
+    expect(missing.fields).toEqual(['roots']);
+    expect(missing.message).toBe(`Check "Folders": "${path.join(dataFolder, 'nope')}" does not exist on this computer or cannot be opened.`);
+
+    const swapped = await expectMcpbError(install({ roots: configFile, config: dataFolder }), 'invalid-config');
+    expect(swapped.fields).toEqual(['roots', 'config']);
+    expect(swapped.message).toBe(`Check "Folders": "${configFile}" is a file, not a folder. Check "Config file": "${dataFolder}" is a folder, not a file.`);
+
+    expect((await expectMcpbError(install({ roots: 'relative/folder' }), 'invalid-config')).message)
+      .toBe('Check "Folders": "relative/folder" is not a full path.');
+    expect((await expectMcpbError(install({ roots: keyFolder }), 'invalid-config')).message)
+      .toBe(`Check "Folders": "${keyFolder}" is inside FLUJO’s own folder for keys and secrets. Choose another folder.`);
+    expect(await listRoot()).toEqual([]);
+
+    await install({ roots: dataFolder, config: configFile });
+    expect((mockServers.get('hello-bundle') as MCPServerConfig & { args: string[] }).args.slice(1)).toEqual([dataFolder, configFile]);
   });
 
   it('applies platform overrides: command and args replaced, env merged', () => {
@@ -338,7 +449,7 @@ describe('installing', () => {
   }
 
   it('unpacks into the managed folder and saves a local server with the secret stored as a secret', async () => {
-    const result = await install(await validBundle(), { api_key: 'secret-value-1', roots: '/data' });
+    const result = await install(await validBundle(), { api_key: 'secret-value-1', roots: dataFolder });
     expect(result).toEqual({ installed: true, serverName: 'hello-bundle', upgraded: false, version: '1.0.0' });
 
     const dir = mcpbInstallDir('hello-bundle');
@@ -350,9 +461,10 @@ describe('installing', () => {
       rootPath: dir,
       disabled: false,
       env: { API_KEY: { value: 'secret-value-1', metadata: { isSecret: true } }, MODE: 'fast' },
-      source: { type: 'mcpb', bundleName: 'hello-bundle', version: '1.0.0', userConfig: { mode: 'fast', roots: ['/data'] }, secretEnv: { api_key: 'API_KEY' } },
+      source: { type: 'mcpb', bundleName: 'hello-bundle', version: '1.0.0', userConfig: { mode: 'fast', roots: [dataFolder] }, secretEnv: { api_key: 'API_KEY' } },
     });
-    expect(saved.args).toEqual([`${dir}/server/index.js`, '--roots', '/data']);
+    expect(saved.args).toEqual([`${dir}/server/index.js`, '--roots', dataFolder]);
+    expect(saved.source).not.toHaveProperty('signer');
     expect(JSON.stringify(saved.source)).not.toContain('secret-value-1');
     expect((await listRoot()).sort()).toEqual(['hello-bundle']);
   });
@@ -379,14 +491,14 @@ describe('installing', () => {
   });
 
   it('upgrades in place: old files go, saved settings and the saved secret stay', async () => {
-    await install(await validBundle({}, { 'server/old.js': 'old' }), { api_key: 'secret-value-1', mode: 'slow', roots: '/data' });
+    await install(await validBundle({}, { 'server/old.js': 'old' }), { api_key: 'secret-value-1', mode: 'slow', roots: dataFolder });
     const v2 = await validBundle({ version: '2.0.0' }, { 'server/new.js': 'new' });
     const review = await reviewMcpbBundle(v2);
     expect(review.existing).toEqual({ serverName: 'hello-bundle', version: '1.0.0' });
     expect(review.userConfig.find((field) => field.key === 'api_key')?.hasSavedSecret).toBe(true);
     expect(review.userConfig.find((field) => field.key === 'mode')?.savedValue).toBe('slow');
 
-    const result = await installMcpbBundle({ bytes: v2, reviewedDigest: review.digest, serverName: 'hello-bundle', userConfig: { mode: 'slow', roots: '/data' } });
+    const result = await installMcpbBundle({ bytes: v2, reviewedDigest: review.digest, serverName: 'hello-bundle', userConfig: { mode: 'slow', roots: dataFolder } });
     expect(result).toMatchObject({ upgraded: true, version: '2.0.0' });
     expect(mockDisconnectServer).toHaveBeenCalled();
 
@@ -406,9 +518,9 @@ describe('installing', () => {
       'manifest.json': await fs.readFile(path.join(fixture, 'manifest.json')),
       'server/index.js': await fs.readFile(path.join(fixture, 'server', 'index.js')),
     });
-    await install(bytes, { greeting: 'Hi', token: 'secret-token' }, 'hello');
+    await install(bytes, { greeting: 'Hi', token: 'secret-token', notes: dataFolder }, 'hello');
     const saved = mockServers.get('hello') as MCPServerConfig & { command: string; args: string[] };
-    expect(saved.env).toEqual({ GREETING: 'Hi', HELLO_TOKEN: { value: 'secret-token', metadata: { isSecret: true } } });
+    expect(saved.env).toEqual({ GREETING: 'Hi', HELLO_TOKEN: { value: 'secret-token', metadata: { isSecret: true } }, HELLO_NOTES: dataFolder });
 
     const env = Object.fromEntries(Object.entries(saved.env).map(([key, value]) => [key, typeof value === 'string' ? value : value.value]));
     const transport = new StdioClientTransport({

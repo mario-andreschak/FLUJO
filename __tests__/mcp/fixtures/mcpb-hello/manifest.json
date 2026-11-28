@@ -12,13 +12,14 @@
     "mcp_config": {
       "command": "node",
       "args": ["${__dirname}/server/index.js"],
-      "env": { "GREETING": "${user_config.greeting}", "HELLO_TOKEN": "${user_config.token}" }
+      "env": { "GREETING": "${user_config.greeting}", "HELLO_TOKEN": "${user_config.token}", "HELLO_NOTES": "${user_config.notes}" }
     }
   },
   "tools": [{ "name": "hello", "description": "Say hello" }],
   "user_config": {
     "greeting": { "type": "string", "title": "Greeting", "description": "The word used to greet.", "default": "Hello" },
-    "token": { "type": "string", "title": "Token", "description": "Any text; stored as a secret.", "sensitive": true, "required": true }
+    "token": { "type": "string", "title": "Token", "description": "Any text; stored as a secret.", "sensitive": true, "required": true },
+    "notes": { "type": "directory", "title": "Notes folder", "description": "Any folder on this computer; the server only receives its path." }
   },
   "compatibility": { "platforms": ["darwin", "win32", "linux"], "runtimes": { "node": ">=18" } }
 }

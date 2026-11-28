@@ -453,6 +453,12 @@ export interface PersonaCompositionPreferences {
   behaviors?: PersonaBehaviorComposition[];
 }
 
+/** A Connected App the Persona lists that is gone or turned off. */
+export interface PersonaAppIssue {
+  name: string;
+  problem: 'missing' | 'disabled';
+}
+
 export interface PersonaCompositionMemory {
   ref: string;
   kind: MemoryKind;
@@ -468,6 +474,8 @@ export interface PersonaComposition {
   coreFlowRef?: string;
   core?: PersonaFlowCard;
   appRefs: string[];
+  /** Listed Connected Apps that are gone or turned off; reading never fails because of them. */
+  appIssues?: PersonaAppIssue[];
   memories: PersonaCompositionMemory[];
   behaviors: PersonaBehaviorComposition[];
   behaviorCards: PersonaBehaviorFlowCard[];

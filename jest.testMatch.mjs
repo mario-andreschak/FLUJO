@@ -82,9 +82,14 @@ export const ISOLATED_TEST_FILES = [
   '__tests__/model/claudeArchiveMemoryBoundary.test.ts',
   '__tests__/mcp/processBoundary.test.ts',
   '__tests__/mcp/stdioServers.test.ts',
+  // A local authorization server, and the official conformance tool once per scenario.
+  '__tests__/mcp/oauthReferenceServer.test.ts',
+  '__tests__/mcp/mcpClientConformance.test.ts',
   '__tests__/mcp/browserCaptureRecording.test.ts',
   '__tests__/packages/workspaceMcpTransfer.test.ts',
   '__tests__/snapshot/ShadowRepoService.test.ts',
+  // Real bundled Codex processes; the cancellation checks count processes.
+  '__tests__/model/codexStandIn.test.ts',
 ];
 
 // Environment switch consulted by jest.config.mjs. scripts/run-local-jest.cjs

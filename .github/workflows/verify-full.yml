@@ -110,7 +110,11 @@ jobs:
       - name: Verify exact official Node runtime
         if: steps.application-change.outputs.changed == 'true'
         run: node scripts/verify-ci-node.mjs 22.23.4 --record
-      - name: Qualify installed app and packed MCP packages on Node 22.23.4
+      # Installs the packed app into a fresh profile, starts it, connects the
+      # bundled MCP servers and lists resources repeatedly. On windows-latest
+      # it also lists while real file locks (as antivirus takes them) hold the
+      # owner, approval and server-config files, and fails on any refusal (#1050).
+      - name: Qualify installed app, packed MCP packages and resource listing on Node 22.23.4
         if: steps.application-change.outputs.changed == 'true'
         shell: bash
         run: |
@@ -124,7 +128,7 @@ jobs:
       - name: Verify exact official Node runtime
         if: steps.application-change.outputs.changed == 'true'
         run: node scripts/verify-ci-node.mjs 24.22.1 --record
-      - name: Qualify installed app and packed MCP packages on Node 24.22.1
+      - name: Qualify installed app, packed MCP packages and resource listing on Node 24.22.1
         if: steps.application-change.outputs.changed == 'true'
         shell: bash
         run: |
@@ -365,6 +369,9 @@ jobs:
       - name: Verify the packaged-artifact checks and the automated operator run
         timeout-minutes: 15
         run: node --test scripts/packaged-acceptance.test.mjs scripts/packaged-acceptance/low-disk.test.mjs scripts/packaged-acceptance/stand-ins.test.mjs scripts/operator-runbook.test.mjs
+      - name: Verify the shipped Codex with the local model stand-in
+        timeout-minutes: 10
+        run: node --test scripts/packaged-codex-acceptance.test.mjs
       - name: Exercise disposable ownership prototype
         timeout-minutes: 3
         run: node scripts/ownership-prototype/run.cjs "${{ runner.temp }}/ownership-prototype.json"
@@ -469,12 +476,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+      - uses: github/codeql-action/init@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
         with:
           languages: ${{ matrix.language }}
           build-mode: none
           queries: security-extended
-      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+      - uses: github/codeql-action/analyze@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
         with:
           category: /language:${{ matrix.language }}
           upload: always
@@ -614,10 +621,37 @@ jobs:
           path: jest-results-isolated.json
           if-no-files-found: warn
 
+  # The official Antigravity CLI against a local stand-in model on the desktop
+  # systems the main test job does not run (it covers Linux): tool isolation,
+  # multi-turn continuity across a restart, and effort levels from `agy models`.
+  antigravity-cli:
+    name: Antigravity CLI (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '22.23.4'
+          cache: npm
+      - name: Verify exact official Node runtime
+        run: node scripts/verify-ci-node.mjs 22.23.4 --record
+      - run: npm ci --include=dev
+      - name: Install the official Antigravity CLI the way FLUJO does
+        run: node -e "require('./bin/antigravity-runtime.cjs').resolveBinary().then(binary => console.log(binary))"
+      - name: Run the official Antigravity CLI against the local stand-in model
+        run: node scripts/run-local-jest.cjs --ci --selectProjects node --runInBand --runTestsByPath __tests__/model/antigravityCliIntegration.test.ts
+
   verification:
     name: verification
     if: always()
-    needs: [production-build, release-safety, typecheck, lint, test, test-isolated, workflow-contract, dependency-security, codeql]
+    needs: [production-build, release-safety, typecheck, lint, test, test-isolated, workflow-contract, dependency-security, codeql, antigravity-cli, installed-windows-acceptance, image-acceptance]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

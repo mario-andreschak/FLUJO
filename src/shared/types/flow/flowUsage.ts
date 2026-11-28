@@ -3,6 +3,7 @@
  * the flow is deleted (#1389). Deleting a used flow moves every place first and
  * deletes the flow last, so nothing is left pointing at a missing flow.
  */
+import { isUseChoice, parseDeletePlan, type DeletePlan, type UseChoice } from '@/shared/types/deletePlan';
 
 /** How an automation uses the flow. */
 export type FlowAutomationRole =
@@ -66,14 +67,8 @@ export interface FlowUsage {
   copySources: FlowCopySource[];
 }
 
-export type FlowUseChoice =
-  | { replaceWith: string }
-  | { remove: true };
-
-export interface FlowDeletePlan {
-  /** One answer for each {@link FlowUse.key}. */
-  choices: Record<string, FlowUseChoice>;
-}
+export type FlowUseChoice = UseChoice;
+export type FlowDeletePlan = DeletePlan;
 
 export const FLOW_IN_USE_CODE = 'FLOW_IN_USE';
 
@@ -95,26 +90,5 @@ export interface FlowDeleteSummary {
   flows: string[];
 }
 
-export function isFlowUseChoice(value: unknown): value is FlowUseChoice {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const choice = value as Record<string, unknown>;
-  if (Object.keys(choice).length !== 1) return false;
-  if (choice.remove === true) return true;
-  return typeof choice.replaceWith === 'string' && choice.replaceWith.trim().length > 0;
-}
-
-/** Read a delete plan from an untrusted request body; `null` when none was sent. */
-export function parseFlowDeletePlan(value: unknown): FlowDeletePlan | null | 'invalid' {
-  if (value === null || value === undefined) return null;
-  if (typeof value !== 'object' || Array.isArray(value)) return 'invalid';
-  const plan = (value as { plan?: unknown }).plan;
-  if (plan === undefined) return null;
-  if (!plan || typeof plan !== 'object' || Array.isArray(plan)) return 'invalid';
-  const choices = (plan as { choices?: unknown }).choices;
-  if (!choices || typeof choices !== 'object' || Array.isArray(choices)) return 'invalid';
-  const entries = Object.entries(choices as Record<string, unknown>);
-  if (entries.length > 1000 || !entries.every(([key, choice]) => key.length <= 600 && isFlowUseChoice(choice))) {
-    return 'invalid';
-  }
-  return { choices: Object.fromEntries(entries) as Record<string, FlowUseChoice> };
-}
+export const isFlowUseChoice = isUseChoice;
+export const parseFlowDeletePlan = parseDeletePlan;

@@ -232,7 +232,7 @@ Do not describe them as a signed or tamper-proof audit trail.
 
 ## Checks on the shipped forms
 
-`scripts/packaged-acceptance.mjs` runs one set of backup, restart, upgrade,
+`scripts/packaged-acceptance.mjs` runs one set of backup, restart, upgrade, MCP,
 disk-full, schedule and restore checks against FLUJO as people install it, not
 against a source build:
 
@@ -271,7 +271,13 @@ for Docker) and its own port:
    approving runs the tool exactly once, approving again is refused, denying
    runs nothing, the switched-off schedule never runs and every schedule run
    matches exactly one model call.
-10. Stop normally; the app must end and free its port.
+10. npm package and Windows installer only: add a local program (stdio) MCP
+    server and call its tool. Add an MCP server behind a local OAuth
+    authorization server (`scripts/mcp-oauth-reference-server.mjs`, built from
+    the official MCP SDK's handlers), sign in through FLUJO's own routes and
+    redirect, and use it after its access token expired. Restart; it must still
+    work with no new consent, and resetting the sign-in must revoke the grant.
+11. Stop normally; the app must end and free its port.
 
 With `--from npm:latest` (or `--from image:...` for Docker) the previous release
 starts first, writes the test data and takes the backup. The release under test
@@ -281,10 +287,12 @@ upgrade from the one before it.
 
 What these checks do not cover: the test data is one flow, one finished
 conversation, the theme and one non-secret setting, plus the stand-in schedule
-and approvals; no real provider, account or secret is used. A forced stop is not
-a power cut. On Windows a console program has no gentle stop signal, so a normal
-stop there also ends the process tree. A container accepts snapshot backups only
-from inside itself, so there the forced stop hits an ordinary backup only. A
+and approvals; no real provider, account or secret is used. The Docker image
+runs no MCP checks, because a container starts local program servers only
+after the owner approves them. A forced stop is not a power cut. On Windows a
+console program has no gentle stop signal, so a normal stop there also ends
+the process tree. A container accepts snapshot backups only from inside
+itself, so there the forced stop hits an ordinary backup only. A
 whole-workspace snapshot also carries every configured MCP server; a fresh
 installation's bundled servers do not allow that, so the check snapshots the
 test flow.

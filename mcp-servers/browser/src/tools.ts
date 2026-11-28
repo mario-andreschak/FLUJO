@@ -297,16 +297,22 @@ export function browserToolDefinitions(): Tool[] {
         + 'The result reports maxDurationMs (how long the free space lasts at this size) and diskWarning if durationMs is longer; '
         + 'a recording only stops early when the disk really runs low, and keeps what it recorded. '
         + 'Stopping keeps the page open, so pass this sessionId again to record the next part on the same page, or to change when a running recording stops. '
+        + 'To record a page opened with browser_open, pass its sessionId: the page is recorded as it is, without reloading, so sign-ins, typed input and scroll position stay. '
+        + 'While it records, its size is fixed; afterwards it gets its earlier size back and stays open. '
         + 'Unsupported resolutions fall back automatically and are reported in warnings/effectiveResolution.',
       inputSchema: {
         type: 'object',
         properties: {
           sessionId: {
             ...SESSION_PROPERTY,
-            description: 'Optional. A session from an earlier browser_record_start: records the next part on the same page (its state is kept). If that session is still recording, durationMs instead sets when it stops, counted from now.',
+            description: 'Optional. A session opened with browser_open, or one from an earlier browser_record_start: records that page as it is, without reloading it, so its state is kept. If that session is still recording, durationMs instead sets when it stops, counted from now.',
           },
           source: { type: 'string', description: 'Optional URL, localhost address, local path, or inline HTML to load before returning.' },
-          resolution: { type: 'string', description: 'Preset or WIDTHxHEIGHT, for example 720p, 1080p, 4k, or 1600x900.' },
+          resolution: {
+            type: 'string',
+            description: 'Preset or WIDTHxHEIGHT, for example 720p, 1080p, 4k, or 1600x900. A browser_open page is recorded at its own size by default; '
+              + 'another size resizes it without reloading while it records. A session started by browser_record_start keeps its first size.',
+          },
           audio: { type: 'boolean', default: true, description: 'Capture page audio into a WAV sidecar (and mux it in if ffmpeg is available).' },
           durationMs: {
             type: 'number',
@@ -328,7 +334,7 @@ export function browserToolDefinitions(): Tool[] {
         type: 'object',
         properties: {
           recordingId: { ...SESSION_PROPERTY, description: 'Recording id returned by browser_record_start. Omit when exactly one recording is running.' },
-          sessionId: { ...SESSION_PROPERTY, description: 'Session id returned by browser_record_start; stops the recording running on it.' },
+          sessionId: { ...SESSION_PROPERTY, description: 'Session id of the recording (from browser_open or browser_record_start); stops the recording running on it.' },
           outputPath: { type: 'string', description: 'Optional destination path for the finished artifact, confined to the FLUJO data directory.' },
           closeSession: { type: 'boolean', default: false, description: 'Also close the browser session. By default it stays open so the page keeps its state.' },
         },

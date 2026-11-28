@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { ownerPolicySchema, type OwnerPolicy } from './ownerCredentials';
 import { realpath } from '../../../utils/realpath';
+import { isTransientFileError, retryTransientFileOperation } from '../../../utils/transientFileRetry';
 
 export const MAX_OWNER_POLICY_BYTES = 64 * 1024;
 
@@ -18,9 +19,25 @@ function assertPrivateFile(stat: BigIntStats): void {
         || stat.uid !== BigInt(process.getuid?.() ?? -1)))) throw new Error('Invalid owner policy file');
 }
 
+/** The file was replaced or rewritten while it was being read. */
+class OwnerPolicyChangedError extends Error {
+  constructor() { super('Owner policy changed'); }
+}
+
+/**
+ * Every owner request reads this file. Antivirus or the indexer can hold it
+ * for a moment and a rewrite replaces it, so such a read starts again from
+ * scratch after a short wait; links, sharing or a wrong owner still refuse.
+ */
 export async function readOwnerPolicy(filename: string): Promise<OwnerPolicy> {
   if (!path.isAbsolute(filename)) throw new Error('Invalid owner policy path');
   const resolved = path.resolve(filename);
+  return retryTransientFileOperation(() => readOwnerPolicyOnce(resolved), {
+    label: 'owner-policy', isTransient: error => isTransientFileError(error) || error instanceof OwnerPolicyChangedError,
+  });
+}
+
+async function readOwnerPolicyOnce(resolved: string): Promise<OwnerPolicy> {
   const before = await fs.lstat(resolved, { bigint: true });
   assertPrivateFile(before);
   const canonical = await realpath(resolved);
@@ -29,7 +46,7 @@ export async function readOwnerPolicy(filename: string): Promise<OwnerPolicy> {
   try {
     const stat = await handle.stat({ bigint: true });
     assertPrivateFile(stat);
-    if (!sameFile(before, stat)) throw new Error('Owner policy changed');
+    if (!sameFile(before, stat)) throw new OwnerPolicyChangedError();
     const bytes = Buffer.alloc(MAX_OWNER_POLICY_BYTES + 1);
     let length = 0;
     while (length < bytes.length) {
@@ -41,7 +58,7 @@ export async function readOwnerPolicy(filename: string): Promise<OwnerPolicy> {
     if (length > MAX_OWNER_POLICY_BYTES || BigInt(length) !== stat.size
         || !sameFile(stat, await handle.stat({ bigint: true })) || !sameFile(stat, finalNamed)
         || finalNamed.isSymbolicLink() || path.relative(canonical, await realpath(resolved)) !== '') {
-      throw new Error('Owner policy changed');
+      throw new OwnerPolicyChangedError();
     }
     return ownerPolicySchema.parse(JSON.parse(bytes.subarray(0, length).toString('utf8')));
   } finally {

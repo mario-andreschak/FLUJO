@@ -3,7 +3,11 @@
 The Codex model picker and connection wizard discover the catalogue through the
 same workspace's file-backed ChatGPT login and ordinary Codex executable used
 for inference. They call the public app-server `model/list` protocol, including
-all pages, and use its reasoning options. There is no FLUJO-maintained list of
+all pages, and use its reasoning options and speed tiers. The **Priority** choice
+(Codex's "Fast" tier) is offered only for models whose catalogue entry lists the
+`priority` tier; FLUJO sends the saved tier as the thread's `serviceTier` and
+uses `default` otherwise, so a personal Codex Fast setting never applies to
+FLUJO by accident. There is no FLUJO-maintained list of
 Codex model names. Discovery creates no thread, inference turn or tool call.
 
 The catalogue is cached for one minute per workspace, login revision and CLI
@@ -71,19 +75,24 @@ normal release gates; an older deployed image must first receive this change.
 ### Recorded protocol check
 
 `npm run record:codex-protocol` starts the bundled CLI in an empty temporary
-Codex home, points it at a small local stand-in for the model service on
-127.0.0.1, and records every app-server message to
+Codex home, points it at the local stand-in for the model service on
+127.0.0.1 (`scripts/codex-stand-in.mjs`), and records every app-server message to
 `__tests__/model/fixtures/codexAppServerProtocol.json`. No login, account or
 real model call is used. It records a new conversation, a resume after restart,
-a turn refused because the plan's limit is used up, and a fork after the first
-turn. Machine name, install id and paths are replaced by placeholders.
+a turn refused because the plan's limit is used up, a fork after the first
+turn, a turn with an output schema, a connection lost before Codex saved the
+input, a connection lost mid-answer, and Codex compacting the conversation on
+its own. The recorder itself checks that the schema reached the model request
+and that FLUJO's compaction carry reached the model after the summary. Machine
+name, install id and paths are replaced by placeholders.
 
 `__tests__/model/codexAppServerProtocolReplay.test.ts` plays that recording
 through FLUJO's real conversation code. It fails when the installed CLI or SDK
 no longer matches the recording, so every Codex update (including Dependabot's)
 must re-record and pass these checks: text deltas, final answer, token totals,
-plan limits, resume without double counting, the plain usage-limit message, and
-the fork checks. The recording uses the same request fields FLUJO sends.
+plan limits, resume without double counting, the plain usage-limit message, the
+fork checks, the output schema, both lost-connection cases and the compaction
+carry. The recording uses the same request fields FLUJO sends.
 
 The optional experimental host catalogue snapshot checks compatibility against
 the selected executable's actual version instead of a hardcoded CLI generation.
@@ -106,7 +115,27 @@ Steering uses the active turn ID and acknowledges the mailbox only after the
 server accepts it. A received completion-race rejection returns the correction
 to the inbox and invalidates session reuse. Cancellation interrupts the owned
 turn and closes the child; text already displayed stays in the transcript.
-Uncertain ordinary submissions fail without an automatic replacement turn.
+
+Every input FLUJO sends (`turn/start` and `turn/steer`) carries its own
+`clientUserMessageId`. When the connection to Codex is lost while an input may
+have arrived, FLUJO starts a new connection, resumes the thread and looks the id
+up in `thread/turns/list` before doing anything else:
+
+- Codex has a finished turn for it: FLUJO shows the answer it had not seen and
+  sends nothing again. Its token totals count only if Codex reports them.
+- Codex has an interrupted turn for it: FLUJO asks Codex to continue from where
+  it stopped, without the original input.
+- Codex has no such turn: the same input, with the same id, is sent once more.
+- A steer lost with the connection is acknowledged if Codex has it and returned
+  to the inbox if it does not.
+
+Nothing is sent when Codex cannot confirm, or after two lost connections in one
+turn; the next turn starts fresh.
+
+Cancelling a run, or Codex dropping a tool call, ends the FLUJO tool call: a tool
+still waiting for approval stops waiting and records why, and running tool work
+receives the cancellation. A forced stop ends Codex's whole process tree,
+including helpers it started (such as git).
 `FLUJO_CODEX_APP_SERVER=0` selects the retained SDK route for an intentional
 rollback; API-key, restricted and Native routes still use their admitted paths.
 
@@ -149,13 +178,25 @@ waiting. Invalid answers retain the prompt for correction; resolved, stopped or
 obsolete requests reject later answers. An application restart discards pending
 mailboxes and clears stale forms without replaying the submitted turn.
 
-The ordinary lifecycle batch does not claim issue #1097 complete. Advertised
-service-tier controls, native compaction integration and packaged runtime
-acceptance retain their separate criteria.
+Structured output: a FLUJO output schema (decisions, summaries) goes with each
+`turn/start` as `outputSchema`; the recording shows Codex passing it to the
+model as a JSON schema format.
 
-Known upstream change: since CLI 0.164 Codex says full-history resume and fork
-answers are deprecated for its new paged threads (`excludeTurns: true` with
-`thread/turns/list`). 0.166.0 still returns the turns FLUJO checks; the recorded
-protocol check will fail when that stops.
+Codex compacts a long conversation on its own, with a summary its model writes
+alone. FLUJO's compaction rules (#1091) still apply: when Codex starts
+compacting, FLUJO steers in its standing user instructions word for word and
+the exact receipts of tool calls that already ran, and Codex adds them right
+after its summary. If Codex refuses or drops that text, or it does not fit, the
+thread is not reused and the next turn is rebuilt from FLUJO's own history.
+
+Resume and fork ask for no inline history (`excludeTurns: true`) and read the
+newest turns from `thread/turns/list`, as Codex 0.164+ recommends. A Codex that
+still returns history inline is read from the response instead.
+
+The Codex an installed FLUJO runs is checked where it is installed:
+`scripts/packaged-codex-acceptance.mjs --app-root DIR` finds it the same way
+FLUJO does, checks its version against FLUJO's pin, and runs a conversation, a
+restart and a cancel against the local stand-in. The Windows installer job runs
+it on the fresh install; release safety runs its tests on Windows and Linux.
 
 Protocol reference: [Codex app-server models](https://learn.chatgpt.com/docs/app-server).

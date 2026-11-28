@@ -4,6 +4,7 @@ import { AsyncLocalStorage } from 'async_hooks';
 import { randomUUID } from 'crypto';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { getDataDir } from './paths';
+import { replaceFileWithRetry, retryTransientFileOperation } from './transientFileRetry';
 
 /**
  * Workspaces (#406) — a logical namespace *beneath* the existing FLUJO data root.
@@ -427,27 +428,6 @@ const metadataHost = globalThis as typeof globalThis & {
 };
 const metadataWrites = metadataHost.__flujoWorkspaceMetadataWritesV1 ??= new Map();
 
-// Windows refuses to replace a file while any reader holds it open (EPERM/
-// EBUSY/EACCES). `.workspace.json` is read on every roots/list and project
-// tool call, so such a conflict is routine and clears within milliseconds.
-// The attempts bound only one write: nothing is fenced, the next write starts
-// fresh.
-const RETRYABLE_RENAME_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
-const MAX_RENAME_ATTEMPTS = 15;
-
-async function replaceFile(temporary: string, target: string): Promise<void> {
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      await fs.rename(temporary, target);
-      return;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (attempt >= MAX_RENAME_ATTEMPTS || !code || !RETRYABLE_RENAME_CODES.has(code)) throw error;
-      await new Promise(resolve => setTimeout(resolve, Math.min(100, 5 * 2 ** (attempt - 1)) + Math.random() * 10));
-    }
-  }
-}
-
 /**
  * The current record for a write. An unreadable (corrupt) file starts over
  * from an empty record, as the roots editor always did, so saving the
@@ -487,7 +467,7 @@ export async function updateWorkspaceMetadata(
       const temporary = path.join(dir, `${WORKSPACE_METADATA_FILE}.${process.pid}.${randomUUID()}.tmp`);
       await fs.writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
       try {
-        await replaceFile(temporary, target);
+        await replaceFileWithRetry(temporary, target, { label: 'workspace-metadata-replace' });
       } catch (error) {
         await fs.rm(temporary, { force: true });
         throw error;
@@ -831,6 +811,9 @@ export async function deleteWorkspace(workspace: string): Promise<void> {
   return withWorkspaceNamespaceMutation(() => deleteWorkspaceWithinNamespaceLock(workspace));
 }
 
+/** A just-stopped MCP server or the indexer can still hold a file in the tree: about 1.5 s in total. */
+const WORKSPACE_DELETE_RETRY_DELAYS_MS: readonly number[] = Object.freeze([100, 200, 400, 800]);
+
 async function deleteWorkspaceWithinNamespaceLock(workspace: string): Promise<void> {
   const name = assertValidWorkspaceName(workspace);
   if (name === DEFAULT_WORKSPACE) {
@@ -851,32 +834,10 @@ async function deleteWorkspaceWithinNamespaceLock(workspace: string): Promise<vo
   if (unconfirmed.size > 0) {
     throw new Error(`Cannot delete workspace while ${unconfirmed.size} MCP server(s) remain open.`);
   }
-  
-  // Force delete with retry logic for EBUSY (Windows file locking)
-  const maxRetries = 5;
-  const baseDelayMs = 100;
-  
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      await fs.rm(dir, { recursive: true, force: true });
-      return; // Success
-    } catch (error) {
-      const errno = (error as NodeJS.ErrnoException).code;
-      const isLastAttempt = attempt === maxRetries - 1;
-      
-      // Retry on EBUSY (resource busy/locked) and EPERM (permission denied, can happen on Windows)
-      if (!isLastAttempt && (errno === 'EBUSY' || errno === 'EPERM')) {
-        const delay = baseDelayMs * Math.pow(2, attempt); // Exponential backoff
-        await new Promise(resolve => setTimeout(resolve, delay));
-        continue;
-      }
-      
-      // Re-throw if not retryable or last attempt
-      throw error;
-    }
-  }
+  await retryTransientFileOperation(() => fs.rm(dir, { recursive: true, force: true }), {
+    label: 'workspace-delete', delaysMs: WORKSPACE_DELETE_RETRY_DELAYS_MS,
+  });
 }
-
 
 /** Create the complete workspace-owned directory set if missing. Idempotent. */
 export async function ensureWorkspaceDirs(workspace?: string): Promise<string> {

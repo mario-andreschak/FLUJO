@@ -8,6 +8,32 @@ const isApplicationSelection = (file, id, condition) => file === 'verify.yml' &&
 
 const VERIFICATION_MATRIX_RUNNER = "${{ matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os }}";
 
+/** Jobs only the manual broad qualification runs; its verification gate needs them too. */
+const BROAD_ONLY_JOB_IDS = Object.freeze(['antigravity-cli', 'installed-windows-acceptance', 'image-acceptance']);
+const ANTIGRAVITY_INSTALL = "node -e \"require('./bin/antigravity-runtime.cjs').resolveBinary().then(binary => console.log(binary))\"";
+const ANTIGRAVITY_SUITE = 'node scripts/run-local-jest.cjs --ci --selectProjects node --runInBand --runTestsByPath __tests__/model/antigravityCliIntegration.test.ts';
+
+/**
+ * The official Antigravity CLI runs against the local stand-in model on macOS
+ * and Windows (the main test job covers Linux), installed by FLUJO's own
+ * installer, with nothing optional.
+ */
+export function assertAntigravityPlatformJob(workflow) {
+  const job = workflow?.jobs?.['antigravity-cli'];
+  const matrix = job?.strategy?.matrix;
+  const steps = job?.steps ?? [];
+  const install = steps.findIndex(step => step.run === 'npm ci --include=dev');
+  const cli = steps.findIndex(step => step.run === ANTIGRAVITY_INSTALL);
+  const suite = steps.findIndex(step => step.run === ANTIGRAVITY_SUITE);
+  if (!job || job.name !== 'Antigravity CLI (${{ matrix.os }})' || job['runs-on'] !== '${{ matrix.os }}'
+      || job.if !== undefined || job['continue-on-error'] || job.strategy['fail-fast'] !== false
+      || Object.keys(matrix ?? {}).join() !== 'os' || JSON.stringify(matrix.os) !== JSON.stringify(['macos-latest', 'windows-latest'])
+      || install < 0 || cli <= install || suite <= cli
+      || steps.some(step => step.if !== undefined || step['continue-on-error'])) {
+    throw new Error('The broad qualification must run the official Antigravity CLI suite on macOS and Windows after installing the CLI the way FLUJO does, with nothing optional.');
+  }
+}
+
 /** Jobs that must run on one exact non-Linux image, with the reason. */
 const NON_LINUX_VERIFICATION_JOBS = Object.freeze({
   'installed-windows-acceptance': ['windows-latest', 'Installs this revision with the real flujo-setup.exe, which only runs on Windows (#570).'],
@@ -15,6 +41,8 @@ const NON_LINUX_VERIFICATION_JOBS = Object.freeze({
 
 function assertVerificationRunners(workflow) {
   for (const [id, job] of Object.entries(workflow?.jobs ?? {})) {
+    // Its macOS and Windows matrix is checked by assertAntigravityPlatformJob.
+    if (id === 'antigravity-cli') continue;
     if (Object.hasOwn(NON_LINUX_VERIFICATION_JOBS, id)) {
       if (job['runs-on'] !== NON_LINUX_VERIFICATION_JOBS[id][0]) throw new Error(`${id} must run on ${NON_LINUX_VERIFICATION_JOBS[id][0]}: ${NON_LINUX_VERIFICATION_JOBS[id][1]}`);
     } else if (['production-build', 'release-safety'].includes(id)) {
@@ -292,6 +320,27 @@ export function assertPackagedAcceptance(workflows, { mainIntegration = false } 
 }
 
 /**
+ * The Codex a shipped FLUJO runs is checked where it is installed: the Windows
+ * installer's fresh install runs one conversation, a restart and a cancel with
+ * its own Codex, and release safety runs the same checks on both systems.
+ */
+export function assertPackagedCodexAcceptance(workflows) {
+  const installer = workflows['installer.yml']?.jobs?.['installer-acceptance']?.steps ?? [];
+  const acceptance = installer.findIndex(step => step.run?.includes(PACKAGED_ACCEPTANCE));
+  const codex = installer.findIndex(step => step.run?.includes('node scripts/packaged-codex-acceptance.mjs --app-root $appRoot --report '));
+  const upload = installer.findIndex(step => step.uses?.startsWith('actions/upload-artifact@'));
+  if (codex < 0 || codex < acceptance || codex > upload || installer[codex].if !== undefined || installer[codex]['continue-on-error']
+      || !installer[codex].run.includes("'FLUJO fresh install'")) {
+    throw new Error('installer.yml/installer-acceptance must run the Codex checks on the fresh install after it is installed and before its evidence is kept.');
+  }
+  const safety = workflows['verify.yml']?.jobs?.['release-safety']?.steps ?? [];
+  const unit = safety.find(step => step.run === 'node --test scripts/packaged-codex-acceptance.test.mjs');
+  if (!unit || unit.if !== undefined || unit['continue-on-error']) {
+    throw new Error('Release safety must run the shipped Codex checks on both operating systems.');
+  }
+}
+
+/**
  * The release sweep only reports (docs/release-sweep.md): its jobs may file issues but never push code,
  * open pull requests or publish, and the job that can file issues never installs or runs FLUJO.
  */
@@ -311,11 +360,53 @@ export function assertReleaseSweepReportsOnly(workflow) {
   }
 }
 
+const SWEEP_MAX_JOB_MINUTES = 120;
+
+/**
+ * The release sweep runs after every published release with no switch to turn it on (#1449: no flags), needs
+ * only the built-in GITHUB_TOKEN, files for real (the reporter's own cap and dedup keep that safe) and is bounded
+ * in time (docs/release-sweep.md).
+ */
+export function assertReleaseSweepRunsByDefault(workflow) {
+  if (!workflow) return;
+  const fail = (message) => { throw new Error(`release-sweep.yml ${message}`); };
+  const trigger = workflow.on?.workflow_run;
+  if (!trigger?.workflows?.includes('Publish npm release') || !trigger.types?.includes('completed')) {
+    fail('must start when a "Publish npm release" run completes, so every release is swept without anyone starting it.');
+  }
+  const text = JSON.stringify(workflow);
+  if (/\bvars\./.test(text)) {
+    fail('must not depend on repository variables: the sweep runs after every release by default, with no switch to set (#1449). '
+      + 'Remove the vars. condition instead of asking for a setting.');
+  }
+  if (/\bsecrets\./.test(text)) {
+    fail('must need nothing but the built-in token: use ${{ github.token }} with the issues: write permission, never a secret.');
+  }
+  const jobs = Object.entries(workflow.jobs ?? {});
+  for (const [id, job] of jobs) {
+    const minutes = job['timeout-minutes'];
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > SWEEP_MAX_JOB_MINUTES) {
+      fail(`/${id} must set timeout-minutes between 1 and ${SWEEP_MAX_JOB_MINUTES}, so a stuck sweep ends on its own.`);
+    }
+  }
+  const filers = jobs.filter(([, job]) => job.permissions?.issues === 'write');
+  const filing = filers.flatMap(([id, job]) => (job.steps ?? []).filter((step) => /release-sweep\/report-issues\.mjs/.test(step.run ?? ''))
+    .map((step) => ({ id, job, step })));
+  if (filers.length !== 1 || filing.length !== 1 || !/(?:^|\s)--file(?:\s|$)/.test(filing[0].step.run)
+      || filing[0].step.if !== undefined || filing[0].job.if !== undefined || filing[0].step['continue-on-error']) {
+    fail('must have exactly one job with issues: write, and it must run report-issues.mjs with --file on every run. '
+      + 'Filing is safe by default (fingerprints, dedup, a cap per run); do not make it conditional.');
+  }
+  if (!/--total-timeout \d+/.test(text)) fail('must pass --total-timeout to run.mjs, so the sweep writes its report before the job time runs out.');
+}
+
 export function assertFullWorkflowContract(workflows, { mainIntegration = false } = {}) {
   assertInstallerProvenance(workflows['installer.yml']);
   assertReleaseSweepReportsOnly(workflows['release-sweep.yml']);
+  assertReleaseSweepRunsByDefault(workflows['release-sweep.yml']);
   assertReleaseVerificationGates(workflows);
   assertPackagedAcceptance(workflows, { mainIntegration });
+  assertPackagedCodexAcceptance(workflows);
   const releaseSteps = workflows['verify.yml']?.jobs?.['release-safety']?.steps ?? [];
   const installerDecisions = releaseSteps.find(step => step.name === 'Verify Windows installer decisions before publication');
   if (releaseSteps.find(step => step.uses?.startsWith('actions/checkout@'))?.with?.['fetch-depth'] !== 0
@@ -454,9 +545,10 @@ export function assertFullWorkflowContract(workflows, { mainIntegration = false 
       || !preparation.includes('[[ "$image" =~ ^sha256:[a-f0-9]{64}$ ]]')) {
     throw new Error('Isolation pulls must retry bounded identical-digest mirrors and fail closed before publishing the inspected image identity.');
   }
+  if (!mainIntegration) assertAntigravityPlatformJob(workflow);
   const gate = workflow.jobs.verification;
   if (gate?.name !== 'verification' || gate.if !== 'always()'
-      || JSON.stringify(gate.needs) !== JSON.stringify(REQUIRED_JOB_IDS)
+      || JSON.stringify(gate.needs) !== JSON.stringify(mainIntegration ? REQUIRED_JOB_IDS : [...REQUIRED_JOB_IDS, ...BROAD_ONLY_JOB_IDS])
       || gate['continue-on-error'] || !gate.steps.some((step) => step.run?.includes('assertFullDependencyResults') && step.if === undefined && !step['continue-on-error'])) {
     throw new Error('The required verification check must evaluate every prerequisite even after failures.');
   }

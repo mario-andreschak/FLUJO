@@ -5,7 +5,8 @@ import { createHash, randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import type { MCPStdioConfig } from '@/shared/types/mcp';
 import { getCurrentWorkspace, getWorkspaceDataDir, isValidWorkspaceName, runWithWorkspace } from '@/utils/workspace';
-import { readPlainFile } from '@/utils/readPlainFile';
+import { PlainFileReadError, readPlainFile } from '@/utils/readPlainFile';
+import { retryTransientFileOperation } from '@/utils/transientFileRetry';
 import { realpath } from '@/utils/realpath';
 import { assertCredentialStoreReady } from '@/utils/encryption/credentialMigrationState';
 import { ownerPolicySchema } from './ownerCredentials';
@@ -406,8 +407,20 @@ export interface BundledFlujoWorkloadAuthorization {
   readRequest(): Request;
   recheck(): Promise<Response | null>;
 }
+/**
+ * A storage write replaces mcp_servers.json by renaming over it, so a read can
+ * meet the old file at one look and the new file at the next. Only that read
+ * starts again from scratch; every other refusal stands.
+ */
+function replacedWhileRead(error: unknown): boolean {
+  return error instanceof PlainFileReadError && (error.code === 'FILE_CHANGED' || (error.code === 'UNSAFE_FILE'
+    && (error.detail?.startsWith('expected:') === true || error.detail?.startsWith('descriptor-path:') === true)));
+}
 /** Never initialize, back up, migrate, normalize, or join a storage write chain. */
-async function readCurrentConfig(serverName: string, signal: AbortSignal) {
+function readCurrentConfig(serverName: string, signal: AbortSignal) {
+  return retryTransientFileOperation(() => readCurrentConfigOnce(serverName, signal), { label: 'workload-config', signal, isTransient: replacedWhileRead });
+}
+async function readCurrentConfigOnce(serverName: string, signal: AbortSignal) {
   const root = path.resolve(getWorkspaceDataDir());
   const filename = path.join(root, 'db', 'mcp_servers.json');
   const parents: Array<{ filename: string; identity: fs.BigIntStats }> = [];

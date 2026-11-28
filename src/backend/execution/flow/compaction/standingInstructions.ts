@@ -63,7 +63,8 @@ const RULES: ReadonlyArray<readonly [StandingInstructionKind, RegExp]> = [
   ])],
 ];
 
-function userText(message: FlujoChatMessage): string {
+/** The text a user turn says, without its attachments. */
+export function userText(message: FlujoChatMessage): string {
   const content = message.content;
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';

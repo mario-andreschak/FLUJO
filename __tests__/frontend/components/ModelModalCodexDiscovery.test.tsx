@@ -55,6 +55,21 @@ it('shows a newly returned model and its reasoning options without a static sugg
   expect(save.mock.calls[0][0]).toMatchObject({ name: 'future-7.9', reasoningEffort: 'ultra', ApiKey: '' });
 });
 
+it.each([
+  [['priority'], true],
+  [[], false],
+])('offers the Fast speed tier only when Codex lists it for the chosen model (%j)', async (tiers, offered) => {
+  mockDiscover.mockResolvedValue([{ id: 'tiered-model', name: 'Tiered', serviceTiers: tiers }]);
+  const save = jest.fn(async (_model: Model) => ({ success: true }));
+  render(<ThemeProvider theme={createTheme()}><ModelModal open model={{ ...model, name: 'tiered-model', serviceTier: 'priority' }}
+    onSave={save} onClose={jest.fn()} /></ThemeProvider>);
+  await waitFor(() => expect(mockDiscover).toHaveBeenCalled());
+  await waitFor(() => expect(Boolean(screen.queryByRole('combobox', { name: 'Priority' }))).toBe(offered));
+  fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+  await waitFor(() => expect(save).toHaveBeenCalled());
+  expect(save.mock.calls[0][0].serviceTier).toBe(offered ? 'priority' : undefined);
+});
+
 it('preserves the saved ID during discovery failure and does not replace it with an old hardcoded model', async () => {
   mockDiscover.mockRejectedValue(new Error('offline'));
   render(<ThemeProvider theme={createTheme()}><ModelModal open model={model} onSave={jest.fn()} onClose={jest.fn()} /></ThemeProvider>);
@@ -75,4 +90,38 @@ it('discovers Antigravity account models without a key, retains a custom slug an
   fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
   await waitFor(() => expect(save).toHaveBeenCalled());
   expect(save.mock.calls[0][0]).toMatchObject({ name: 'future/custom-model', ApiKey: '' });
+});
+
+it('offers exactly the Antigravity effort levels the CLI lists for the chosen model and saves the choice', async () => {
+  mockDiscover.mockResolvedValue([
+    { id: 'gemini-3.1-pro', name: 'Gemini 3.1 Pro', reasoningEfforts: ['low', 'high'] },
+    { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', reasoningEfforts: ['low', 'medium', 'high'] },
+  ]);
+  const save = jest.fn(async (_model: Model) => ({ success: true }));
+  render(<ThemeProvider theme={createTheme()}><ModelModal open model={{ ...model, provider: 'antigravity-cli', adapter: 'antigravity-cli', name: 'default' }} onSave={save} onClose={jest.fn()} /></ThemeProvider>);
+  await waitFor(() => expect(mockDiscover).toHaveBeenCalled());
+  expect(screen.queryByRole('combobox', { name: 'Effort' })).not.toBeInTheDocument();
+  const name = screen.getByRole('combobox', { name: 'Technical name' });
+  fireEvent.change(name, { target: { value: 'gemini-3.1-pro' } });
+  fireEvent.keyDown(name, { key: 'ArrowDown' });
+  fireEvent.click(await screen.findByRole('option', { name: /Gemini 3\.1 Pro gemini-3\.1-pro/ }));
+  fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Effort' }));
+  expect(screen.getAllByRole('option').map(option => option.textContent)).toEqual(['Provider default', 'Low', 'High']);
+  fireEvent.click(screen.getByRole('option', { name: 'High' }));
+  fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+  await waitFor(() => expect(save).toHaveBeenCalled());
+  expect(save.mock.calls[0][0]).toMatchObject({ name: 'gemini-3.1-pro', reasoningEffort: 'high' });
+});
+
+it('keeps a saved Antigravity name that already carries its level without a separate effort', async () => {
+  mockDiscover.mockResolvedValue([{ id: 'gemini-3.1-pro', name: 'Gemini 3.1 Pro', reasoningEfforts: ['low', 'high'] }]);
+  const save = jest.fn(async (_model: Model) => ({ success: true }));
+  render(<ThemeProvider theme={createTheme()}><ModelModal open model={{ ...model, provider: 'antigravity-cli', adapter: 'antigravity-cli', name: 'gemini-3.1-pro-high', reasoningEffort: 'low' }} onSave={save} onClose={jest.fn()} /></ThemeProvider>);
+  await waitFor(() => expect(mockDiscover).toHaveBeenCalled());
+  expect(screen.getByRole('combobox', { name: 'Technical name' })).toHaveValue('gemini-3.1-pro-high');
+  expect(screen.queryByRole('combobox', { name: 'Effort' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+  await waitFor(() => expect(save).toHaveBeenCalled());
+  expect(save.mock.calls[0][0]).toMatchObject({ name: 'gemini-3.1-pro-high' });
+  expect(save.mock.calls[0][0].reasoningEffort).toBeUndefined();
 });

@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { getWorkspaceDataDir } from '@/utils/workspace';
 import { runInWriteChain, writeFileAtomic } from '@/utils/storage/backend';
 import { createLogger } from '@/utils/logger';
+import { retryTransientFileOperation } from '@/utils/transientFileRetry';
 import { SHARED_ITEM_KINDS, type SharedItemKind } from './kinds';
 
 const log = createLogger('backend/services/sharedItems/history');
@@ -71,17 +72,9 @@ function newEntryId(at: number): string {
   return `${String(at).padStart(13, '0').slice(-13)}-${randomBytes(6).toString('base64url')}`;
 }
 
-const RETRYABLE = new Set(['EPERM', 'EACCES', 'EBUSY', 'EAGAIN']);
-
-async function withRetry<T>(task: () => Promise<T>): Promise<T> {
-  for (let attempt = 1; ; attempt++) {
-    try { return await task(); }
-    catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (attempt >= 6 || !code || !RETRYABLE.has(code)) throw error;
-      await new Promise(resolve => setTimeout(resolve, Math.min(400, 10 * 2 ** attempt)));
-    }
-  }
+/** Antivirus or the indexer can hold a history file for a moment; such a failure is waited out. */
+function withRetry<T>(task: () => Promise<T>): Promise<T> {
+  return retryTransientFileOperation(task, { label: 'shared-item-history' });
 }
 
 /** Parse a history file. A torn or damaged line is skipped, never fatal. */

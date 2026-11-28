@@ -103,7 +103,7 @@ function orderNewestFirst(left: PersonaLease, right: PersonaLease): number {
 /**
  * Delete count-excess, terminal lease acquisitions only after a complete strict
  * history/head/Activity snapshot proves they are dead. The feature is independent
- * of ENABLE_PERSONA_RUNTIME_RETENTION and defaults off.
+ * of Persona history cleanup (#481) and defaults off.
  */
 export async function prunePersonaLeaseHistory(
   personaId: string,

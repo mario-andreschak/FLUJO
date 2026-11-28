@@ -66,7 +66,8 @@ export type MCPRuntimeHomeMode = 'inherit' | 'isolated' | 'host';
  *  - `mcpb`        — unpacked from an MCP bundle file (#1230); a local file, so
  *                    NOT packageable. `userConfig` keeps the non-secret settings
  *                    and `secretEnv` names the env entry holding each secret, so
- *                    an upgrade can keep them.
+ *                    an upgrade can keep them. `signer` is the trusted signer of
+ *                    the installed file, so an upgrade can say when it changes.
  */
 export type MCPServerSource =
   | { type: 'github'; repositoryUrl: string; ref?: string; subdirectory?: string }
@@ -81,6 +82,7 @@ export type MCPServerSource =
     digest: string;
     userConfig?: Record<string, McpbUserConfigValue>;
     secretEnv?: Record<string, string>;
+    signer?: { name: string; fingerprint: string };
   };
 
 /**

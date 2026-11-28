@@ -24,5 +24,6 @@ const credentials = loadSource('backend/services/security/ownerCredentials.ts');
 const policy = loadSource('backend/services/security/ownerPolicy.ts', {
   './ownerCredentials': credentials,
   '../../../utils/realpath': loadSource('utils/realpath.ts'),
+  '../../../utils/transientFileRetry': loadSource('utils/transientFileRetry.ts'),
 });
 module.exports = { ...credentials, ownerPolicyRevision: policy.ownerPolicyRevision };

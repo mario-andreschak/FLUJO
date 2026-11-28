@@ -1,6 +1,5 @@
 import { z, type ZodType } from 'zod';
 
-import type { PersonaRuntimeRetentionMode } from '@/config/features';
 import {
   EnduringAgentIdSchema,
   PersonaActivitySchema,
@@ -21,7 +20,10 @@ import { ENDURING_AGENT_COLLECTIONS } from './collections';
 import { BEHAVIOR_CALL_PINS_COLLECTION, BehaviorCallPinSchema, type BehaviorCallPin } from './behaviorCallPins';
 import { PersonaFlowDispatchRecordSchema } from './personaFlowDispatchSchema';
 import type { PersonaFlowDispatchRecord } from './personaDispatcher';
-import { getPersonaRuntimeRetentionDecision } from './personaRuntimeRetentionControl';
+import {
+  getPersonaRuntimeRetentionMode,
+  type PersonaRuntimeRetentionMode,
+} from './personaRuntimeRetentionControl';
 import { getPersonaRuntimeClock } from './runtimeClock';
 import {
   getPersona,
@@ -44,9 +46,9 @@ export interface PersonaStorageKindStats {
 
 export interface PersonaStorageStats {
   personaId: string;
-  /** True while retention cleans up this Persona's old records (`active`). */
+  /** True while history cleanup rewrites old records in this workspace (`active`). */
   retentionEnabled: boolean;
-  /** `shadow` only measures; `disabled` neither measures nor cleans up. */
+  /** `shadow` only measures; cleanup switches itself on and off (#481). */
   retentionMode: PersonaRuntimeRetentionMode;
   collectedAt: number;
   kinds: {
@@ -62,18 +64,6 @@ export interface PersonaStorageStats {
     uncompacted: number;
     approxBytes: number;
   };
-}
-
-export type PersonaRuntimeStorageKind = keyof PersonaStorageStats['kinds'];
-
-export interface PersonaRuntimeCompactionObservation {
-  before?: PersonaStorageStats;
-  compactors: Partial<Record<PersonaRuntimeStorageKind, {
-    compacted: number;
-    remaining: number;
-  }>>;
-  failures: PersonaRuntimeStorageKind[];
-  after?: PersonaStorageStats;
 }
 
 export class PersonaStorageStatsNotFoundError extends Error {
@@ -284,12 +274,12 @@ export async function getPersonaStorageStats(personaId: string): Promise<Persona
   ]);
   const kinds = { mailboxItems, activities, flowDispatches, leaseHistory, behaviorCallPins };
   const values = Object.values(kinds);
-  const retention = await getPersonaRuntimeRetentionDecision(validatedPersonaId);
+  const retentionMode = await getPersonaRuntimeRetentionMode();
 
   return {
     personaId: validatedPersonaId,
-    retentionEnabled: retention.mode === 'active',
-    retentionMode: retention.mode,
+    retentionEnabled: retentionMode === 'active',
+    retentionMode,
     collectedAt: runtimeClock.now(),
     kinds,
     totals: {

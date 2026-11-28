@@ -3,6 +3,7 @@ import { createLogger } from '@/utils/logger';
 import { readStableFile } from '@/utils/readStableFile';
 import { modelCache } from '../cache';
 import type { NormalizedModel } from '@/shared/types/model/response';
+import { groupAntigravityEfforts } from '@/shared/types/model/antigravityEffort';
 import { hasExecutionExtensionContext, ExecutionExtensionError } from '@/backend/execution/extensions';
 import { ANTIGRAVITY_CLI_VERSION, prepareAntigravityCliRuntime } from './antigravityCliRuntime';
 import {
@@ -56,15 +57,17 @@ export function normalizeAntigravityCatalog(value: unknown): NormalizedModel[] {
   if (envelope.entitlementVerified !== false || !Array.isArray(envelope.models)
       || !envelope.models.length || envelope.models.length > 512) throw new Error('Antigravity returned an unsupported model catalog.');
   const seen = new Set<string>();
-  return envelope.models.map((record: unknown) => {
+  const listed = envelope.models.map((record: unknown) => {
     if (!record || typeof record !== 'object') throw new Error('Antigravity returned an unsupported model catalog.');
     const model = record as { id?: unknown; name?: unknown };
     if (typeof model.id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/.test(model.id)
         || typeof model.name !== 'string' || !model.name.trim() || model.name.length > 500
         || /[\x00-\x1f\x7f]/.test(model.name) || seen.has(model.id)) throw new Error('Antigravity returned an unsupported model catalog.');
     seen.add(model.id);
-    return { id: model.id, name: model.name, description: 'Listed by the verified Antigravity runtime. Account or API-key access must be tested separately.' };
+    return { id: model.id, name: model.name };
   });
+  return groupAntigravityEfforts(listed).map(model => ({ ...model,
+    description: 'Listed by the verified Antigravity runtime. Account or API-key access must be tested separately.' }));
 }
 
 /** The last list each runtime/credential identity returned, used when a refresh fails briefly. */

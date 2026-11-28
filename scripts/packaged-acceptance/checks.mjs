@@ -1,9 +1,11 @@
-// The same backup, restart, upgrade, disk-full, schedule and restore checks for
-// every shipped form. A target (targets.mjs) starts, stops and crashes one
+// The same backup, restart, upgrade, disk-full, schedule, MCP and restore checks
+// for every shipped form. A target (targets.mjs) starts, stops and crashes one
 // installed copy; a probe (flujo-probe.mjs) writes, reads, backs up and
 // restores the test data; the volume (low-disk.mjs) holds the data folder and
-// can be filled; the stand-ins (stand-ins.mjs) play model and tool.
+// can be filled; the stand-ins (stand-ins.mjs) play model and tool; the MCP
+// checks (mcp-checks.mjs) use local reference servers on host forms.
 import { delay, waitFor } from './targets.mjs';
+import { MCP_CHECKS } from './mcp-checks.mjs';
 
 export const CHECKS = Object.freeze({
   'previous-start': 'The previous release starts on an empty data folder',
@@ -19,10 +21,12 @@ export const CHECKS = Object.freeze({
   'disk-full': 'With a full disk the app keeps running and loses nothing, and works again once space is freed',
   'schedules-and-approvals': 'Schedules and waiting approvals survive a forced restart; nothing runs twice or without approval',
   'clean-stop': 'A normal stop ends the app and frees its port',
+  ...MCP_CHECKS,
 });
 
 export const LIMITS = Object.freeze([
   'Test data: one flow, one finished conversation, the theme and one non-secret setting; for schedules and approvals a stand-in model and a stand-in MCP tool on this machine. No real provider, account or secret is used.',
+  'MCP checks run on the host forms: one local program server and one OAuth server from a local reference authorization server (official MCP SDK handlers). The container form starts local program servers only after the owner approves them, so it runs no MCP checks.',
   'A forced stop ends the processes; it is not a power cut. Data the operating system had not yet written to disk is not tested.',
   'On Windows a console program has no gentle stop signal, so a normal stop there also ends the process tree.',
   'Backups are the ordinary selective backups (/api/backup) and, on host installations, snapshot backups (/api/snapshot). Copies of the whole data folder are made by the operator, not by the app, and are not covered.',
@@ -32,10 +36,11 @@ export const LIMITS = Object.freeze([
 
 export const DEFAULT_TIMING = Object.freeze({ readyMs: 240_000, recoveryMs: 60_000, scheduleMs: 120_000, pause: delay });
 
-export function planChecks({ upgrade }) {
+/** The MCP checks come after every data check: they add servers and turn on encryption, which the data checks never expect. */
+export function planChecks({ upgrade, mcp = false }) {
   return [upgrade ? 'previous-start' : 'start', 'seed-and-backup', ...(upgrade ? ['upgrade'] : []),
     'restart-after-stop', 'restart-after-crash', 'damaged-backup-refused', 'restore', 'backup-after-restore',
-    'kill-during-backup', 'disk-full', 'schedules-and-approvals', 'clean-stop'];
+    'kill-during-backup', 'disk-full', 'schedules-and-approvals', ...(mcp ? Object.keys(MCP_CHECKS) : []), 'clean-stop'];
 }
 
 /** Errors worth another try while an app recovers: no answer, a server error or a timeout. Never a 4xx. */
@@ -94,9 +99,9 @@ function assertStopped(record) {
  * Run every check in order. A failed check stops the run; later checks are
  * reported as not run. Every started copy is stopped before this returns.
  */
-export async function runAcceptance({ candidate, previous, probe, volume, standIns, timing: overrides, log = () => {} }) {
+export async function runAcceptance({ candidate, previous, probe, volume, standIns, mcp, timing: overrides, log = () => {} }) {
   const timing = { ...DEFAULT_TIMING, ...overrides };
-  const plan = planChecks({ upgrade: Boolean(previous) });
+  const plan = planChecks({ upgrade: Boolean(previous), mcp: Boolean(mcp) });
   const report = {
     checks: plan.map(id => ({ id, title: CHECKS[id], result: 'not-run' })),
     stops: [], limits: [...LIMITS], result: 'failed',
@@ -226,6 +231,14 @@ export async function runAcceptance({ candidate, previous, probe, volume, standI
       if (standIns.failures.length) throw new Error(`The stand-ins received requests they could not read: ${standIns.failures.join('; ')}`);
       return details;
     });
+    if (mcp) {
+      await check('mcp-stdio', () => mcp.stdio(candidate.request));
+      await check('mcp-oauth', () => mcp.oauth(candidate.request, `http://127.0.0.1:${candidate.port}`));
+      await check('mcp-oauth-after-restart', () => mcp.oauthAfterRestart(candidate.request, async () => {
+        await stop(candidate);
+        await start(candidate);
+      }));
+    }
     await check('clean-stop', () => stop(candidate).then(() => undefined));
     report.result = 'passed';
   } catch (error) {

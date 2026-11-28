@@ -148,6 +148,25 @@ describe('workspace path safety', () => {
     } finally { disconnect.mockRestore(); }
   });
 
+  it('waits out a file a just-stopped process or the indexer still holds while deleting', async () => {
+    const created = await createWorkspace('held-files');
+    const workspaceDir = path.join(dataRoot, 'workspaces', created.name);
+    const realRm = fs.rm.bind(fs);
+    let held = 0;
+    const rm = jest.spyOn(fs, 'rm').mockImplementation(async (target, options) => {
+      if (path.resolve(String(target)) === path.resolve(workspaceDir) && held < 2) {
+        held += 1;
+        throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+      }
+      return realRm(target, options);
+    });
+    try {
+      await deleteWorkspace('held-files');
+      expect(held).toBe(2);
+      await expect(workspaceExists('held-files')).resolves.toBe(false);
+    } finally { rm.mockRestore(); }
+  });
+
   it('keeps the workspace when MCP teardown is unconfirmed', async () => {
     const receipt: MCPShutdownReceipt = {
       schemaVersion: 1, runtimeId: 'fixture-runtime', workspace: 'busy-mcp', serverName: 'bash',

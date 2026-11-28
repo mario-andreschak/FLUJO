@@ -8,6 +8,9 @@
  * Streamable HTTP proxy. The install itself may resolve public transitive
  * dependencies: a fresh npm cache does not contain registry packuments merely
  * because `npm ci` previously fetched their lockfile-pinned tarballs.
+ * It then lists the FLUJO server's resources again and again and, on Windows,
+ * while real file locks (as antivirus or the indexer take them) hold each file
+ * on that path, and fails on any refusal (issue #1050).
  * `--proxy-only <url>` probes an already-running image.
  * `--candidate-dir <directory>` installs the exact validated release tarballs.
  */
@@ -27,6 +30,7 @@ import { ListRootsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { validateCandidate } from './npm-release.mjs';
 import { cleanupSmokeSandbox, observeSmokeChild, stopSmokeChild, withSmokeCleanup, withTimeout } from './mcp-smoke-cleanup.mjs';
 import { approveSmokeServer, createSmokeOperator } from './smoke-bundled-operator.mjs';
+import { assertNoRefusal, findServerConfig, qualifyUnderLocks } from './smoke-file-locks.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -295,6 +299,47 @@ export async function probeProxy(baseUrl, expectedRoot, ownerToken) {
   }
 }
 
+async function listResourcesOnce(client) {
+  const listed = await client.listResources(undefined, { timeout: 240_000 });
+  if (!Array.isArray(listed.resources)) throw new Error('Flujo proxy did not return an MCP resource list.');
+}
+
+/**
+ * The first resource listing of an installed Windows FLUJO was once refused
+ * while a private file was briefly unreadable (#1050). List repeatedly and in
+ * parallel; on Windows also while each file on that path is locked the way a
+ * scanner locks it, and while the approval writer and a settings save rename
+ * over a file a reader holds open. Any refusal fails the run.
+ */
+export async function probeResourceListing(baseUrl, ownerToken, { logs, dataDir, ownerFile, approvalFile, platform = process.platform,
+  connect = connectProxy, approve = approveSmokeServer, update = updateBuiltIn, hold, log } = {}) {
+  const start = logs.mark();
+  const flujo = await connect(baseUrl, 'flujo', ownerToken);
+  let bashDisabled = false;
+  try {
+    for (let round = 0; round < 12; round += 1) await listResourcesOnce(flujo);
+    await Promise.all(Array.from({ length: 4 }, () => listResourcesOnce(flujo)));
+    if (platform === 'win32') {
+      const serverConfig = await findServerConfig(dataDir);
+      const list = () => listResourcesOnce(flujo);
+      await qualifyUnderLocks([
+        { name: 'resource listing', file: ownerFile, kind: 'exclusive', labels: ['owner-policy', 'private-approval'], operation: list },
+        { name: 'resource listing', file: approvalFile, kind: 'exclusive', labels: ['private-approval'], operation: list },
+        { name: 'resource listing', file: serverConfig, kind: 'exclusive', labels: ['workload-config', 'plain-file-open', 'storage-read'], operation: list },
+        { name: 'host approval', file: approvalFile, kind: 'reader', labels: ['approval-ledger-replace'],
+          operation: () => approve(baseUrl, 'filesystem', ownerToken, timeoutMs) },
+        { name: 'server settings save', file: serverConfig, kind: 'reader', labels: ['storage-replace'],
+          operation: () => { bashDisabled = !bashDisabled; return update(baseUrl, 'bash', { disabled: bashDisabled }, ownerToken); } },
+      ], { logs, hold, log });
+      if (bashDisabled) { await update(baseUrl, 'bash', { disabled: false }, ownerToken); bashDisabled = false; }
+      for (let round = 0; round < 3; round += 1) await listResourcesOnce(flujo);
+    }
+  } finally {
+    await flujo.close();
+  }
+  assertNoRefusal(logs.since(start), 'repeated resource listing');
+}
+
 async function pack(target, destination) {
   const output = await run(npmCommand, [
     'pack',
@@ -489,6 +534,10 @@ async function smokePackedArtifacts(candidateDirectory) {
       `installed FLUJO readiness at ${baseUrl}`,
     );
     await probeProxy(baseUrl, rootsDir, operator.token);
+    await probeResourceListing(baseUrl, operator.token, {
+      logs: { mark: () => appLogs.length, since: (mark) => appLogs.slice(mark).join('') },
+      dataDir, ownerFile: operator.env.FLUJO_OWNER_AUTH_FILE, approvalFile: operator.env.FLUJO_MCP_TRUSTED_HOST_FILE,
+    });
   }, () => withSmokeCleanup(() => cleanupSmokeSandbox({
     stop: async () => {
       if (appObservation) await stopSmokeChild(appObservation, 'installed flujo CLI');
@@ -518,6 +567,6 @@ if (proxyOnlyIndex !== -1) {
   const candidateDirectory = candidateIndex === -1 ? undefined : process.argv[candidateIndex + 1];
   if (candidateIndex !== -1 && (!candidateDirectory || !path.isAbsolute(candidateDirectory))) throw new Error('--candidate-dir requires an absolute artifact directory.');
   await smokePackedArtifacts(candidateDirectory);
-  console.log('Validated isolated packed MCP binaries and the installed FLUJO proxy.');
+  console.log('Validated isolated packed MCP binaries, the installed FLUJO proxy and repeated resource listing.');
 }
 }

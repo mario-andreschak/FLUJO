@@ -119,6 +119,33 @@ const captureGates = new Map();
 const catalogGates = new Map();
 let recoveryCheckpoint;
 
+// History cleanup writes seen by this process. With a hold set, the cleanup
+// stops forever right after that many writes, so the parent can kill the
+// process in the middle of a cleanup run, as a crash would.
+let retentionWrites = 0;
+let retentionHoldAfterWrites;
+let retentionSavesCounted = false;
+function countRetentionWrites(holdAfterWrites) {
+  retentionWrites = 0;
+  retentionHoldAfterWrites = holdAfterWrites;
+  if (retentionSavesCounted) return;
+  retentionSavesCounted = true;
+  const store = require(path.join(repositoryRoot, 'src/backend/services/enduringAgents/store.ts'));
+  for (const name of ['savePersonaMailboxItem', 'savePersonaActivity']) {
+    const save = store[name];
+    store[name] = async (value) => {
+      const saved = await save(value);
+      if (value.compactedAt !== undefined) {
+        retentionWrites += 1;
+        if (retentionHoldAfterWrites !== undefined && retentionWrites >= retentionHoldAfterWrites) {
+          await new Promise(() => {});
+        }
+      }
+      return saved;
+    };
+  }
+}
+
 async function execute(command) {
   return runWithWorkspace(workspaceId, async () => {
     switch (command.type) {
@@ -350,6 +377,25 @@ async function execute(command) {
         return enduringAgents.assertPersonaActivityLease(command.fence);
       case 'inspect':
         return enduringAgents.listPersonaRuntimeBundle(command.personaId);
+      case 'retentionCleanupOn':
+        return saveItem(StorageKey.PERSONA_RUNTIME_RETENTION_STATE, {
+          ...enduringAgents.initialPersonaRuntimeRetentionState(),
+          mode: 'active',
+        });
+      case 'retentionSweep':
+        countRetentionWrites(command.holdAfterWrites);
+        return enduringAgents.runPersonaRuntimeRetentionSweep({ now: command.now });
+      case 'retentionCheckpoint':
+        return { writes: retentionWrites };
+      case 'retentionState':
+        return enduringAgents.readPersonaRuntimeRetentionState();
+      case 'retentionRecords': {
+        const store = require(path.join(repositoryRoot, 'src/backend/services/enduringAgents/store.ts'));
+        return {
+          mailboxItems: await store.listPersonaMailboxItems(command.personaId),
+          activities: await store.listPersonaActivities(command.personaId),
+        };
+      }
       case 'reconcile':
         return enduringAgents.inspectAndReconcilePersonaRuntime(command.personaId);
       case 'appendEvent':

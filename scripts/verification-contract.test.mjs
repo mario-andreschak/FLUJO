@@ -17,6 +17,13 @@ test('every real prerequisite must complete successfully', () => {
   assert.throws(() => assertDependencyResults(null));
 });
 
+test('a further job the gate lists must complete successfully too', () => {
+  assertDependencyResults({ ...needs(), 'antigravity-cli': { result: 'success' } });
+  for (const result of ['failure', 'cancelled', 'skipped', undefined]) {
+    assert.throws(() => assertDependencyResults({ ...needs(), 'antigravity-cli': { result } }), /Required verification job antigravity-cli/);
+  }
+});
+
 test('publication requires all twelve successful exact-source checks', () => {
   assertVerificationJobs(jobs());
   for (const name of REQUIRED_CHECK_NAMES) {

@@ -435,7 +435,7 @@ const CURATED_GROUPS: ApiGroup[] = [
         alsoMethods: ['PUT', 'DELETE'],
         path: '/api/mcp/servers/{name}',
         summary:
-          'GET / PUT / DELETE a server config. PUT merges fields; toggling disabled connects/disconnects; a new name triggers a validated rename.',
+          'GET / PUT / DELETE a server config. PUT merges fields; toggling disabled connects/disconnects; a new name triggers a validated rename. DELETE answers 409 MCP_SERVER_IN_USE with every flow, Persona and automation that uses the server; send { plan: { choices: { [place key]: { replaceWith } | { remove: true } } } } to switch or release them first.',
       },
       {
         method: 'GET',
@@ -708,7 +708,7 @@ const REFERENCE_DETAILS: Record<string, Partial<ApiEndpoint>> = {
   'PATCH /v1/chat/conversations/{conversationId}/edit-state': { paramsLabel: 'Body', params: [p('messageId', 'string', 'Message to edit (send with content).'), p('content', 'string', 'New message text.'), p('currentNodeId', 'string', 'Node to run next.')], response: '{ success, debugState } · 400 nothing to apply · 404 · 409 not paused' },
   'GET /api/model': { response: 'Model[] (credentials masked)' },
   'GET /api/model/{id}': { response: 'Model (credentials masked) · 404' },
-  'POST /api/model/provider': { paramsLabel: 'Body', params: [p('baseUrl', 'string', 'Provider URL (not needed for native CLI/SDK profiles).'), p('modelId', 'string', 'Saved model whose stored key should be used.'), p('searchTerm', 'string', 'Filter (max 200).'), p('apiKey', 'string', 'Key for a model that is not saved yet; never echoed back.'), p('profileId', 'string', 'Provider profile id.')], response: '{ models: [{ id, name, description?, contextWindow?, maxTokens?, reasoningEfforts? }] } · 400 · 500' },
+  'POST /api/model/provider': { paramsLabel: 'Body', params: [p('baseUrl', 'string', 'Provider URL (not needed for native CLI/SDK profiles).'), p('modelId', 'string', 'Saved model whose stored key should be used.'), p('searchTerm', 'string', 'Filter (max 200).'), p('apiKey', 'string', 'Key for a model that is not saved yet; never echoed back.'), p('profileId', 'string', 'Provider profile id.')], response: '{ models: [{ id, name, description?, contextWindow?, maxTokens?, reasoningEfforts?, serviceTiers? }] } · 400 · 500' },
   'GET /api/flow': { response: 'Flow[]' },
   'GET /api/flow/{id}': { response: 'Flow · 404' },
   'POST /api/flow/prompt-renderer': { paramsLabel: 'Body', params: [p('flowId', 'string', 'Agent id.', true), p('nodeId', 'string', 'Node to render.', true), p('options', 'object', '{ renderMode?, includeConversationHistory?, excludeModelPrompt?, excludeStartNodePrompt?, excludeSystemPrompt?, excludeSystemPromptSections? }')], response: '{ prompt } · 400 · 500' },

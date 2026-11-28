@@ -32,6 +32,7 @@ import {
   antigravityHistoryHash, antigravitySessionPrefix, countLeadingSystemMessages, findAntigravityResume, openAntigravitySession,
   type AntigravityResume, type AntigravitySession, type AntigravitySessionUsage,
 } from './antigravityCliSession';
+import { antigravityModelTakesEffort, isAntigravityEffort } from '@/shared/types/model/antigravityEffort';
 
 const USAGE_COUNTERS = ['total_tokens', 'input_tokens', 'output_tokens', 'thinking_tokens', 'cache_read_tokens'];
 function reportedCounters(stats: AntigravityCliStats | undefined): Record<string, number> {
@@ -620,8 +621,9 @@ export class AntigravityCliAdapter implements CompletionAdapter {
     // Session continuity keeps one native conversation per conversation node.
     // Any change to what that conversation was built from replays in full.
     const leadingSystemMessageCount = countLeadingSystemMessages(messages);
+    const effort = antigravityModelTakesEffort(model.name) && isAntigravityEffort(model.reasoningEffort) ? model.reasoningEffort : undefined;
     const sessionPrefix = sessionResume && conversationId && nodeId ? antigravitySessionPrefix({
-      systemPrompt: fullInput.systemPrompt ?? '', model: model.name, maxTurns,
+      systemPrompt: fullInput.systemPrompt ?? '', model: model.name, effort: effort ?? null, maxTurns,
       tools: bridgeTools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
       bindings: toolNameMap ?? {}, localExecutors: Object.keys(localToolExecutors ?? {}).sort(),
       credential: apiKey || 'account',
@@ -682,10 +684,11 @@ export class AntigravityCliAdapter implements CompletionAdapter {
           try {
             await observeSdkRequest(input, {
               adapter: 'antigravity-cli', operation: 'agy --input-format stream-json --output-format stream-json',
-              request: { model: model.name, prompt, toolDispatchBudget: maxTurns, stepBudget: maxTurns * 8 + 16, conversation: resumed ? 'resumed' : 'new', tools: bridgeTools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) },
+              request: { model: model.name, ...(effort ? { effort } : {}), prompt, toolDispatchBudget: maxTurns, stepBudget: maxTurns * 8 + 16, conversation: resumed ? 'resumed' : 'new', tools: bridgeTools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) },
               wireMessages: [...wireMessages],
             }, () => runAntigravityCli({
               runtime: runtime!, model: model.name, prompt, signal: activeChild!.signal, timeoutMs: deadlineAt - Date.now(),
+              ...(effort ? { effort } : {}),
               ...(resumed ? { resumeConversationId: resumed.conversationId } : {}),
               onStarted: async () => { startedChild = true; await activeDelivery?.acknowledge(); activeDelivery = undefined; },
               onEvent: event => {
