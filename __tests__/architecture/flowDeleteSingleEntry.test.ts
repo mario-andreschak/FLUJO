@@ -67,7 +67,7 @@ const RAW_DELETES: readonly RawDelete[] = [
     owner: {
       module: 'src/backend/services/mcp/serverConfigUpdate.ts',
       service: 'src/backend/services/mcp/index.ts',
-      handOff: 'return serverConfigUpdate.deleteServerConfig(this.configUpdateHost(), serverName);',
+      handOff: 'return serverConfigUpdate.removeServerConfig(this.configUpdateHost(), serverName);',
     },
   },
 ];
@@ -127,9 +127,9 @@ describe('the owner rule sees every way to import the module', () => {
 
   it.each([
     ["import * as serverConfigUpdate from './serverConfigUpdate';", true],
-    ["import { deleteServerConfig } from '@/backend/services/mcp/serverConfigUpdate';", true],
+    ["import { removeServerConfig } from '@/backend/services/mcp/serverConfigUpdate';", true],
     ["} from \"../mcp/serverConfigUpdate.ts\";", true],
-    ["const { deleteServerConfig } = await import('./serverConfigUpdate');", true],
+    ["const { removeServerConfig } = await import('./serverConfigUpdate');", true],
     ["const update = require('./serverConfigUpdate');", true],
     ["import { saveConfig } from './serverConfigUpdates';", false],
     ["import { mcpService } from '@/backend/services/mcp';", false],
